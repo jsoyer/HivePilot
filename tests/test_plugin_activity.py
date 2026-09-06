@@ -36,11 +36,10 @@ def test_unprobed_plugin_is_not_measurable() -> None:
     assert plugin_activity.activity_for("rtk") is None
 
 
-def test_probed_plugins_are_the_documented_two() -> None:
+def test_probed_plugins_are_the_documented_set() -> None:
     """Adding a name here requires the sole-writer proof in the docstring."""
-    # obsidian joined once its recalls were instrumented and the
-    # memory_events attribution moved onto a backend column.
-    assert plugin_activity.probed_plugins() == frozenset({"headroom", "mem0", "obsidian"})
+    # memory_events is attributed by backend column; hindsight joined HP-51.
+    assert plugin_activity.probed_plugins() == frozenset({"headroom", "obsidian", "hindsight"})
 
 
 # ---------------------------------------------------------------------------
@@ -99,22 +98,17 @@ def test_last_used_is_not_bounded_by_the_window() -> None:
     assert activity.last_used is not None, "but it still happened, and we know when"
 
 
-# ---------------------------------------------------------------------------
-# mem0
-# ---------------------------------------------------------------------------
+def test_hindsight_counts_memory_events() -> None:
+    memory_service.record_search(
+        namespace="ns", query="q", result_count=2, actor="system", backend="hindsight"
+    )
+    memory_service.record_store(namespace="ns", key="k", actor="system", backend="hindsight")
 
-
-def test_mem0_counts_memory_events() -> None:
-    memory_service.record_search(namespace="ns", query="q", result_count=5, actor="system")
-    memory_service.record_store(namespace="ns", key="k", actor="system")
-
-    activity = plugin_activity.activity_for("mem0")
+    activity = plugin_activity.activity_for("hindsight")
 
     assert activity is not None
     assert activity.events == 2
-    # The evidence string names the FILTER, not just the table: two
-    # backends write here and the reading is only meaningful scoped.
-    assert activity.evidence == "memory_events (backend=mem0)"
+    assert activity.evidence == "memory_events (backend=hindsight)"
 
 
 def test_memory_event_writers_are_all_attributed_by_backend() -> None:

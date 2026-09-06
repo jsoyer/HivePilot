@@ -6,6 +6,9 @@ import pytest
 
 QUOTA_MSG = "claude exited 1: You've hit your session limit · resets 9:40pm (Europe/Paris)"
 CODE_FAIL_MSG = "claude exited 1: Syntax error in generated code"
+# HP-70 quick-win: non-quota "provider unavailable" — no credit / bad auth.
+CREDIT_MSG = "opencode exited 1: CreditsError: insufficient credits, credit balance is too low"
+AUTH_MSG = "openai exited 1: AuthenticationError: invalid api key (401)"
 
 
 def _make_orchestrator_with_mocked_registry():
@@ -215,3 +218,103 @@ def test_non_developer_role_does_not_fallback():
             )
 
     assert orch.registry.capture_definition.call_count == 1
+
+
+def test_developer_credit_error_falls_back_to_codex():
+    """HP-70 quick-win: a NON-quota "no credit" error on the primary also fails
+    over to the fallback runner (not just quota)."""
+    orch = _make_orchestrator_with_mocked_registry()
+    task, step = _make_task_config(role="developer")
+    project = _make_project_config()
+
+    call_count = {"n": 0}
+
+    def capture_definition_side_effect(runner_def, payload):
+        call_count["n"] += 1
+        if runner_def.kind == "claude":
+            raise RuntimeError(CREDIT_MSG)
+        if runner_def.kind == "codex":
+            return "codex output"
+        raise RuntimeError("unexpected runner")
+
+    orch.registry.capture_definition.side_effect = capture_definition_side_effect
+
+    with (
+        patch("hivepilot.roles.get_role") as mock_get_role,
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
+        patch("hivepilot.roles.resolve_host", return_value=None),
+        patch("hivepilot.services.state_service.record_step"),
+    ):
+        mock_role = MagicMock()
+        mock_role.models = []
+        mock_role.permission_mode = None
+        mock_get_role.return_value = mock_role
+
+        result = orch._execute_task(
+            project=project,
+            task_name="dev-task",
+            task=task,
+            extra_prompt=None,
+            auto_git=False,
+            simulate=False,
+            dry_run=True,
+        )
+
+    assert result == "codex output"
+    assert call_count["n"] == 2  # claude (no credit) tried, codex succeeded
+
+
+def test_credit_error_exhausted_hard_fails_and_is_not_deferred(monkeypatch):
+    """An unavailable (no-credit/auth) error has NO reset time, so exhausting the
+    fallbacks surfaces the ORIGINAL error — never a `QuotaDeferredError` (there
+    is nothing to retry-later against)."""
+    from hivepilot import config
+
+    monkeypatch.setattr(config.settings, "dev_fallback_runners", [])
+    orch = _make_orchestrator_with_mocked_registry()
+    task, step = _make_task_config(role="developer")
+    project = _make_project_config()
+
+    orch.registry.capture_definition.side_effect = RuntimeError(CREDIT_MSG)
+
+    with (
+        patch("hivepilot.roles.get_role") as mock_get_role,
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "claude-sonnet-4-6", None)),
+        patch("hivepilot.roles.resolve_host", return_value=None),
+        patch("hivepilot.services.state_service.record_step"),
+    ):
+        mock_role = MagicMock()
+        mock_role.models = []
+        mock_role.permission_mode = None
+        mock_get_role.return_value = mock_role
+
+        with pytest.raises(RuntimeError, match="CreditsError"):
+            orch._execute_task(
+                project=project,
+                task_name="dev-task",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                simulate=False,
+                dry_run=True,
+            )
+
+    assert orch.registry.capture_definition.call_count == 1
+
+
+class TestIsProviderUnavailable:
+    def test_credit_and_auth_and_service_are_unavailable(self) -> None:
+        from hivepilot.services.quota import is_provider_unavailable
+
+        assert is_provider_unavailable(CREDIT_MSG)
+        assert is_provider_unavailable(AUTH_MSG)
+        assert is_provider_unavailable("upstream 503 service unavailable")
+        assert is_provider_unavailable("Error: model_not_found")
+
+    def test_quota_and_genuine_errors_are_not(self) -> None:
+        from hivepilot.services.quota import is_provider_unavailable
+
+        assert not is_provider_unavailable(QUOTA_MSG)  # quota defers, not this
+        assert not is_provider_unavailable(CODE_FAIL_MSG)
+        assert not is_provider_unavailable("connection reset by peer")

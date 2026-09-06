@@ -179,6 +179,103 @@ def init_db() -> None:
             )
             """
         )
+        # Realtime change/event bus (HP-40): an append-only, ordered log of
+        # run/step lifecycle facts. Consumers tail it by watermark (SQLite /
+        # fallback) or are woken by Postgres NOTIFY and then read it. See
+        # `hivepilot/services/events.py`.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS change_log (
+                id {pk},
+                ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                channel TEXT,
+                kind TEXT,
+                entity_type TEXT,
+                entity_id TEXT,
+                tenant TEXT DEFAULT 'default',
+                payload TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_change_log_channel_id ON change_log (channel, id)"
+        )
+        # Espaces (HP-45, Cycle 1 · P2): persistent conversation rooms. A space
+        # has >=1 participant, each a human OR a role, so it models both a
+        # human<->agent DM and an agent<->agent room (participants are all
+        # roles). `space_messages` is the append-only transcript; `updated_at`
+        # on the space is bumped on each message so the sidebar can order by
+        # recency. `kind` = 'dm' | 'room' (a hint for the UI, not a constraint).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS spaces (
+                id {pk},
+                tenant TEXT NOT NULL DEFAULT 'default',
+                kind TEXT NOT NULL DEFAULT 'dm',
+                title TEXT,
+                participants TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS space_messages (
+                id {pk},
+                space_id INTEGER NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                sender_type TEXT NOT NULL,
+                sender_id TEXT,
+                body TEXT,
+                actions TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(space_id) REFERENCES spaces(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_space_messages_space ON space_messages (space_id, id)"
+        )
+        # Missions (HP-49): an orchestrator decomposition that spawned N runs.
+        # `runs` is a JSON {task_id: run_id} map; `synthesized` guards the
+        # once-only synthesis post when every run has finished.
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS missions (
+                id {pk},
+                tenant TEXT NOT NULL DEFAULT 'default',
+                space_id INTEGER,
+                project TEXT,
+                goal TEXT,
+                runs TEXT,
+                synthesized INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # HP-54: cached Hindsight reflect() prose for the Missions board.
+        # Fingerprint is a hash of the numeric status snapshot so a poll that
+        # hasn't moved the runs does not spend another LLM call.
+        _add_column_if_missing(conn, "missions", "narrative TEXT")
+        _add_column_if_missing(conn, "missions", "narrative_fingerprint TEXT")
+        _add_column_if_missing(conn, "missions", "reflected_at TIMESTAMP")
+        # HP-53: idempotency log for mem0 → Hindsight retain. Historical
+        # memory_events rows are never touched.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mem0_migration_log (
+                mem0_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                bank_id TEXT NOT NULL,
+                migrated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (mem0_id, user_id)
+            )
+            """
+        )
+        # HP-47: a message can carry a collapsible tool-action trace (JSON list)
+        # of {label, detail}). Additive migration for DBs created before HP-47.
+        _add_column_if_missing(conn, "space_messages", "actions TEXT")
         # Idempotent migration (Phase 24b.1): persist provider/model per step.
         # Additive-only, same ALTER TABLE ... ADD COLUMN pattern as the
         # 'tenant' migrations below — safe to run against an existing DB.
@@ -236,6 +333,60 @@ def init_db() -> None:
             )
             """
         )
+        # Cron that remembers (HP-74): durable per-schedule memory. `scratch`
+        # carries into the next run's context; `last_input_hash` drives the
+        # no-op skip (skip the model when nothing changed). Keyed by the
+        # schedule entry name, like schedule_runs.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedule_memory (
+                name TEXT PRIMARY KEY,
+                scratch TEXT,
+                last_output TEXT,
+                last_input_hash TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # MCP command center (HP-76): operator-added MCP servers. Config JSON
+        # is split into columns so probes/list don't have to re-parse; `env`
+        # stores only ${env:NAME} refs (literals are stripped on import).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id {pk},
+                name TEXT NOT NULL UNIQUE,
+                transport TEXT NOT NULL,
+                command TEXT,
+                args TEXT,
+                url TEXT,
+                env TEXT,
+                source TEXT NOT NULL DEFAULT 'import',
+                last_probe_status TEXT,
+                last_probe_detail TEXT,
+                last_probe_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # Inbound mail watcher dedup + admission bookkeeping (HP-75). One row
+        # per (watcher, message-id): `status` is dispatched/skipped/pending,
+        # `attempts` bounds retries so a message that keeps failing admission
+        # is recorded skipped rather than retried forever. Survives restart, so
+        # a message is never processed twice.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mail_processed (
+                watcher TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (watcher, message_id)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS approvals (
@@ -266,6 +417,41 @@ def init_db() -> None:
                 id {pk},
                 token_hash TEXT, role TEXT, endpoint TEXT, method TEXT, result TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        # Agent Studio Phase 1 (HP-25): store-backed role definitions, tenant-
+        # scoped. The mutable source of truth once seeded from roles.yaml; the
+        # Role model's list fields are JSON-encoded, `can_block` is 0/1, and
+        # `prompt_text` holds the inline prompt (Option A) with `prompt_file`
+        # kept for seed/export. `order` is stored as `role_order` (ORDER is a
+        # reserved word). Slice 1 adds only this table + CRUD; `load_roles()`
+        # still reads YAML until the store-first flip (slice 2).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS roles (
+                name TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                title TEXT,
+                display_name TEXT,
+                model_profile TEXT,
+                runner TEXT,
+                model TEXT,
+                models TEXT,
+                prompt_file TEXT,
+                prompt_text TEXT,
+                inputs TEXT,
+                outputs TEXT,
+                optional_inputs TEXT,
+                allowed_tools TEXT,
+                can_block INTEGER,
+                role_order INTEGER,
+                host TEXT,
+                permission_mode TEXT,
+                command_task TEXT,
+                effort TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (name, tenant)
             )
             """
         )
@@ -636,7 +822,16 @@ def record_run_start(
             status=status,
             tenant=tenant,
         )
-        return run_id
+    from hivepilot.services import events
+
+    events.emit(
+        "run.started",
+        "run",
+        run_id,
+        tenant=tenant,
+        payload={"run_id": run_id, "project": project, "task": task, "status": status},
+    )
+    return run_id
 
 
 def record_step(
@@ -734,6 +929,12 @@ def record_step(
                 turns,
             ),
         )
+        _step_event_row = conn.execute(
+            ph(db.ph("SELECT tenant FROM runs WHERE id=?")), (run_id,)
+        ).fetchone()
+    _step_event_tenant = (
+        dict(_step_event_row).get("tenant") if _step_event_row else None
+    ) or "default"
     # Announce the step on the event stream. Until this existed the stream
     # carried a run's endpoints and never its middle -- `state.run_start`,
     # then silence for ten minutes, then `state.verdict` -- so anything
@@ -764,6 +965,18 @@ def record_step(
             _metrics.steps_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+    # Durable realtime bus (HP-40): entity is the RUN (the board is run-centric,
+    # so a step landing means "run X advanced"); the step detail rides in the
+    # payload. Fail-safe inside `emit` — a broken event never breaks the step.
+    from hivepilot.services import events
+
+    events.emit(
+        "step.recorded",
+        "run",
+        run_id,
+        tenant=_step_event_tenant,
+        payload={"run_id": run_id, "step": step, "status": status, "role": role},
+    )
 
 
 def attach_run_artifacts(run_id: int, artifacts_path: str) -> None:
@@ -812,12 +1025,27 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
             ),
             (status, detail, run_id),
         )
+        _complete_event_row = conn.execute(
+            ph(db.ph("SELECT tenant FROM runs WHERE id=?")), (run_id,)
+        ).fetchone()
+    _complete_event_tenant = (
+        dict(_complete_event_row).get("tenant") if _complete_event_row else None
+    ) or "default"
     logger.info("state.run_complete", run_id=run_id, status=status)
     if _METRICS_AVAILABLE and _metrics is not None:
         try:
             _metrics.runs_total.labels(status=status).inc()
         except Exception:  # noqa: BLE001
             pass
+    from hivepilot.services import events
+
+    events.emit(
+        "run.completed",
+        "run",
+        run_id,
+        tenant=_complete_event_tenant,
+        payload={"run_id": run_id, "status": status},
+    )
 
 
 def get_run(run_id: int) -> dict[str, Any] | None:
@@ -835,19 +1063,35 @@ def get_run(run_id: int) -> dict[str, Any] | None:
 
 def list_recent_runs(limit: int = 50, tenant: str | None = None) -> list[dict[str, Any]]:
     init_db()
+    # `last_activity_at` = the latest step timestamp for the run — the run's
+    # "heartbeat" (HP-43): when it last did anything, distinct from when it
+    # STARTED. `step_count` gives the board a cheap progress signal. Both are
+    # correlated subqueries (dialect-safe, no GROUP BY) so they never change the
+    # runs row set or its ordering — purely additive columns.
+    _extra = (
+        "(SELECT MAX(s.timestamp) FROM steps s WHERE s.run_id = r.id) AS last_activity_at, "
+        "(SELECT COUNT(*) FROM steps s WHERE s.run_id = r.id) AS step_count"
+    )
     with db.connect() as conn:
         if tenant is not None:
             rows = conn.execute(
                 ph(
                     db.ph(
-                        "SELECT * FROM runs WHERE tenant=? ORDER BY started_at DESC, id DESC LIMIT ?"
+                        f"SELECT r.*, {_extra} FROM runs r WHERE r.tenant=? "
+                        "ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
                     )
                 ),
                 (tenant, limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                ph(db.ph("SELECT * FROM runs ORDER BY started_at DESC, id DESC LIMIT ?")), (limit,)
+                ph(
+                    db.ph(
+                        f"SELECT r.*, {_extra} FROM runs r "
+                        "ORDER BY r.started_at DESC, r.id DESC LIMIT ?"
+                    )
+                ),
+                (limit,),
             ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1374,6 +1618,176 @@ def update_schedule_run(name: str) -> None:
         )
 
 
+def get_schedule_memory(name: str) -> dict[str, Any] | None:
+    """Durable memory for a `remember: true` schedule (HP-74): the prior run's
+    `scratch`/`last_output` (carried forward) and `last_input_hash` (no-op
+    skip). `None` before the first remembered run."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM schedule_memory WHERE name=?")), (name,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_schedule_memory(
+    name: str,
+    *,
+    scratch: str | None = None,
+    last_output: str | None = None,
+    last_input_hash: str | None = None,
+) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO schedule_memory (name, scratch, last_output, last_input_hash, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name) DO UPDATE SET
+                scratch=excluded.scratch,
+                last_output=excluded.last_output,
+                last_input_hash=excluded.last_input_hash,
+                updated_at=CURRENT_TIMESTAMP
+            """
+                )
+            ),
+            (name, scratch, last_output, last_input_hash),
+        )
+
+
+def _decode_mcp_server(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    for key in ("args", "env"):
+        raw = out.get(key)
+        if isinstance(raw, str):
+            try:
+                out[key] = json.loads(raw)
+            except (ValueError, TypeError):
+                out[key] = [] if key == "args" else {}
+        elif out.get(key) is None:
+            out[key] = [] if key == "args" else {}
+    return out
+
+
+def list_mcp_servers() -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute("SELECT * FROM mcp_servers ORDER BY name").fetchall()
+    return [_decode_mcp_server(dict(row)) for row in rows]
+
+
+def get_mcp_server(server_id: int) -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM mcp_servers WHERE id=?")), (server_id,)
+        ).fetchone()
+    return _decode_mcp_server(dict(row)) if row else None
+
+
+def upsert_mcp_server(
+    *,
+    name: str,
+    transport: str,
+    command: str | None = None,
+    args: list[str] | None = None,
+    url: str | None = None,
+    env: dict[str, str] | None = None,
+    source: str = "import",
+) -> dict[str, Any]:
+    init_db()
+    args_json = json.dumps(args or [])
+    env_json = json.dumps(env or {})
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO mcp_servers (name, transport, command, args, url, env, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                transport=excluded.transport,
+                command=excluded.command,
+                args=excluded.args,
+                url=excluded.url,
+                env=excluded.env,
+                source=excluded.source
+            """
+                )
+            ),
+            (name, transport, command, args_json, url, env_json, source),
+        )
+        row = conn.execute(ph(db.ph("SELECT * FROM mcp_servers WHERE name=?")), (name,)).fetchone()
+    assert row is not None
+    return _decode_mcp_server(dict(row))
+
+
+def update_mcp_probe(server_id: int, *, status: str, detail: str, probed_at: str) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            UPDATE mcp_servers
+            SET last_probe_status=?, last_probe_detail=?, last_probe_at=?
+            WHERE id=?
+            """
+                )
+            ),
+            (status, detail, probed_at, server_id),
+        )
+
+
+def delete_mcp_server(server_id: int) -> bool:
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(ph(db.ph("DELETE FROM mcp_servers WHERE id=?")), (server_id,))
+        return cur.rowcount > 0
+
+
+def get_mail_processed(watcher: str, message_id: str) -> dict[str, Any] | None:
+    """Dedup/admission record for one inbound message (HP-75), or `None` if the
+    watcher has never seen this message-id."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM mail_processed WHERE watcher=? AND message_id=?")),
+            (watcher, message_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def upsert_mail_processed(
+    watcher: str,
+    message_id: str,
+    *,
+    status: str,
+    attempts: int = 0,
+    error: str | None = None,
+) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO mail_processed (watcher, message_id, status, attempts, error, processed_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(watcher, message_id) DO UPDATE SET
+                status=excluded.status,
+                attempts=excluded.attempts,
+                error=excluded.error,
+                processed_at=CURRENT_TIMESTAMP
+            """
+                )
+            ),
+            (watcher, message_id, status, attempts, error),
+        )
+
+
 def record_approval_request(
     run_id: int,
     project: str,
@@ -1475,6 +1889,388 @@ def get_token(token: str) -> dict[str, Any] | None:
     with db.connect() as conn:
         row = conn.execute(ph(db.ph("SELECT * FROM tokens WHERE token=?")), (token,)).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Agent Studio Phase 1 (HP-25): store-backed roles CRUD.
+# Row dicts mirror the `Role` model (see hivepilot/roles.py). List fields are
+# JSON-encoded on write and decoded on read; `can_block` is 0/1; the Role
+# model's `order` is stored as `role_order`. `upsert_role` is DELETE+INSERT
+# (dialect-safe across SQLite/Postgres, no ON CONFLICT on a composite PK).
+# ---------------------------------------------------------------------------
+
+_ROLE_LIST_FIELDS = ("models", "inputs", "outputs", "optional_inputs", "allowed_tools")
+
+
+def _decode_role_row(row: dict[str, Any]) -> dict[str, Any]:
+    for field in _ROLE_LIST_FIELDS:
+        raw = row.get(field)
+        if raw is not None:
+            try:
+                row[field] = json.loads(raw)
+            except (TypeError, ValueError):
+                row[field] = None
+    row["can_block"] = bool(row.get("can_block"))
+    if "role_order" in row:
+        row["order"] = row.pop("role_order")
+    return row
+
+
+def upsert_role(role: dict[str, Any]) -> None:
+    """Insert or replace one role. `role` keys mirror the `Role` model
+    (`order` accepted as `order`); list fields may be Python lists."""
+    init_db()
+    tenant = role.get("tenant", "default")
+
+    def _j(value: Any) -> str | None:
+        return json.dumps(value) if value is not None else None
+
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("DELETE FROM roles WHERE name=? AND tenant=?")),
+            (role["name"], tenant),
+        )
+        conn.execute(
+            ph(
+                db.ph(
+                    "INSERT INTO roles (name, tenant, title, display_name, model_profile, runner, "
+                    "model, models, prompt_file, prompt_text, inputs, outputs, optional_inputs, "
+                    "allowed_tools, can_block, role_order, host, permission_mode, command_task, "
+                    "effort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                )
+            ),
+            (
+                role["name"],
+                tenant,
+                role.get("title"),
+                role.get("display_name"),
+                role.get("model_profile"),
+                role.get("runner"),
+                role.get("model"),
+                _j(role.get("models")),
+                str(role["prompt_file"]) if role.get("prompt_file") is not None else None,
+                role.get("prompt_text"),
+                _j(role.get("inputs")),
+                _j(role.get("outputs")),
+                _j(role.get("optional_inputs")),
+                _j(role.get("allowed_tools")),
+                1 if role.get("can_block") else 0,
+                role.get("order"),
+                role.get("host"),
+                role.get("permission_mode"),
+                role.get("command_task"),
+                role.get("effort"),
+            ),
+        )
+
+
+def delete_role(name: str, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(ph(db.ph("DELETE FROM roles WHERE name=? AND tenant=?")), (name, tenant))
+
+
+def get_role_row(name: str, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM roles WHERE name=? AND tenant=?")), (name, tenant)
+        ).fetchone()
+    return _decode_role_row(dict(row)) if row else None
+
+
+def list_role_rows(tenant: str = "default") -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            ph(db.ph("SELECT * FROM roles WHERE tenant=? ORDER BY role_order, name")),
+            (tenant,),
+        ).fetchall()
+    return [_decode_role_row(dict(row)) for row in rows]
+
+
+def roles_count(tenant: str = "default") -> int:
+    """Number of stored roles for `tenant` (used to gate first-boot seeding).
+    Counts via `list_role_rows` to stay row-factory/dialect agnostic."""
+    return len(list_role_rows(tenant))
+
+
+def seed_roles(rows: list[dict[str, Any]], tenant: str = "default") -> int:
+    """First-boot seeding: write `rows` ONLY when the store is empty for
+    `tenant`. Returns how many were seeded (0 if the store already had roles),
+    so seeding is idempotent and never clobbers live edits."""
+    init_db()
+    if roles_count(tenant) > 0:
+        return 0
+    for row in rows:
+        entry = dict(row)
+        entry.setdefault("tenant", tenant)
+        upsert_role(entry)
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
+# Espaces (HP-45, Cycle 1 · P2): conversation rooms + append-only transcript.
+# `participants` is JSON [{"type":"human"|"role","id":...}]; a space whose
+# participants are all roles is an agent<->agent room. `list_spaces` carries
+# per-space `message_count` + `last_message_at` (correlated subqueries, no N+1)
+# so the sidebar can order by recency and preview without extra round-trips.
+# ---------------------------------------------------------------------------
+
+
+def _decode_space_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    raw = out.get("participants")
+    if isinstance(raw, str):
+        try:
+            out["participants"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["participants"] = []
+    return out
+
+
+def create_space(
+    participants: list[dict[str, Any]],
+    *,
+    kind: str = "dm",
+    title: str | None = None,
+    tenant: str = "default",
+) -> int:
+    init_db()
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
+            "INSERT INTO spaces (tenant, kind, title, participants) VALUES (?, ?, ?, ?)",
+            (tenant, kind, title, json.dumps(participants)),
+        )
+
+
+def get_space(space_id: int, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM spaces WHERE id=? AND tenant=?")), (space_id, tenant)
+        ).fetchone()
+    return _decode_space_row(dict(row)) if row else None
+
+
+def list_spaces(tenant: str | None = None) -> list[dict[str, Any]]:
+    init_db()
+    extra = (
+        "(SELECT COUNT(*) FROM space_messages m WHERE m.space_id = s.id) AS message_count, "
+        "(SELECT MAX(m.created_at) FROM space_messages m WHERE m.space_id = s.id) AS last_message_at"
+    )
+    # Recency ordering: `updated_at` is bumped on each message but only has
+    # SECOND resolution, so it ties for activity within the same second. The
+    # max message id (globally monotonic) is the deterministic tiebreak — a
+    # just-messaged space beats an equally-timestamped one that wasn't — with
+    # the space id (creation order) as the final tiebreak for message-less
+    # spaces.
+    order_by = (
+        "ORDER BY s.updated_at DESC, "
+        "(SELECT COALESCE(MAX(m.id), 0) FROM space_messages m WHERE m.space_id = s.id) DESC, "
+        "s.id DESC"
+    )
+    with db.connect() as conn:
+        if tenant is not None:
+            rows = conn.execute(
+                ph(db.ph(f"SELECT s.*, {extra} FROM spaces s WHERE s.tenant=? {order_by}")),
+                (tenant,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                ph(db.ph(f"SELECT s.*, {extra} FROM spaces s {order_by}")),
+            ).fetchall()
+    return [_decode_space_row(dict(row)) for row in rows]
+
+
+def add_space_participant(
+    space_id: int, participant: dict[str, Any], tenant: str = "default"
+) -> None:
+    """Add `participant` ({type,id}) to a space if not already present (dedup by
+    type+id). Used by delegation handoff (HP-48) to bring a role into a room."""
+    init_db()
+    space = get_space(space_id, tenant=tenant)
+    if space is None:
+        return
+    parts = list(space.get("participants") or [])
+    key = (participant.get("type"), participant.get("id"))
+    if any((p.get("type"), p.get("id")) == key for p in parts):
+        return
+    parts.append(participant)
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("UPDATE spaces SET participants=? WHERE id=? AND tenant=?")),
+            (json.dumps(parts), space_id, tenant),
+        )
+
+
+def delete_space(space_id: int, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("DELETE FROM space_messages WHERE space_id=? AND tenant=?")),
+            (space_id, tenant),
+        )
+        conn.execute(ph(db.ph("DELETE FROM spaces WHERE id=? AND tenant=?")), (space_id, tenant))
+
+
+def add_space_message(
+    space_id: int,
+    sender_type: str,
+    body: str,
+    *,
+    sender_id: str | None = None,
+    tenant: str = "default",
+    actions: list[dict[str, Any]] | None = None,
+) -> int:
+    """Append one message and bump the space's `updated_at` (so it rises to the
+    top of the recency-ordered sidebar). `actions` (HP-47) is an optional
+    tool-action trace, JSON-encoded. Returns the new message id."""
+    init_db()
+    with db.connect() as conn:
+        msg_id = db.insert_returning_id(
+            conn,
+            "INSERT INTO space_messages (space_id, tenant, sender_type, sender_id, body, actions) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                space_id,
+                tenant,
+                sender_type,
+                sender_id,
+                body,
+                json.dumps(actions) if actions else None,
+            ),
+        )
+        conn.execute(
+            ph(db.ph("UPDATE spaces SET updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant=?")),
+            (space_id, tenant),
+        )
+    return msg_id
+
+
+def _decode_space_message_row(row: dict[str, Any]) -> dict[str, Any]:
+    out = dict(row)
+    raw = out.get("actions")
+    if isinstance(raw, str):
+        try:
+            out["actions"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["actions"] = None
+    return out
+
+
+def list_space_messages(
+    space_id: int, tenant: str = "default", *, limit: int = 200, after_id: int = 0
+) -> list[dict[str, Any]]:
+    init_db()
+    with db.connect() as conn:
+        rows = conn.execute(
+            ph(
+                db.ph(
+                    "SELECT * FROM space_messages WHERE space_id=? AND tenant=? AND id > ? "
+                    "ORDER BY id LIMIT ?"
+                )
+            ),
+            (space_id, tenant, after_id, limit),
+        ).fetchall()
+    return [_decode_space_message_row(dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Missions (HP-49): a decomposition that spawned N runs, tracked so the
+# orchestrator can synthesize once every run has finished.
+# ---------------------------------------------------------------------------
+
+
+def create_mission(
+    space_id: int,
+    project: str,
+    goal: str,
+    runs: dict[str, int],
+    tenant: str = "default",
+) -> int:
+    init_db()
+    with db.connect() as conn:
+        return db.insert_returning_id(
+            conn,
+            "INSERT INTO missions (tenant, space_id, project, goal, runs) VALUES (?, ?, ?, ?, ?)",
+            (tenant, space_id, project, goal, json.dumps(runs)),
+        )
+
+
+def get_mission(mission_id: int, tenant: str = "default") -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM missions WHERE id=? AND tenant=?")), (mission_id, tenant)
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    raw = out.get("runs")
+    if isinstance(raw, str):
+        try:
+            out["runs"] = json.loads(raw)
+        except (ValueError, TypeError):
+            out["runs"] = {}
+    out["synthesized"] = bool(out.get("synthesized"))
+    return out
+
+
+def mark_mission_synthesized(mission_id: int, tenant: str = "default") -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("UPDATE missions SET synthesized=1 WHERE id=? AND tenant=?")),
+            (mission_id, tenant),
+        )
+
+
+def mem0_already_migrated(mem0_id: str, user_id: str) -> bool:
+    """True when this mem0 memory was already retained into Hindsight (HP-53)."""
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT 1 FROM mem0_migration_log WHERE mem0_id=? AND user_id=?")),
+            (mem0_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
+def record_mem0_migrated(mem0_id: str, user_id: str, bank_id: str) -> None:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    "INSERT INTO mem0_migration_log (mem0_id, user_id, bank_id) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT (mem0_id, user_id) DO UPDATE SET bank_id=excluded.bank_id"
+                )
+            ),
+            (mem0_id, user_id, bank_id),
+        )
+
+
+def save_mission_narrative(
+    mission_id: int,
+    narrative: str,
+    fingerprint: str,
+    tenant: str = "default",
+) -> None:
+    """Persist a reflected 'où elle en est' for this status snapshot (HP-54)."""
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    "UPDATE missions SET narrative=?, narrative_fingerprint=?, "
+                    "reflected_at=CURRENT_TIMESTAMP WHERE id=? AND tenant=?"
+                )
+            ),
+            (narrative, fingerprint, mission_id, tenant),
+        )
 
 
 def list_all_runs(tenant: str | None = None) -> list[dict[str, Any]]:

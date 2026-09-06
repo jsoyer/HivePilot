@@ -11,8 +11,8 @@ import { useT } from '@/lib/i18n'
 import { fetchMemoryGrowth } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
-import { Mem0View } from './Mem0View'
 import { MemoryQualityView } from './MemoryQualityView'
+import { RoleMemoryView } from './RoleMemoryView'
 
 const DAYS = 30
 
@@ -141,25 +141,15 @@ function GrowthTab() {
 }
 
 /**
- * Unified Memory view — merges the formerly-separate "Memory > Quality" (memory
- * quality) and "Mem0" (search) built-in tabs into ONE, plus a new Growth
- * tab (`/v1/memory/growth`), grouped under a single "Memory" nav entry
+ * Unified Memory view — Sources, Knowledge (HP-55 role banks), Quality,
+ * and Growth (`/v1/memory/growth`) under a single "Memory" nav entry
  * (see `nav-config.ts`'s `NAV_GROUP_ORDER`). Default tab is Quality.
- *
- * **Quality** and **Search** render the EXISTING `MemoryQualityView`/`Mem0View`
- * components UNCHANGED, as full tab panels — their own loading/error/
- * empty/403 handling, and every one of their existing tests, keep working
- * exactly as before; only where they're mounted in the shell changed (they
- * used to be two sibling top-level `Pollen.tsx` tabs, now they're two
- * inner tabs of this one).
+ * The mem0 Search tab is retired (HP-53).
  *
  * This inner `Tabs` root is a SEPARATE, independent instance from the
  * outer shell `Tabs` in `Pollen.tsx` (nested Base UI `Tabs.Root`s don't
- * share state) — Base UI only mounts the ACTIVE panel's `Tabs.Panel` (the
- * same "one `[role=\"tabpanel\"]` at a time" behavior the outer shell
- * already relies on), so `MemoryQualityView`/`Mem0View`/`GrowthTab` each only
- * fetch their own data once their tab is actually selected, never all
- * three eagerly on mount.
+ * share state) — Base UI only mounts the ACTIVE panel's `Tabs.Panel`,
+ * so each tab fetches its own data once selected, never all eagerly.
  */
 export function MemoryView() {
   const t = useT()
@@ -175,17 +165,28 @@ export function MemoryView() {
         <h2 className="font-heading text-base font-medium">{t('nav.memory')}</h2>
         <p className="text-sm text-muted-foreground">{t('memory.description')}</p>
       </div>
-      <TabsList data-testid="memory-tabs" className="w-full max-w-md sm:w-fit">
+      <TabsList data-testid="memory-tabs" className="w-full max-w-xl sm:w-fit">
         <TabsTrigger value="backends">{t('memory.tabBackends')}</TabsTrigger>
+        <TabsTrigger value="knowledge">{t('memory.tabKnowledge')}</TabsTrigger>
         <TabsTrigger value="quality">{t('memory.tabQuality')}</TabsTrigger>
         <TabsTrigger value="growth">{t('memory.tabGrowth')}</TabsTrigger>
-        <TabsTrigger value="search">{t('memory.tabSearch')}</TabsTrigger>
       </TabsList>
       {/* Sources first: which backend answered, how often it came back with
           nothing, and whether it sends work off the host. The quality/growth
           tabs below describe the corpus; this one describes the retrieval. */}
       <TabsContent value="backends">
         <MemoryBackendsView />
+      </TabsContent>
+      <TabsContent value="knowledge">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('memory.knowledgeTitle')}</CardTitle>
+            <CardDescription>{t('memory.knowledgeDescription')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RoleMemoryView />
+          </CardContent>
+        </Card>
       </TabsContent>
       <TabsContent value="quality">
         <MemoryQualityView />
@@ -200,9 +201,6 @@ export function MemoryView() {
             <GrowthTab />
           </CardContent>
         </Card>
-      </TabsContent>
-      <TabsContent value="search">
-        <Mem0View />
       </TabsContent>
     </Tabs>
   )

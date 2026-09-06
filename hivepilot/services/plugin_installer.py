@@ -155,7 +155,7 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         description=(
             "Memory backend that models a ROLE over time (honcho.dev) and returns "
             "derived Representations rather than stored facts -- a different job "
-            "from mem0's fact store, so the two compose instead of duplicating."
+            "from Hindsight's fact store, so the two compose instead of duplicating."
         ),
         env_flag="HIVEPILOT_HONCHO_ENABLED",
         prereq_kind="pip",
@@ -316,12 +316,19 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
         prereq_kind="config",
         prereq_detail="set HIVEPILOT_OBSIDIAN_VAULT to your Obsidian vault's directory (no external binary/lib)",
     ),
-    "mem0": ExamplePluginSpec(
-        name="mem0",
-        description="Persistent cross-run agent memory via a recall/store hook pair backed by mem0.",
-        env_flag="HIVEPILOT_MEM0_ENABLED",
+    "hindsight": ExamplePluginSpec(
+        name="hindsight",
+        description=(
+            "World-fact memory via Hindsight retain/recall (vectorize-io/hindsight). "
+            "HivePilot is an HTTP client; deploy Hindsight on Postgres/pgvector separately."
+        ),
+        env_flag="HIVEPILOT_HINDSIGHT_ENABLED",
         prereq_kind="pip",
-        prereq_detail="`pip install mem0ai`",
+        prereq_detail=(
+            "`pip install hindsight-client` (the HTTP SDK — not `hindsight-api`, "
+            "which is the server) plus a running Hindsight at "
+            "HIVEPILOT_HINDSIGHT_BASE_URL"
+        ),
     ),
     "headroom": ExamplePluginSpec(
         name="headroom",

@@ -43,21 +43,17 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // /v1/partitions + the ratification gate) is an Operate concern — it is
   // where an operator decides whether N agents start — so it sits next to
   // Approvals rather than in Overview or System.
-  { label: 'nav.operate', values: ['chat', 'runs', 'approvals', 'partitions', 'autopilot'] },
+  { label: 'nav.operate', values: ['chat', 'spaces', 'orchestrator', 'runs', 'approvals', 'partitions', 'autopilot'] },
   // Mirador Spend section sprint: Cost moves out of "Overview" into its own
   // "Spend" group alongside the two new views (Models/Efficiency) — the
   // operator's complaint this sprint answers ("la conso marche pas, rien
   // sur les modèles, rien de headroom/rtk") is specifically about spend
   // visibility, so it gets a dedicated, discoverable section rather than
   // being folded into general analytics.
-  { label: 'nav.spend', values: ['cost', 'models', 'efficiency'] },
+  { label: 'nav.spend', values: ['cost', 'models', 'providers', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
-  // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and memory-quality built-ins merged into ONE `memory` item backed by
-  // `MemoryView`'s internal Quality/Growth/Search tabs (see `Pollen.tsx`'s
-  // `BUILTIN_TABS`) — a single-entry-with-tabs destination reads cleaner
-  // than three separate top-level nav items for what is really one
-  // subject (memory).
+  // Memory: one nav item for Sources / Knowledge / Quality / Growth
+  // (see `Pollen.tsx` `BUILTIN_TABS`). The mem0 Search tab is retired (HP-53).
   { label: 'nav.memory', values: ['memory'] },
   // Mirador Operate section sprint: demoted to LAST — Graph (plugins/
   // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),
@@ -71,7 +67,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // its own demotion above).
   // `conversations` sits beside `agents`: same subject seen two ways -- the
   // roster of who ran, and the thread of what they actually said.
-  { label: 'nav.system', values: ['health', 'plugins', 'cache', 'agents', 'conversations', 'graph'] },
+  { label: 'nav.system', values: ['health', 'plugins', 'mcp', 'cache', 'agents', 'conversations', 'graph'] },
 ]
 
 export interface NavItem {

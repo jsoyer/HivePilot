@@ -37,6 +37,162 @@ schedule_app = typer.Typer(help="Scheduler commands")
 app.add_typer(schedule_app, name="schedule")
 tokens_app = typer.Typer(help="Manage API tokens")
 app.add_typer(tokens_app, name="tokens")
+model_app = typer.Typer(help="Model connections: verify before you save")
+app.add_typer(model_app, name="model")
+mail_app = typer.Typer(help="Inbound email/IMAP watchers (restricted reader agents)")
+app.add_typer(mail_app, name="mail")
+memory_app = typer.Typer(help="Memory backend utilities (mem0 → Hindsight)")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("migrate-mem0")
+def memory_migrate_mem0_command(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="List what would be retained; no Hindsight writes"
+    ),
+    user_id: Optional[str] = typer.Option(
+        None, "--user-id", help="Migrate one bank key only (project:task[:role])"
+    ),
+    page_size: int = typer.Option(100, "--page-size", min=1, max=200),
+    force: bool = typer.Option(False, "--force", help="Re-retain already-logged memories"),
+) -> None:
+    """Copy mem0 memories into Hindsight episodic banks (same {project}:{task}:{role} keys).
+
+    The mem0 plugin is retired. These flags only describe the migration source.
+    After a successful apply, set HIVEPILOT_MEM0_ENABLED=false and keep Hindsight on.
+    """
+    from hivepilot.services.mem0_hindsight_migration import (
+        MigrationUnavailable,
+        iter_error_lines,
+        migrate,
+    )
+
+    try:
+        report = migrate(dry_run=dry_run, user_id=user_id, page_size=page_size, force=force)
+    except MigrationUnavailable as exc:
+        typer.echo(f"[FAIL] {exc.reason}")
+        raise typer.Exit(code=1) from exc
+
+    label = "DRY-RUN" if report.dry_run else "OK  " if report.failed == 0 else "PARTIAL"
+    typer.echo(
+        f"[{label}] keys={report.keys_scanned} found={report.memories_found} "
+        f"migrated={report.migrated} skipped={report.skipped} failed={report.failed}"
+    )
+    for line in iter_error_lines(report.errors):
+        typer.echo(f"  error : {line}")
+    if not report.dry_run and report.failed == 0:
+        typer.echo("  next  : set HIVEPILOT_MEM0_ENABLED=false after you verify recall")
+    raise typer.Exit(code=0 if report.failed == 0 else 1)
+
+
+@model_app.command("verify")
+def model_verify_command(
+    provider: Optional[str] = typer.Option(
+        None,
+        "--provider",
+        help="API provider: openai/anthropic/google/openrouter/mistral/perplexity/ollama",
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Override endpoint, e.g. http://localhost:11434/v1"
+    ),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", help="Credential (else read from the provider's env var)"
+    ),
+    agent: Optional[str] = typer.Option(
+        None, "--agent", help="Verify a CLI agent SESSION instead: claude/codex/cursor/grok/gemini"
+    ),
+) -> None:
+    """Verify a model connection responds BEFORE saving it — no config is written.
+
+    Sends a cheap authenticated `GET /models` (API providers), reuses the Ollama
+    probe (local), or checks the agent's login session (`--agent`). Exit 0 on
+    success, 1 on failure — usable as an onboarding gate.
+    """
+    from hivepilot.services import model_verify as mv
+
+    if agent:
+        result = mv.verify_agent(agent)
+    elif provider:
+        result = mv.verify(provider, base_url=base_url, api_key=api_key)
+    else:
+        raise typer.BadParameter("pass --provider <name> or --agent <kind>")
+
+    mark = "OK  " if result.ok else "FAIL"
+    typer.echo(f"[{mark}] {result.target}: {result.detail}")
+    if result.models:
+        typer.echo(f"  models: {', '.join(result.models[:8])}")
+    if result.error and not result.ok:
+        typer.echo(f"  error : {result.error}")
+    raise typer.Exit(code=0 if result.ok else 1)
+
+
+@model_app.command("connect")
+def model_connect_command(
+    provider: str = typer.Option(
+        ...,
+        "--provider",
+        help="API provider: openai/openrouter/anthropic/google/mistral/perplexity",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", help="Credential to verify then save (prompted if omitted)"
+    ),
+    base_url: Optional[str] = typer.Option(
+        None, "--base-url", help="Override endpoint; must be loopback or a known host"
+    ),
+    env_file: Optional[Path] = typer.Option(
+        None, "--env-file", help="Override the resolved .env path"
+    ),
+) -> None:
+    """Verify a cloud API key, then write it to the host .env (0600). Never echoes the key."""
+    from hivepilot.services import model_connect as mc
+
+    key = api_key or typer.prompt("API key", hide_input=True)
+    try:
+        result = mc.connect(provider, key, base_url=base_url, env_path=env_file)
+    except mc.ConnectError as exc:
+        typer.echo(f"[FAIL] {exc}")
+        raise typer.Exit(code=1) from exc
+    mark = "OK  " if result.ok and result.saved else "FAIL"
+    typer.echo(f"[{mark}] {result.provider}: {result.detail}")
+    if result.env_key and result.saved:
+        typer.echo(f"  saved : {result.env_key}")
+    if result.models:
+        typer.echo(f"  models: {', '.join(result.models[:8])}")
+    if result.error and not result.ok:
+        typer.echo(f"  error : {result.error}")
+    raise typer.Exit(code=0 if result.ok and result.saved else 1)
+
+
+@mail_app.command("poll")
+def mail_poll_command(
+    watcher: Optional[str] = typer.Option(
+        None, "--watcher", help="Poll only this watcher (default: every enabled one)"
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="API token", envvar="HIVEPILOT_API_TOKEN"
+    ),
+) -> None:
+    """Poll inbound mail watchers ONCE: for each allowlisted new message, start a
+    restricted reader run. Read-only (never sends/modifies mail); dedup survives
+    restart. Intended to be invoked on a cadence (cron / scheduler).
+    """
+    _require_cli_role("run", token)
+    from hivepilot.services import mail_watcher
+
+    results = mail_watcher.poll_all(only=watcher)
+    if not results:
+        typer.echo("No mail watchers configured (see mail_watchers.yaml).")
+        return
+    for name, r in results.items():
+        if r.disabled:
+            typer.echo(f"{name}: disabled")
+            continue
+        typer.echo(
+            f"{name}: dispatched={r.dispatched} rejected={r.rejected} "
+            f"duplicates={r.duplicates} failed={r.failed} skipped={r.skipped}"
+        )
+
+
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
 topics_app = typer.Typer(help="Telegram forum topics: inspect the registry, prune strays")
@@ -508,6 +664,25 @@ def doctor() -> None:
                 typer.echo(f"  {_binary:<14}: NOT FOUND")
     except Exception as _exc:  # noqa: BLE001
         typer.echo(f"  (could not inspect runners: {_exc})")
+
+    # Local models (Ollama): verify the daemon actually ANSWERS, not just that
+    # the binary is on PATH — the honest minimum of "verify before use" for a
+    # local model (HP-78). Best-effort with a short timeout; never fatal.
+    typer.echo("\n=== Local models (Ollama) ===")
+    if shutil.which("ollama"):
+        from hivepilot.services.ollama_probe import probe_ollama
+
+        _op = probe_ollama()
+        if _op.reachable:
+            _models = ", ".join(_op.models[:8]) if _op.models else "(none pulled — `ollama pull …`)"
+            typer.echo(f"  endpoint    : reachable ({_op.base_url})")
+            typer.echo(f"  models      : {_models}")
+        else:
+            typer.echo(
+                f"  endpoint    : NOT reachable ({_op.base_url}) — is `ollama serve` running?"
+            )
+    else:
+        typer.echo("  ollama      : NOT on PATH (skip — install to use local models)")
 
     typer.echo("\n=== Mandatory agent CLIs ===")
     from hivepilot.services.agent_checks import MANDATORY_AGENTS, check_mandatory_agents
@@ -1423,6 +1598,29 @@ def config_get(
     typer.echo(f"{key} = {prov.value}")
     typer.echo(f"source: {prov.source_path if prov.source_path else '(default/env)'}")
     typer.echo(f"xdg_rank: {prov.xdg_rank}")
+
+
+@config_app.command("export")
+def config_export(
+    tenant: str = typer.Option("default", "--tenant", help="Roles store tenant to export."),
+) -> None:
+    """Export the store-backed role roster (Agent Studio) back to `roles.yaml`
+    + `prompts/agents/*.md` for GitOps. The store is authoritative: roles edited
+    live via `POST/PUT/DELETE /v1/roles` are written to files so the change can
+    be committed and reviewed. A no-op (exit 0) when the store is empty — the
+    deployment is still pure-YAML and `roles.yaml` is left untouched."""
+    from hivepilot import roles as roles_mod
+
+    count = roles_mod.export_store_to_yaml(tenant=tenant)
+    if count == 0:
+        typer.echo(
+            "Roles store is empty for this tenant — nothing to export (roles.yaml unchanged)."
+        )
+        return
+    from hivepilot.config import settings
+
+    roles_path = settings.resolve_config_path(settings.roles_file)
+    typer.echo(f"Exported {count} role(s) to {roles_path}")
 
 
 @config_app.command("list")
@@ -4654,7 +4852,7 @@ def plugins_install(
         ...,
         help=(
             "Curated built-in example plugin name(s) to fetch, e.g. "
-            "rtk herdr mem0 (see `hivepilot plugins available`)"
+            "rtk herdr (see `hivepilot plugins available`)"
         ),
     ),
     enable: bool = typer.Option(

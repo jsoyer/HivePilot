@@ -137,6 +137,7 @@ _SECRET_SETTING_FIELDS = frozenset(
         # Passed to `Memory.from_config()` with llm/embedder overrides, which
         # is exactly where a provider `api_key` lands.
         "mem0_config",
+        "hindsight_api_key",
         "slack_bot_token",
         "slack_signing_secret",
         "slack_app_token",
@@ -189,8 +190,33 @@ class Settings(BaseSettings):
     roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    # Delegation (HP-48): the maximum length of a handoff chain (agent A hands
+    # the conversation to B hands to C …). Bounds a runaway handoff loop —
+    # `delegation.handoff` refuses past this and posts a "limit reached" note
+    # instead of dispatching further. env: HIVEPILOT_DELEGATION_MAX_HOPS
+    delegation_max_hops: int = 4
+
+    # Espaces (HP-46): when a human posts a message to a space that has a role
+    # participant, dispatch a background "reply" for each such role (the
+    # dépose/relève loop). The reply CONTENT is produced by a pluggable
+    # generator (registered by the orchestrator, HP-49); with no generator this
+    # is a graceful no-op. Default on so the transport is live as soon as a
+    # generator exists. env: HIVEPILOT_SPACES_AUTO_REPLY
+    spaces_auto_reply: bool = True
+
+    # Agent Studio (HP-25): governance guardrail for API-authored roles. A role
+    # created/updated via `POST/PUT /v1/roles` that grants a dangerous
+    # capability — `permission_mode="bypassPermissions"` (blanket tool access on
+    # untrusted input) — is REFUSED unless this is explicitly enabled. Default
+    # False = fail-closed: the visual/NL builder can never silently mint an
+    # agent with blanket tool authority. env: HIVEPILOT_ALLOW_DANGEROUS_ROLE_CAPABILITIES
+    allow_dangerous_role_capabilities: bool = False
     groups_file: Path = Path("groups.yaml")
     schedules_file: Path = Path("schedules.yaml")
+    # Inbound email/IMAP watchers (HP-75): each entry starts a RESTRICTED
+    # reader agent per allowlisted new message. Disabled unless the file
+    # declares an enabled watcher; see `mail_watcher.py`.
+    mail_watchers_file: Path = Path("mail_watchers.yaml")
     # Obsidian vault folder taxonomy (folders / expected_folders / frozen_folders).
     # A vault's folder NAMES are the organisation's filing convention, so they are
     # config-owned -- see hivepilot/services/vault_layout.py. Its own file rather
@@ -809,27 +835,20 @@ class Settings(BaseSettings):
     # call — loudly — so an optimisation can never take the fleet down.
     # env: HIVEPILOT_COMPRESSION_PROXY_URL
     compression_proxy_url: str | None = None
-    # Opt-in gate for the `mem0` before_step/after_step plugin (plugins/mem0.py):
-    # persistent cross-run agent memory (recall before a step, store after)
-    # via the optional `mem0ai` library. Defaults False — ships dormant even
-    # when the plugin file is present and the library is installed; mirrors
-    # headroom_enabled's opt-in-only gating above.
+    # DEPRECATED (HP-53). Migration-source gate only — the mem0 plugin is
+    # retired. `hivepilot memory migrate-mem0` still reads this flag to open
+    # a mem0 export. Defaults False.
     # env: HIVEPILOT_MEM0_ENABLED
     mem0_enabled: bool = False
-    # Hosted mem0 API key (https://mem0.ai). When set, plugins/mem0.py uses
-    # `mem0.MemoryClient(api_key=...)`. WARNING: hosted mode sends
-    # extra_prompt, prior_context, the step's output (the agent's actual
-    # generated result — more likely than extra_prompt/prior_context to
-    # contain secrets), AND the structured PROVENANCE metadata `store()`
-    # attaches to every memory (source/project/task/role/step/category/ts —
-    # see the "PROVENANCE metadata" note in plugins/mem0.py) off-machine to
-    # mem0.ai — do NOT use it for sensitive projects; leave unset to keep
-    # everything local via `mem0.Memory()`.
+    # Hosted mem0 API key (https://mem0.ai). Used only by
+    # `hivepilot memory migrate-mem0`. WARNING: hosted mode historically sent
+    # step output and provenance off-machine to mem0.ai — do NOT use it for
+    # sensitive projects; leave unset to read a local `mem0.Memory()` store.
     # env: HIVEPILOT_MEM0_API_KEY
     mem0_api_key: str | None = None
     # Optional self-host mem0 config dict, passed to `Memory.from_config()`
     # (vector store / embedder / llm overrides). Only used when mem0_api_key
-    # is unset. env: HIVEPILOT_MEM0_CONFIG (JSON string)
+    # is unset, and only by the migrator. env: HIVEPILOT_MEM0_CONFIG (JSON string)
     mem0_config: dict[str, Any] | None = None
     # Per-plugin enable flags for the six always-on bundled plugins. UNLIKE
     # headroom_enabled/mem0_enabled above (which default False — opt-IN,
@@ -852,6 +871,17 @@ class Settings(BaseSettings):
     # over time and returns derived Representations, which is a different job
     # from mem0's fact store -- so the two compose rather than duplicate.
     honcho_enabled: bool = False
+    # env: HIVEPILOT_HINDSIGHT_ENABLED — HTTP client onto a Hindsight server
+    # (plugins/hindsight.py). OFF by default. HivePilot never embeds
+    # MemoryEngine; the operator deploys Hindsight (Docker / hindsight-api /
+    # Cloud) on Postgres+pgvector and points this URL at it.
+    hindsight_enabled: bool = False
+    # env: HIVEPILOT_HINDSIGHT_BASE_URL — default is the local Docker port.
+    hindsight_base_url: str = "http://127.0.0.1:8888"
+    # env: HIVEPILOT_HINDSIGHT_API_KEY — Cloud / locked-down self-host only.
+    hindsight_api_key: str | None = None
+    # env: HIVEPILOT_HINDSIGHT_BANK_ID — override the project:task:role bank.
+    hindsight_bank_id: str | None = None
     onepassword_enabled: bool = True
     rtk_enabled: bool = True
     sample_enabled: bool = False

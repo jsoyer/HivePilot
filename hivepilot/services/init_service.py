@@ -6,7 +6,8 @@ Two modes, both reusing existing machinery rather than reimplementing it:
   files locally. Reuses the content already authored in
   ``hivepilot.scaffold.templates`` for the six core files, and adds three
   more minimal templates (model_profiles.yaml, schedules.yaml,
-  api_tokens.yaml) that scaffold_config's existing set didn't cover.
+  mail_watchers.yaml, api_tokens.yaml) that scaffold_config's existing set
+  didn't cover.
 - CLONE (existing config repo): seeds HIVEPILOT_CONFIG_REPO into the target
   ``.env`` and delegates the actual git clone/pull to
   ``hivepilot.services.config_service.sync`` — the ONLY git interaction this
@@ -66,6 +67,23 @@ _SCHEDULES_YAML = """\
 schedules: {}
 """
 
+_MAIL_WATCHERS_YAML = """\
+# Inbound email/IMAP watchers (HP-75). Disabled by default — an empty
+# allow_senders admits nothing (fail-closed). The IMAP client is read-only
+# (never sets \\Seen); dedup is by message-id in mail_processed.
+# mail_watchers:
+#   support-inbox:
+#     enabled: true
+#     host: imap.example.com
+#     username: bot@example.com
+#     password: ${env:IMAP_PASSWORD}
+#     mailbox: INBOX
+#     allow_senders: ["@example.com"]
+#     task: triage-email
+#     projects: ["your-project"]
+mail_watchers: {}
+"""
+
 _API_TOKENS_YAML = """\
 # HivePilot API tokens. Managed via `hivepilot tokens add/list/rotate/remove`
 # — do not hand-edit token_hash values below.
@@ -76,6 +94,7 @@ SCAFFOLD_FILES: dict[str, str] = {
     **_BASE_SCAFFOLD_FILES,
     "model_profiles.yaml": _MODEL_PROFILES_YAML,
     "schedules.yaml": _SCHEDULES_YAML,
+    "mail_watchers.yaml": _MAIL_WATCHERS_YAML,
     "api_tokens.yaml": _API_TOKENS_YAML,
 }
 
@@ -86,6 +105,7 @@ _PLAIN_YAML_FILES: tuple[str, ...] = (
     "policies.yaml",
     "model_profiles.yaml",
     "schedules.yaml",
+    "mail_watchers.yaml",
     "api_tokens.yaml",
 )
 
@@ -279,6 +299,7 @@ def _plain_yaml_loaders() -> dict[str, Callable[[Path], object]]:
     resolves through the live settings chain, so it cannot be pointed at an
     arbitrary target directory here — it stays on ``yaml.safe_load`` below.
     """
+    from hivepilot.services.mail_watcher import load_mail_watchers
     from hivepilot.services.policy_service import load_policies
     from hivepilot.services.profile_service import load_claude_profiles
     from hivepilot.services.schedule_service import load_schedules
@@ -288,6 +309,7 @@ def _plain_yaml_loaders() -> dict[str, Callable[[Path], object]]:
         "policies.yaml": load_policies,
         "model_profiles.yaml": load_claude_profiles,
         "schedules.yaml": load_schedules,
+        "mail_watchers.yaml": load_mail_watchers,
         "api_tokens.yaml": load_tokens,
     }
 

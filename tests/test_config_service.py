@@ -34,6 +34,7 @@ def test_config_files_includes_expected_entries() -> None:
         "pipelines.yaml",
         "policies.yaml",
         "schedules.yaml",
+        "mail_watchers.yaml",
         "roles.yaml",
         "groups.yaml",
         "model_profiles.yaml",

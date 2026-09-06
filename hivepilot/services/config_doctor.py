@@ -29,6 +29,7 @@ would this have caught" stays discoverable from the code itself:
     surfaced them outside ``plugins health`` -- folded into the single
     doctor report here).
   * ``check_dangling_references`` (+ ``_check_schedules_dangling`` /
+    ``_check_mail_watchers_dangling`` /
     ``_check_role_overrides_dangling`` / ``_check_only_modules_dangling``)
     — incident #7 (a removed project left behind in ``policies.yaml``; a
     stage's ``only_tags``/``only_modules`` referencing something no group/
@@ -465,6 +466,7 @@ _NON_PLUGIN_ENABLED_FLAG_EXCEPTIONS = frozenset(
         "chatops_concierge",  # built-in NL feature flag, not a plugin
         "stage_cache",  # SQLite stage-memoization feature flag, not a plugin
         "otel_ingest",  # OTLP metric route on the API, not a plugin
+        "mem0",  # retired plugin; flag still gates hivepilot memory migrate-mem0
     }
 )
 
@@ -808,6 +810,108 @@ def _check_schedules_dangling(config_dir: Path | None) -> list[DoctorFinding]:
                         "run time instead of at config-check time",
                         f"add project '{project_ref}' to projects.yaml, or fix/remove it "
                         f"from schedules.yaml entry '{schedule_name}'",
+                    )
+                )
+    return findings
+
+
+def _check_mail_watchers_dangling(config_dir: Path | None) -> list[DoctorFinding]:
+    """HP-75: mail_watchers.yaml is not in validate_config's required_files,
+    so a dangling task/project, an enabled watcher with an empty allowlist
+    (admits nothing — fail-closed, but almost certainly a typo), or a
+    missing host/username only surfaces when `hivepilot mail poll` actually
+    runs. Same shape as `_check_schedules_dangling`."""
+    watchers_data, findings = _load_yaml_checked(_doctor_path("mail_watchers.yaml", config_dir))
+    projects_data, project_findings = _load_yaml_checked(_doctor_path("projects.yaml", config_dir))
+    tasks_data, task_findings = _load_yaml_checked(_doctor_path("tasks.yaml", config_dir))
+    findings.extend(project_findings)
+    findings.extend(task_findings)
+
+    projects_section, projects_section_findings = _checked_container(
+        projects_data, "projects", "'projects.yaml' key 'projects'"
+    )
+    findings.extend(projects_section_findings)
+    tasks_section, tasks_section_findings = _checked_container(
+        tasks_data, "tasks", "'tasks.yaml' key 'tasks'"
+    )
+    findings.extend(tasks_section_findings)
+    watchers_section, watchers_section_findings = _checked_container(
+        watchers_data, "mail_watchers", "'mail_watchers.yaml' key 'mail_watchers'"
+    )
+    findings.extend(watchers_section_findings)
+
+    project_names: set[str] = set(projects_section.keys())
+    task_names: set[str] = set(tasks_section.keys())
+
+    for watcher_name, watcher in watchers_section.items():
+        if not isinstance(watcher, dict):
+            findings.append(
+                _finding(
+                    "error",
+                    "malformed_mail_watcher_entry",
+                    f"Mail watcher '{watcher_name}' is not a mapping (got "
+                    f"{type(watcher).__name__}) -- not checked",
+                    "a watcher entry that isn't a mapping was previously skipped with "
+                    "zero output, silently disabling the dangling-task/dangling-project "
+                    "and empty-allowlist checks for it",
+                    f"fix the '{watcher_name}' entry in mail_watchers.yaml to be a mapping "
+                    "with 'host'/'username'/'task'/'allow_senders' keys",
+                )
+            )
+            continue
+        enabled = bool(watcher.get("enabled", False))
+        if enabled:
+            for required in ("host", "username", "task"):
+                if not watcher.get(required):
+                    findings.append(
+                        _finding(
+                            "error",
+                            "mail_watcher_missing_field",
+                            f"Enabled mail watcher '{watcher_name}' is missing '{required}'",
+                            "an enabled watcher with a blank host/username/task only fails "
+                            "when `hivepilot mail poll` actually connects",
+                            f"set '{required}' on '{watcher_name}' in mail_watchers.yaml, "
+                            "or set enabled: false",
+                        )
+                    )
+            if not watcher.get("allow_senders"):
+                findings.append(
+                    _finding(
+                        "error",
+                        "mail_watcher_empty_allowlist",
+                        f"Enabled mail watcher '{watcher_name}' has an empty allow_senders "
+                        "-- fail-closed, so it will admit nothing",
+                        "an empty allowlist is the safety default, but enabling a watcher "
+                        "without listing senders is almost certainly a typo that silently "
+                        "drops every inbound message",
+                        f"add at least one address or @domain to allow_senders on "
+                        f"'{watcher_name}', or set enabled: false",
+                    )
+                )
+        task_ref = watcher.get("task")
+        if task_ref and task_ref not in task_names:
+            findings.append(
+                _finding(
+                    "error",
+                    "dangling_mail_watcher_task",
+                    f"Mail watcher '{watcher_name}' references unknown task '{task_ref}'",
+                    "a watcher with a dangling task only fails when mail poll actually "
+                    "dispatches it -- silent until then",
+                    f"add task '{task_ref}' to tasks.yaml, or fix/remove mail_watchers.yaml "
+                    f"entry '{watcher_name}'",
+                )
+            )
+        for project_ref in watcher.get("projects") or []:
+            if project_ref not in project_names:
+                findings.append(
+                    _finding(
+                        "error",
+                        "dangling_mail_watcher_project",
+                        f"Mail watcher '{watcher_name}' references unknown project '{project_ref}'",
+                        "a watcher targeting a removed/renamed project silently fails at "
+                        "run time instead of at config-check time",
+                        f"add project '{project_ref}' to projects.yaml, or fix/remove it "
+                        f"from mail_watchers.yaml entry '{watcher_name}'",
                     )
                 )
     return findings
@@ -1274,6 +1378,7 @@ def check_dangling_references(config_dir: Path | None) -> list[DoctorFinding]:
                 )
             )
     findings.extend(_check_schedules_dangling(config_dir))
+    findings.extend(_check_mail_watchers_dangling(config_dir))
     findings.extend(_check_role_overrides_dangling(config_dir))
     findings.extend(_check_only_modules_dangling(config_dir))
     return findings
@@ -1697,6 +1802,22 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
 # ---------------------------------------------------------------------------
 
 
+def _vault_state_uninspectable(vault_path: Path, exc: BaseException) -> list[DoctorFinding]:
+    """The 'I could not inspect the vault's git state' error finding — the
+    module's governing rule: an uninspectable checkout is reported, never
+    silently swallowed."""
+    return [
+        _finding(
+            "error",
+            "vault_git_state_check_failed",
+            f"Could not inspect the git state of the vault at {vault_path}: {type(exc).__name__}",
+            "a broken git checkout at the vault path would otherwise silently "
+            "disable this check with no output at all",
+            f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
+        )
+    ]
+
+
 def check_vault_git_state() -> list[DoctorFinding]:
     vault_path = settings.resolve_path(settings.obsidian_vault)
     if not vault_path.is_dir():
@@ -1704,9 +1825,23 @@ def check_vault_git_state() -> list[DoctorFinding]:
 
     from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
 
+    # A `.git` entry at the vault ITSELF means the vault is meant to be a repo,
+    # so open it WITHOUT parent-directory search: a broken checkout there (e.g.
+    # a `.git` file whose gitdir points nowhere) is then reported as
+    # uninspectable rather than being (a) silently reclassified as "not a repo"
+    # -- which is what `search_parent_directories=True` does when it fails to
+    # open the vault and then also finds no parent repo -- or (b) masked by a
+    # PARENT repo that the search would resolve to instead. That reclassification
+    # was environment-dependent (it hinged on whether a parent repo happened to
+    # exist above the vault), which is exactly why it flaked in CI. Only when
+    # the vault has no `.git` of its own do we search parents, so a vault
+    # deliberately nested inside a larger repo is still recognised.
+    has_own_git = (vault_path / ".git").exists()
     try:
-        repo = Repo(vault_path, search_parent_directories=True)
-    except (InvalidGitRepositoryError, NoSuchPathError):
+        repo = Repo(vault_path, search_parent_directories=not has_own_git)
+    except (InvalidGitRepositoryError, NoSuchPathError) as exc:
+        if has_own_git:
+            return _vault_state_uninspectable(vault_path, exc)
         return [
             _finding(
                 "info",
@@ -1723,17 +1858,7 @@ def check_vault_git_state() -> list[DoctorFinding]:
         ]
     except Exception as exc:  # noqa: BLE001 -- "could not inspect this" must be a
         # finding, never silence or a crash: mirrors this module's governing rule.
-        return [
-            _finding(
-                "error",
-                "vault_git_state_check_failed",
-                f"Could not inspect the git state of the vault at {vault_path}: "
-                f"{type(exc).__name__}",
-                "a broken git checkout at the vault path would otherwise silently "
-                "disable this check with no output at all",
-                f"inspect the vault's git state manually, e.g. `git -C {vault_path} status`",
-            )
-        ]
+        return _vault_state_uninspectable(vault_path, exc)
 
     try:
         porcelain = repo.git.status("--porcelain")
@@ -2499,7 +2624,6 @@ def verify_badge(result: PluginVerifyResult) -> str:
 # distribution cross-check here -- see `verify_plugins`'s docstring for what
 # is deliberately NOT covered (onepassword/kms have multiple SDK modes).
 _PIP_IMPORT_PROBES: dict[str, tuple[str, str]] = {
-    "mem0": ("mem0", "mem0ai"),
     "headroom": ("headroom", "headroom-ai"),
     "infisical": ("infisical_sdk", "infisicalsdk"),
 }

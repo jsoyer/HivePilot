@@ -298,7 +298,7 @@ async def test_no_panels_registered_builtin_tabs_still_work() -> None:
         from textual.widgets import TabPane
 
         pane_ids = {pane.id for pane in app.query(TabPane)}
-        assert pane_ids == {"analytics-tab", "cost-tab", "health-tab", "mem0-tab"}
+        assert pane_ids == {"analytics-tab", "cost-tab", "health-tab"}
         assert app.metrics_table is not None
 
 

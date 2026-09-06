@@ -93,6 +93,7 @@ non-latin characters degrade to `?` instead of failing the export:
 - durations (p50 / p95 / p99)
 - providers
 - cost
+- whales (largest individual model steps by spend — the calls aggregates hide)
 
 Cost analytics depend on an opt-in per-run token/cost usage capture (for example,
 Claude usage) plus a configurable price map set via `HIVEPILOT_LLM_PRICE_MAP`. The
@@ -123,7 +124,7 @@ Built-in sources:
 |---|---|---|---|
 | `plugins` | `read` | tenant-free (plugin/role/runner ecosystem is process config, not tenant data) | the same loaded-plugin/role/runner-binding data `plugins list` shows, as a graph |
 | `pipeline` | `read` | tenant-scoped | requires `?pipeline=<name>`; renders the pipeline's stage DAG, each stage node coloured by its last run's outcome for the caller's tenant |
-| `skills` | `admin` | **local host FS scan, NOT tenant state** | scans `HIVEPILOT_GRAPH_SKILLS_SCAN_PATH` (`settings.graph_skills_scan_path`) for `SKILL.md` files on the machine the API process runs on — admin-gated for the same reason `GET /v1/memories` is |
+| `skills` | `admin` | **local host FS scan, NOT tenant state** | scans `HIVEPILOT_GRAPH_SKILLS_SCAN_PATH` (`settings.graph_skills_scan_path`) for `SKILL.md` files on the machine the API process runs on — admin-gated because a host filesystem scan is not tenant data |
 
 A plugin can contribute additional sources via the `graph_sources`
 capability — see [PLUGINS.md](PLUGINS.md#graph-sources) for the contract and
@@ -149,7 +150,7 @@ discipline as plugin health and panel data.
 The `panel` plugin type contributes renderer-agnostic tabs to Pollen. A plugin
 registers a `PanelSpec` with a `fetch` function and an optional `min_role`; an
 invalid `min_role` is a fail-closed registration error (the panel won't load). This
-is how plugins — for example the mem0 memory plugin — surface their own tab inside
+is how plugins — for example the Hindsight Knowledge panel — surface their own tab inside
 the dashboard instead of requiring a separate UI. See
 [PLUGINS.md](PLUGINS.md) for the full plugin type reference.
 

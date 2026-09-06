@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 
-// Pollen wires seven real data views (Analytics/Cost/Health/Mem0/Approvals/
+// Pollen wires seven real data views (Analytics/Cost/Health/Memory/Approvals/
 // Runs/Graph) — mock every endpoint they call so this test exercises the
 // shell (sidebar nav, header, default view, switching) without depending on
 // network behavior. Each view's own loading/error/empty/data states are
@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     by_role_note: 'by_role is unavailable',
     unpriced_models: [],
   }),
+  fetchAnalyticsWhales: vi.fn().mockResolvedValue({ whales: [], limit: 20 }),
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
   // Mirador Spend section sprint: ModelsView fetches its own /v1/models —
   // mocked genuinely-empty so this shell test exercises tab switching only,
@@ -49,7 +50,8 @@ const mocks = vi.hoisted(() => ({
     latency_note: 'p50/p95 latency is not computable from current data.',
   }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
-  fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
+  fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
+  fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
   // Pollen now wraps its tree in RoleProvider (Sprint 1), which fetches
@@ -176,6 +178,9 @@ const GROUPED_TAB_ORDER = [
   'Home',
   // HP-22: the natural-language agent chat leads the Operate group.
   'Chat',
+  // Espaces (HP-45) and Orchestrator (HP-49 / HP-69) stay in Operate.
+  'Spaces',
+  'Orchestrator',
   'Runs',
   'Approvals',
   // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate
@@ -184,6 +189,8 @@ const GROUPED_TAB_ORDER = [
   'Autopilot',
   'Cost',
   'Models',
+  // Providers panel (HP-73) sits in the Spend group next to Models.
+  'Providers',
   'Efficiency',
   'Analytics',
   'Memory',
@@ -191,6 +198,8 @@ const GROUPED_TAB_ORDER = [
   // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
   // System beside Health, which is where plugin state already lived.
   'Plugins',
+  // MCP command center (HP-76) sits next to Plugins under System.
+  'MCP',
   // Prompt-cache economics, beside Plugins under System. Separate from
   // Analytics on purpose: those aggregate, and an aggregate is what hid
   // 1.7M tokens of unread cache creation behind an 85% hit rate.

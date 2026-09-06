@@ -1,15 +1,9 @@
 """The engine takes the snapshot, so recall order stops mattering.
 
-`plugins/mem0.py` snapshots `extra_prompt` at the top of its OWN recall
-(line 491) so its `store` can persist the task's real ask instead of
-re-persisting mem0's own recalled block -- a feedback loop it was right to
-close. But the snapshot is taken when MEM0 runs, not before the recall phase,
-so whatever another backend appended first is inside it. mem0 then writes
-`snapshot + its own block` and obsidian's recall is gone.
-
-That is what forced the `SNAPSHOT` semantics (#533), which refuses mem0
-alongside any other recaller -- and therefore refuses mem0 + obsidian, the
-combination this deployment actually runs.
+A recaller that snapshots `extra_prompt` at the top of its OWN recall so
+its `store` can persist the task's real ask can close a feedback loop —
+but if that snapshot is taken when THAT backend runs, not before the
+recall phase, whatever another backend appended first is inside it.
 
 The fix is to move the snapshot up: the engine captures the pre-recall value
 ONCE per task, before any `before_step` hook fires, and every store reads that
@@ -22,8 +16,6 @@ snapshot step one's recalled memories, which is the very loop being closed.
 """
 
 from __future__ import annotations
-
-from conftest import BUNDLED_PLUGINS
 
 from hivepilot.services.memory_kind import (
     INPUT_SNAPSHOT_KEY,
@@ -90,23 +82,8 @@ class TestReadingItBack:
         assert input_snapshot(metadata) == "first"
 
 
-class TestMem0NoLongerNeedsToBeASnapshotBackend:
-    def test_mem0_declares_additive_now_that_the_engine_snapshots(self):
-        """With the capture lifted, mem0's append is against a value nobody
-        else can have overwritten in the meantime -- so it composes."""
-        import importlib.util
-
-        path = BUNDLED_PLUGINS / "mem0.py"
-        spec = importlib.util.spec_from_file_location("hivepilot_test_mem0_sem", path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-
-        from hivepilot.services.memory_kind import RecallSemantics
-
-        assert module.RECALL_SEMANTICS is RecallSemantics.ADDITIVE
-
-    def test_mem0_and_obsidian_compose_again(self):
+class TestAdditiveBackendsCompose:
+    def test_obsidian_and_hindsight_compose(self):
         from hivepilot.services.memory_kind import (
             MemoryBackend,
             RecallSemantics,
@@ -115,8 +92,8 @@ class TestMem0NoLongerNeedsToBeASnapshotBackend:
 
         decision = resolve_composition(
             [
-                MemoryBackend(name="mem0", semantics=RecallSemantics.ADDITIVE),
                 MemoryBackend(name="obsidian", semantics=RecallSemantics.ADDITIVE),
+                MemoryBackend(name="hindsight", semantics=RecallSemantics.ADDITIVE),
             ]
         )
 

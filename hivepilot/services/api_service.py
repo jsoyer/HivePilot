@@ -8,7 +8,7 @@ import threading
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from time import time
+from time import monotonic, sleep, time
 from typing import Any
 
 from fastapi import (
@@ -61,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials="*" not in _allowed_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
@@ -95,6 +95,40 @@ async def _log_startup_paths() -> None:
     from hivepilot.utils.startup_paths import log_resolved_startup_paths
 
     log_resolved_startup_paths(settings)
+
+
+# -- Agent Studio (HP-25): adopt the store roster on boot ---------------------
+@app.on_event("startup")
+async def _adopt_store_roster() -> None:
+    """Make a restart pick up any store-backed role edits. `refresh_roles()` is
+    store-first (HP-25 slice 2): it adopts the DB roster when the store has been
+    seeded and otherwise reloads `roles.yaml` unchanged — so an untouched
+    deployment stays byte-identical, while one that used `POST/PUT/DELETE
+    /v1/roles` (which seed the store) comes back up on the edited roster.
+    Never fatal: a bad store must not stop the API from serving."""
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        with _orch_lock:
+            roles.refresh_roles()
+    except Exception as exc:  # noqa: BLE001 — startup must not crash on this
+        get_logger(__name__).warning("store_roster_adopt_failed", error=str(exc))
+
+
+# -- Agent voice (HP-49): make roles actually reply in Espaces + as subagents --
+@app.on_event("startup")
+async def _register_agent_voice() -> None:
+    """Wire the runner-backed agent voice into the Espaces dépose/relève loop
+    (HP-46) and the delegation subagent primitive (HP-48). Fail-safe — a wiring
+    error must never stop the API from serving."""
+    from hivepilot.utils.logging import get_logger
+
+    try:
+        from hivepilot.services import agent_voice
+
+        agent_voice.register()
+    except Exception as exc:  # noqa: BLE001
+        get_logger(__name__).warning("agent_voice.register_failed", error=str(exc))
 
 
 # -- Partition claim reconciliation (propose -> ratify -> dispatch PRD, §8) --
@@ -429,26 +463,37 @@ v1 = APIRouter(prefix="/v1")
 def memory_backends(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
     """Recall/store activity per memory backend, plus what each one costs.
 
-    The two backends are deliberately reported side by side on the same
+    The backends are deliberately reported side by side on the same
     counters. They are NOT interchangeable and the panel says so: mem0 sends
     content to a third party and answers semantically; Obsidian stays on the
-    host and answers by role-scoped search. Measured on this deployment, their
-    recalls overlap by 2-4% -- they are complements, and a screen showing only
-    one would suggest the other is dead weight.
+    host and answers by role-scoped search; Hindsight is a self-hosted (or
+    Cloud) retain/recall engine on Postgres/pgvector. Measured on this
+    deployment, mem0 and Obsidian recalls overlap by 2-4% -- they are
+    complements, and a screen showing only one would suggest the other is
+    dead weight.
 
     `empty_searches` is the comparable KPI. A search returning a full top-k
     means the cap was hit, not that k relevant things exist.
     """
+    from urllib.parse import urlparse
+
+    from hivepilot.config import settings
     from hivepilot.services import memory_service
 
     stats = memory_service.backend_stats(days)
+    hindsight_host = (urlparse(settings.hindsight_base_url or "").hostname or "").lower()
     return {
         "days": days,
         "backends": stats,
         # Stated in the payload, not left to the UI: whether work leaves the
         # host is a property of the backend, and it is the single fact an
         # operator most needs beside these counters.
-        "egress": {"mem0": True, "obsidian": False},
+        "egress": {
+            "obsidian": False,
+            # Loopback Docker/pip default stays on the host; Cloud / a remote
+            # Hindsight URL is egress. Same rule as the plugin's leaves_host().
+            "hindsight": hindsight_host not in {"", "localhost", "127.0.0.1", "::1"},
+        },
     }
 
 
@@ -610,6 +655,103 @@ def list_runs(
     if caller.role == "admin":
         return state_service.list_recent_runs(limit=limit)
     return state_service.list_recent_runs(limit=limit, tenant=caller.tenant)
+
+
+# ---------------------------------------------------------------------------
+# Realtime SSE stream (HP-41, Cycle 1 · P1). Turns the durable change bus
+# (HP-40, `services/events.py`) into a browser `EventSource` feed so Pollen can
+# stop polling: each run/step lifecycle change is pushed as an SSE event whose
+# `id:` is the `change_log` id, so a dropped connection reconnects with
+# `Last-Event-ID` and replays from exactly where it left off — no gaps, no
+# dupes. Non-admin callers only see their own tenant's changes.
+# ---------------------------------------------------------------------------
+
+
+def _format_sse(row: dict[str, Any]) -> str:
+    """Render one change_log row as an SSE frame. The `id:` line drives the
+    browser's automatic `Last-Event-ID` reconnection; `event:` is the change
+    kind so clients can `addEventListener('run.completed', ...)`."""
+    data = json.dumps(
+        {
+            "id": row["id"],
+            "kind": row["kind"],
+            "entity_type": row["entity_type"],
+            "entity_id": row["entity_id"],
+            "tenant": row["tenant"],
+            "payload": row.get("payload"),
+        }
+    )
+    return f"id: {row['id']}\nevent: {row['kind']}\ndata: {data}\n\n"
+
+
+def sse_stream(
+    after_id: int | None,
+    *,
+    tenant_scope: str | None = None,
+    stop: Any | None = None,
+    poll_interval: float = 0.5,
+    heartbeat_interval: float = 15.0,
+    idle_timeout: float | None = None,
+) -> Any:
+    """Yield SSE frames for changes after `after_id` (defaults to "now"),
+    scoped to `tenant_scope` (None = admin/all). Tails the durable `change_log`
+    so it is dialect-agnostic and reconnection-safe. Emits a `: keep-alive`
+    comment every `heartbeat_interval`s of quiet so proxies don't drop the
+    idle connection; `idle_timeout` ends the stream (used by tests / to recycle
+    long-idle connections). Blocking generator — FastAPI runs it on a worker."""
+    from hivepilot.services import events
+
+    cursor = events.latest_change_id() if after_id is None else after_id
+    last_beat = monotonic()
+    last_activity = monotonic()
+    yield ": connected\n\n"  # open the stream so the client's onopen fires promptly
+    while stop is None or not stop.is_set():
+        rows = events.read_since(cursor)
+        emitted = False
+        for row in rows:
+            cursor = int(row["id"])
+            if tenant_scope is not None and row.get("tenant") != tenant_scope:
+                continue  # consumed (cursor advanced) but not visible to this caller
+            yield _format_sse(row)
+            emitted = True
+        now = monotonic()
+        if emitted:
+            last_activity = now
+            last_beat = now
+        else:
+            if now - last_beat >= heartbeat_interval:
+                yield ": keep-alive\n\n"
+                last_beat = now
+            if idle_timeout is not None and (now - last_activity) >= idle_timeout:
+                return
+        sleep(poll_interval)
+
+
+@v1.get("/events/stream")
+@app.get("/events/stream")
+def events_stream_endpoint(
+    request: Request,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+    after: int | None = Query(
+        None, description="Resume after this change_log id (else stream from now)."
+    ),
+) -> Any:
+    from fastapi.responses import StreamingResponse
+
+    tenant_scope = None if caller.role == "admin" else caller.tenant
+    start = after
+    if start is None:
+        last_event_id = request.headers.get("Last-Event-ID")
+        if last_event_id is not None:
+            try:
+                start = int(last_event_id)
+            except ValueError:
+                start = None
+    return StreamingResponse(
+        sse_stream(start, tenant_scope=tenant_scope),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2022,6 +2164,41 @@ def analytics_providers(
     return {"by_provider": by_provider, "by_model": by_model}
 
 
+@v1.get("/providers/fallbacks", dependencies=[Depends(require_role("read"))])
+@app.get("/providers/fallbacks", dependencies=[Depends(require_role("read"))])
+def provider_fallbacks_endpoint(hours: int = 24) -> dict:
+    """Recent HP-70 provider fallbacks (HP-73), aggregated by source provider.
+    Surfaces the otherwise invisible fallback signal: which runner fell over,
+    how often, when last, and why (quota / unavailable). Provider fallback is a
+    global infra fact (tenant-agnostic), so this is read-gated but not
+    tenant-scoped."""
+    from hivepilot.services import events
+
+    hours = max(1, min(hours, 24 * 30))
+    rows = events.recent("provider.fallback", hours=hours)
+    agg: dict[str, dict[str, Any]] = {}
+    for row in rows:  # rows are newest-first, so the first sighting is the latest
+        payload = row.get("payload") or {}
+        provider = payload.get("from") or row.get("entity_id") or "unknown"
+        entry = agg.setdefault(
+            provider,
+            {
+                "provider": provider,
+                "count": 0,
+                "last_at": None,
+                "last_reason": None,
+                "last_to": None,
+            },
+        )
+        entry["count"] += 1
+        if entry["last_at"] is None:
+            entry["last_at"] = row.get("ts")
+            entry["last_reason"] = payload.get("reason")
+            entry["last_to"] = payload.get("to")
+    providers = sorted(agg.values(), key=lambda e: (-e["count"], e["provider"]))
+    return {"hours": hours, "providers": providers}
+
+
 @v1.get("/analytics/cost")
 @app.get("/analytics/cost")
 def analytics_cost(
@@ -2065,6 +2242,31 @@ def analytics_cost(
     return data
 
 
+@v1.get("/analytics/whales")
+@app.get("/analytics/whales")
+def analytics_whales(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(20, ge=1, le=100),
+    project: str | None = None,
+    task: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-81 — largest individual model steps by spend, then prompt tokens.
+
+    Aggregates on `/v1/analytics/cost` hide a $1.50 / 300k-token call inside
+    "claude · 30d". This list is the same envelopes `cost_summary` already
+    meters — never prompt or completion bodies. Tenant-filtered via
+    `_analytics_tenant` like every other analytics endpoint.
+    """
+    return analytics_service.cost_whales(
+        tenant=_analytics_tenant(caller),
+        days=days,
+        project=project,
+        task=task,
+        limit=limit,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — GET /v1/models, GET /v1/efficiency.
 # Same shape as the analytics endpoints above: Depends(require_role("read")),
@@ -2092,6 +2294,132 @@ def models_endpoint(
     return analytics_service.models_summary(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
+
+
+@v1.get("/models/local")
+@app.get("/models/local")
+def models_local_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — local daemons already answering on this machine.
+
+    Ollama (11434) and LM Studio (1234). Non-loopback URLs are refused, not
+    fetched. Unreachable is a row, not a 502.
+    """
+    from hivepilot.services import local_models
+
+    return {"backends": [b.__dict__ for b in local_models.discover()]}
+
+
+@v1.get("/onboarding/machine")
+@app.get("/onboarding/machine")
+def onboarding_machine_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — CLI sign-ins + local models already on the box."""
+    from hivepilot.services import local_models
+
+    return local_models.machine_snapshot()
+
+
+class ModelVerifyRequest(BaseModel):
+    provider: str | None = None
+    agent_kind: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+@v1.post("/models/verify")
+@app.post("/models/verify")
+def models_verify_endpoint(
+    body: ModelVerifyRequest,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-78 — prove a connection answers before keeping it. Never persists.
+
+    Sending ``api_key`` in the body requires admin (a read token must not
+    become a place to park secrets). Local/env-based checks stay on ``read``.
+    """
+    from hivepilot.services import local_models, model_verify
+
+    if body.api_key and caller.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="api_key in the body requires an admin token",
+        )
+    if body.base_url and not local_models.verify_target_allowed(body.base_url):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="base_url must be loopback or a known model API host",
+        )
+    if body.agent_kind:
+        result = model_verify.verify_agent(body.agent_kind)
+    elif body.provider:
+        result = model_verify.verify(body.provider, base_url=body.base_url, api_key=body.api_key)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="provide provider or agent_kind",
+        )
+    return {
+        "ok": result.ok,
+        "target": result.target,
+        "detail": result.detail,
+        "models": result.models,
+        "error": result.error,
+    }
+
+
+class ModelConnectRequest(BaseModel):
+    provider: str
+    api_key: str
+    base_url: str | None = None
+    consent: bool = False
+
+
+@v1.post("/models/connect")
+@app.post("/models/connect")
+def models_connect_endpoint(
+    body: ModelConnectRequest,
+    caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    """HP-65 — verify a cloud API key, then write it to the host ``.env``.
+
+    Admin + ``consent: true``. The response never echoes the key. A failed
+    live check is ``ok=false`` with no write. Structural refusals (unknown
+    provider, SSRF ``base_url``, empty key, local daemon) are 400.
+    """
+    from hivepilot.services import model_connect as mc
+
+    if body.consent is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail='consent is required: POST {"consent": true} to save a verified key.',
+        )
+    try:
+        result = mc.connect(body.provider, body.api_key, base_url=body.base_url)
+    except mc.ConnectError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    state_service.record_audit(
+        token_hash=caller.token[:16],
+        role=f"model-connect:{caller.note or caller.role}",
+        endpoint="/v1/models/connect",
+        method="POST",
+        result=(
+            f"{'saved' if result.saved else 'verify-failed'} {result.provider} "
+            f"{result.env_key or '-'} fp={mc.key_fingerprint(body.api_key)}"
+        ),
+        tenant=caller.tenant,
+    )
+    return {
+        "ok": result.ok,
+        "provider": result.provider,
+        "env_key": result.env_key,
+        "detail": result.detail,
+        "models": result.models,
+        "saved": result.saved,
+        "error": result.error,
+    }
 
 
 @v1.get("/sessions/cost")
@@ -2630,6 +2958,153 @@ def memory_growth(
     return memory_service.growth_summary(tenant=_memory_tenant(caller), days=days)
 
 
+# ---------------------------------------------------------------------------
+# HP-55 — Pollen Memory panel (Hindsight role banks)
+# ---------------------------------------------------------------------------
+
+
+def _hindsight_panel_http(exc: Exception) -> HTTPException:
+    from hivepilot.services.hindsight_panel import PanelError, UnknownRole
+
+    if isinstance(exc, UnknownRole):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no role '{exc}'")
+    if isinstance(exc, PanelError):
+        return HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
+
+
+@v1.get("/hindsight/status")
+def hindsight_panel_status(
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Role picker + whether Hindsight is usable. Does not call the server."""
+    from hivepilot.services import hindsight_panel
+
+    return hindsight_panel.panel_status()
+
+
+@v1.get("/hindsight/roles/{role}")
+def hindsight_role_panel(
+    role: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """Mental models + observations for the HP-52 bank ``role:{name}``."""
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.role_panel(role)
+    except hindsight_panel.UnknownRole as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+class HindsightMentalModelWrite(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    source_query: str = Field(..., min_length=1, max_length=4000)
+    tags: list[str] | None = None
+
+    @field_validator("name", "source_query")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class HindsightMentalModelPatch(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=200)
+    source_query: str | None = Field(None, min_length=1, max_length=4000)
+
+    @field_validator("name", "source_query")
+    @classmethod
+    def _strip_optional(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be empty")
+        return stripped
+
+
+class HindsightMemoryCurate(BaseModel):
+    text: str | None = Field(None, min_length=1, max_length=8000)
+    reason: str | None = Field(None, max_length=500)
+    state: str | None = Field(None, pattern="^(valid|invalidated)$")
+
+    @field_validator("text", "reason")
+    @classmethod
+    def _strip_curate(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+@v1.post("/hindsight/roles/{role}/mental-models")
+def hindsight_create_mental_model(
+    role: str,
+    body: HindsightMentalModelWrite,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.create_mental_model(
+            role, name=body.name, source_query=body.source_query, tags=body.tags
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.patch("/hindsight/roles/{role}/mental-models/{mental_model_id}")
+def hindsight_update_mental_model(
+    role: str,
+    mental_model_id: str,
+    body: HindsightMentalModelPatch,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.update_mental_model(
+            role, mental_model_id, name=body.name, source_query=body.source_query
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.post("/hindsight/roles/{role}/mental-models/{mental_model_id}/refresh")
+def hindsight_refresh_mental_model(
+    role: str,
+    mental_model_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.refresh_mental_model(role, mental_model_id)
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
+@v1.patch("/hindsight/roles/{role}/memories/{memory_id}")
+def hindsight_curate_memory(
+    role: str,
+    memory_id: str,
+    body: HindsightMemoryCurate,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    """Correct or invalidate a source fact. Observations themselves are derived."""
+    from hivepilot.services import hindsight_panel
+
+    try:
+        return hindsight_panel.curate_memory(
+            role, memory_id, text=body.text, reason=body.reason, state=body.state
+        )
+    except (hindsight_panel.UnknownRole, hindsight_panel.PanelError) as exc:
+        raise _hindsight_panel_http(exc) from exc
+
+
 class MemoryEvaluationRequest(BaseModel):
     namespace: str = Field(..., min_length=1, max_length=200)
     useful: bool
@@ -2956,6 +3431,102 @@ def plugins_catalog_endpoint(
     return {"plugins": entries}
 
 
+# ---------------------------------------------------------------------------
+# HP-76 — MCP command center
+# ---------------------------------------------------------------------------
+
+
+class McpImportRequest(BaseModel):
+    text: str
+
+
+class McpCatalogAddRequest(BaseModel):
+    name: str
+
+
+@v1.get("/mcp/servers", dependencies=[Depends(require_role("read"))])
+@app.get("/mcp/servers", dependencies=[Depends(require_role("read"))])
+def mcp_servers_endpoint() -> dict:
+    """Installed MCP servers + last probe. Stale probes refresh on read
+    (60s TTL) so the page stays current without a dedicated scheduler."""
+    from hivepilot.services import mcp_probe
+
+    servers = mcp_probe.refresh_stale()
+    return {
+        "servers": servers,
+        "cost_note": (
+            "MCP tool calls are not metered yet — HP-73 tracks LLM providers, "
+            "not MCP servers. cost_usd is always null here."
+        ),
+    }
+
+
+@v1.get("/mcp/catalog", dependencies=[Depends(require_role("read"))])
+@app.get("/mcp/catalog", dependencies=[Depends(require_role("read"))])
+def mcp_catalog_endpoint() -> dict:
+    from hivepilot.services import mcp_registry
+
+    return {"catalog": mcp_registry.catalog()}
+
+
+@v1.post("/mcp/import")
+@app.post("/mcp/import")
+def mcp_import_endpoint(
+    payload: McpImportRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Paste-anything import (JSON / URL / command). Admin-only. Never
+    fetches a URL; literal env values are stripped."""
+    from hivepilot.services import mcp_registry
+
+    if not payload.text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty paste")
+    try:
+        return mcp_registry.import_and_save(payload.text)
+    except mcp_registry.McpImportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@v1.post("/mcp/catalog/add")
+@app.post("/mcp/catalog/add")
+def mcp_catalog_add_endpoint(
+    payload: McpCatalogAddRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    from hivepilot.services import mcp_registry
+
+    try:
+        server = mcp_registry.add_from_catalog(payload.name)
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown catalog entry '{payload.name}'"
+        ) from None
+    return {"server": server}
+
+
+@v1.post("/mcp/servers/{server_id}/probe", dependencies=[Depends(require_role("read"))])
+@app.post("/mcp/servers/{server_id}/probe", dependencies=[Depends(require_role("read"))])
+def mcp_probe_endpoint(server_id: int) -> dict:
+    from hivepilot.services import mcp_probe
+
+    row = mcp_probe.probe_and_store(server_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
+    return {"server": row}
+
+
+@v1.delete("/mcp/servers/{server_id}")
+@app.delete("/mcp/servers/{server_id}")
+def mcp_delete_endpoint(
+    server_id: int, _caller: token_service.TokenEntry = Depends(require_role("admin"))
+) -> dict:
+    from hivepilot.services import state_service as _state
+
+    if not _state.delete_mcp_server(server_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
+    return {"deleted": server_id}
+
+
 @v1.get("/agents/admin")
 @app.get("/agents/admin")
 def list_agents_admin_endpoint(
@@ -3189,164 +3760,367 @@ def admin_reload_endpoint(
     return ReloadResponse(roles_reloaded=roles_reloaded, config_reloaded=config_reloaded)
 
 
-def _get_mem0_client() -> Any | None:
-    """Build a mem0 client from Settings — mirrors `plugins/mem0.py`'s
-    `_get_client()` exactly (hosted `MemoryClient` when
-    `settings.mem0_api_key` is set, else self-host `Memory()` /
-    `Memory.from_config()`). Duplicated here rather than importing
-    `plugins/mem0.py` directly: `plugins/` is a user-editable, optional
-    directory (an operator may delete or replace any file in it, and it's
-    loaded via `importlib.util.spec_from_file_location`, not a stable
-    package import), so the core API must not depend on that specific file
-    being present. Never raises: any construction failure (library absent,
-    bad config, network error on hosted init) degrades to `None` — the same
-    graceful-degradation contract the plugin itself has.
-    """
-    if not settings.mem0_enabled:
-        return None
-    try:
-        from mem0 import Memory, MemoryClient
-    except ImportError:  # mem0ai is optional — never a hivepilot dependency
-        return None
-    try:
-        if settings.mem0_api_key:
-            return MemoryClient(api_key=settings.mem0_api_key)
-        config = settings.mem0_config
-        return Memory.from_config(config) if config else Memory()
-    except Exception as exc:  # noqa: BLE001 — must never crash the endpoint
-        from hivepilot.utils.logging import get_logger
-
-        get_logger(__name__).warning("api.memories.client_init_failed", error=str(exc))
-        return None
+# ---------------------------------------------------------------------------
+# Agent Studio (HP-25) — store-backed roles CRUD. The mutable roster the visual
+# builder (Phase 2) and NL authoring (Phase 3) drive. Reads are `read`-gated;
+# writes are `admin`-gated, validated against the Role schema, guarded against
+# self-granted dangerous capabilities, and applied live via `refresh_roles()`.
+# Writes first `seed_store_from_yaml()` so the store holds the WHOLE roster
+# before the first edit (never a single-role store that drops the rest).
+# ---------------------------------------------------------------------------
 
 
-def _extract_memory_items(results: Any) -> list[dict[str, Any]]:
-    """Best-effort normalization of a mem0 `search()` result into plain dicts.
+class RoleWrite(BaseModel):
+    """Create/update payload for a role. A role needs either `prompt_text`
+    (inline, stored in the DB — Agent Studio default) or `prompt_file`."""
 
-    Tolerant of mem0's known response shapes (a bare list of dicts/strings,
-    or `{"results": [...]}` / `{"memories": [...]}` — mirrors
-    `plugins/mem0.py`'s `_extract_memory_texts`) but keeps the full item
-    (`id`/`metadata`/`score`) rather than just the text, since the Pollen
-    Mem0 view needs the structured PROVENANCE metadata (`project`/`task`/
-    `role`/`category`/`ts` — see `plugins/mem0.py`'s `_provenance_metadata`)
-    to render/filter, not just the memory string. Degrades to an empty list
-    for any unrecognized shape rather than raising.
-    """
-    if results is None:
-        return []
-    items: Any = results
-    if isinstance(results, dict):
-        items = results.get("results", results.get("memories", []))
-    if not isinstance(items, list):
-        return []
-    extracted: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, str):
-            if item:
-                extracted.append({"memory": item})
-            continue
-        if not isinstance(item, dict):
-            continue
-        text = item.get("memory") or item.get("text") or item.get("content")
-        if not isinstance(text, str) or not text:
-            continue
-        entry: dict[str, Any] = {"memory": text}
-        if "id" in item:
-            entry["id"] = item["id"]
-        if isinstance(item.get("metadata"), dict):
-            entry["metadata"] = item["metadata"]
-        if "score" in item:
-            entry["score"] = item["score"]
-        extracted.append(entry)
-    return extracted
+    name: str
+    title: str
+    model_profile: str
+    inputs: list[str]
+    outputs: list[str]
+    can_block: bool
+    order: int
+    prompt_text: str | None = None
+    prompt_file: str | None = None
+    display_name: str | None = None
+    runner: str | None = None
+    model: str | None = None
+    models: list[str] | None = None
+    optional_inputs: list[str] | None = None
+    allowed_tools: list[str] | None = None
+    permission_mode: str | None = None
+    command_task: str | None = None
+    host: str | None = None
+    effort: str | None = None
 
 
-@v1.get("/memories", dependencies=[Depends(require_role("admin"))])
-@app.get("/memories", dependencies=[Depends(require_role("admin"))])
-def list_memories(query: str, limit: int = 20, user_id: str | None = None) -> dict[str, Any]:
-    """Pollen Mem0 view — semantic search proxy over mem0.
-
-    **Scope/tenant safety (investigated, Sprint 1 — the key risk this
-    endpoint carries).** mem0 memories carry `project`/`task`/`role`
-    PROVENANCE metadata (`plugins/mem0.py` `_provenance_metadata`, added in
-    PR #143) but the mem0 store itself is NOT partitioned by HivePilot
-    `tenant`: nothing in this repo maps a `tenant` to the set of `project`s
-    it may see — `hivepilot.models.ProjectConfig` has no `tenant` field at
-    all, and `tenant` only exists on `TokenEntry` / DB rows written by
-    `state_service` (used to scope *runs*, not project ownership). Filtering
-    returned memories to "the caller's tenant's projects" is therefore NOT
-    cleanly derivable without inventing a tenant->project mapping that
-    doesn't exist anywhere else in the codebase — doing that here, ad hoc,
-    would be worse than not shipping the feature (a fabricated, unverified
-    trust boundary). So: this endpoint is gated behind
-    `require_role("admin")` instead of `"read"` — the same role that already
-    sees unfiltered data on every analytics endpoint (`_analytics_tenant`
-    returns `None` for admin) and unfiltered `GET /runs` / `GET /approvals`.
-    No non-admin token, regardless of its tenant, can call this endpoint at
-    all — the most restrictive safe option available given the data model,
-    and consistent with this file's existing tenant-scoping precedent.
-
-    **Graceful degradation:** `mem0_enabled` off (the default), `mem0ai` not
-    installed, or the client can't be built -> `200` with
-    `{"configured": false, "memories": [], "detail": ...}`, never a 500 and
-    never a stack trace. A `client.search()` failure degrades the same way.
-    """
-    limit = max(1, min(limit, 100))
-    client = _get_mem0_client()
-    if client is None:
-        return {
-            "configured": False,
-            "memories": [],
-            "detail": "mem0 not configured (mem0_enabled is off, mem0ai isn't "
-            "installed, or the mem0 client could not be built)",
-        }
-
-    # mem0 v3 REQUIRES a non-empty `filters`. Probed against the live API on
-    # 2026-08-17: omitting it answers 400 "This field is required", and
-    # `filters={}` answers 400 "filters cannot be empty". So this endpoint had
-    # never worked against that major version.
-    #
-    # There is no documented "match everything" filter, and inventing one would
-    # be a guess dressed as a fix. `plugins/mem0.py` uses
-    # `filters={"user_id": <task identity>}`, so the caller supplies the same
-    # key here. Without it, say exactly what is missing rather than forwarding
-    # an opaque 400 -- an operator cannot act on "search failed".
-    if not user_id:
-        return {
-            "configured": True,
-            "memories": [],
-            "error": "user_id required",
-            "detail": (
-                "mem0 v3 requires a non-empty filter; pass ?user_id=<identity> "
-                "(the same key plugins/mem0.py stores under)"
+def _apply_role_write(payload: RoleWrite) -> dict:
+    if (
+        payload.permission_mode == "bypassPermissions"
+        and not settings.allow_dangerous_role_capabilities
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "role with permission_mode='bypassPermissions' is refused (fail-closed) — "
+                "set HIVEPILOT_ALLOW_DANGEROUS_ROLE_CAPABILITIES=1 to permit it"
             ),
-        }
-
+        )
+    if not (payload.prompt_text or payload.prompt_file):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="a role needs prompt_text or prompt_file",
+        )
     try:
-        results = client.search(query, limit=limit, filters={"user_id": user_id})
-    except Exception as exc:  # noqa: BLE001 — a mem0 client failure must never 500
-        from hivepilot.utils.logging import get_logger
+        roles.validate_role_fields(payload.model_dump(exclude_none=True))
+    except Exception as exc:  # noqa: BLE001 — surface schema errors as 400
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=f"invalid role: {exc}"
+        ) from exc
 
-        get_logger(__name__).warning("api.memories.search_failed", error=str(exc))
-        # `configured` answers "is mem0 set up", and nothing else. Returning
-        # False here made a BROKEN search indistinguishable from an ABSENT
-        # configuration -- which is why the v3 breakage above read as an
-        # unused feature for a whole major version, and why it sent an
-        # operator to check a setting that was already correct.
-        return {
-            "configured": True,
-            "memories": [],
-            "error": "mem0 search failed",
-            "detail": "mem0 is configured, but the search call failed -- see api logs",
-        }
+    from hivepilot.services import state_service
 
-    memories = _extract_memory_items(results)[:limit]
-    return {"configured": True, "memories": memories}
+    with _orch_lock:
+        roles.seed_store_from_yaml()  # adopt the full YAML roster before editing
+        row = payload.model_dump()
+        row["tenant"] = "default"
+        state_service.upsert_role(row)
+        roles.refresh_roles()
+        stored = state_service.get_role_row(payload.name)
+    result = stored or row
+    result.pop("updated_at", None)
+    return result
+
+
+@v1.get("/roles")
+@app.get("/roles")
+def list_roles_endpoint(caller: token_service.TokenEntry = Depends(require_role("read"))):
+    return {"roles": roles.api_roster()}
+
+
+@v1.get("/roles/{name}")
+@app.get("/roles/{name}")
+def get_role_endpoint(name: str, caller: token_service.TokenEntry = Depends(require_role("read"))):
+    for row in roles.api_roster():
+        if row.get("name") == name:
+            return row
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no role '{name}'")
+
+
+@v1.post("/roles", dependencies=[Depends(require_role("admin"))])
+@app.post("/roles", dependencies=[Depends(require_role("admin"))])
+def create_role_endpoint(payload: RoleWrite) -> dict:
+    from hivepilot.services import state_service
+
+    roles.seed_store_from_yaml()
+    if state_service.get_role_row(payload.name) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"role '{payload.name}' already exists"
+        )
+    return _apply_role_write(payload)
+
+
+@v1.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+@app.put("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+def update_role_endpoint(name: str, payload: RoleWrite) -> dict:
+    if payload.name != name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="path name must match payload name"
+        )
+    return _apply_role_write(payload)
+
+
+@v1.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+@app.delete("/roles/{name}", dependencies=[Depends(require_role("admin"))])
+def delete_role_endpoint(name: str) -> dict:
+    from hivepilot.services import state_service
+
+    with _orch_lock:
+        roles.seed_store_from_yaml()
+        existed = state_service.get_role_row(name) is not None
+        state_service.delete_role(name)
+        roles.refresh_roles()
+    return {"deleted": existed, "name": name}
 
 
 # ---------------------------------------------------------------------------
-# Pollen web UI surface (Sprint 3) — plugin panels. Read-only, sibling to
-# the plugin-health/mem0 endpoints above.
+# Espaces (HP-45, Cycle 1 · P2) — conversation rooms. A space has >=1
+# participant, each a human or a role, so it models a human<->agent DM AND an
+# agent<->agent room. Reads are `read`-gated; creating a space or posting a
+# message is `run`-gated. Every posted message is announced on the realtime bus
+# (HP-40) so subscribers (HP-41 SSE) see it live. Tenant-scoped: a non-admin
+# only ever sees/uses its own tenant's spaces.
+# ---------------------------------------------------------------------------
+
+
+class SpaceParticipant(BaseModel):
+    type: str  # "human" | "role"
+    id: str | None = None
+
+
+class SpaceCreate(BaseModel):
+    participants: list[SpaceParticipant]
+    kind: str = "dm"
+    title: str | None = None
+
+
+class SpaceMessageCreate(BaseModel):
+    body: str
+    sender_type: str = "human"
+    sender_id: str | None = None
+
+
+def _space_tenant_or_404(space_id: int, caller: token_service.TokenEntry) -> dict:
+    from hivepilot.services import state_service
+
+    space = state_service.get_space(space_id, tenant=caller.tenant)
+    if space is None and caller.role == "admin":
+        # Admin may address any tenant's space — look it up tenant-free.
+        for candidate in state_service.list_spaces():
+            if int(candidate["id"]) == space_id:
+                space = candidate
+                break
+    if space is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"no space {space_id}")
+    return space
+
+
+@v1.get("/spaces")
+@app.get("/spaces")
+def list_spaces_endpoint(caller: token_service.TokenEntry = Depends(require_role("read"))):
+    from hivepilot.services import state_service
+
+    tenant = None if caller.role == "admin" else caller.tenant
+    return {"spaces": state_service.list_spaces(tenant=tenant)}
+
+
+@v1.post("/spaces")
+@app.post("/spaces")
+def create_space_endpoint(
+    payload: SpaceCreate, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    from hivepilot.services import state_service
+
+    if not payload.participants:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="a space needs >=1 participant"
+        )
+    known_roles = {role.name for role in roles.list_roles()}
+    for participant in payload.participants:
+        if participant.type not in ("human", "role"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"participant type must be 'human' or 'role', got {participant.type!r}",
+            )
+        if participant.type == "role" and (participant.id or "") not in known_roles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"unknown role participant {participant.id!r}",
+            )
+    space_id = state_service.create_space(
+        [p.model_dump() for p in payload.participants],
+        kind=payload.kind,
+        title=payload.title,
+        tenant=caller.tenant,
+    )
+    from hivepilot.services import events
+
+    events.emit(
+        "space.created", "space", space_id, tenant=caller.tenant, payload={"space_id": space_id}
+    )
+    return state_service.get_space(space_id, tenant=caller.tenant) or {"id": space_id}
+
+
+@v1.get("/spaces/{space_id}")
+@app.get("/spaces/{space_id}")
+def get_space_endpoint(
+    space_id: int, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> dict:
+    return _space_tenant_or_404(space_id, caller)
+
+
+@v1.delete("/spaces/{space_id}")
+@app.delete("/spaces/{space_id}")
+def delete_space_endpoint(
+    space_id: int, caller: token_service.TokenEntry = Depends(require_role("admin"))
+) -> dict:
+    from hivepilot.services import state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    state_service.delete_space(space_id, tenant=space.get("tenant", caller.tenant))
+    return {"deleted": True, "id": space_id}
+
+
+@v1.get("/spaces/{space_id}/messages")
+@app.get("/spaces/{space_id}/messages")
+def list_space_messages_endpoint(
+    space_id: int,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+    after: int = Query(
+        0, ge=0, description="Return messages with id > after (for incremental fetch)."
+    ),
+):
+    from hivepilot.services import state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    tenant = space.get("tenant", caller.tenant)
+    return {"messages": state_service.list_space_messages(space_id, tenant=tenant, after_id=after)}
+
+
+@v1.post("/spaces/{space_id}/messages")
+@app.post("/spaces/{space_id}/messages")
+def post_space_message_endpoint(
+    space_id: int,
+    payload: SpaceMessageCreate,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict:
+    from hivepilot.services import events, state_service
+
+    space = _space_tenant_or_404(space_id, caller)
+    tenant = space.get("tenant", caller.tenant)
+    if not payload.body.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty message")
+    msg_id = state_service.add_space_message(
+        space_id,
+        payload.sender_type,
+        payload.body,
+        sender_id=payload.sender_id,
+        tenant=tenant,
+    )
+    events.emit(
+        "space.message",
+        "space",
+        space_id,
+        tenant=tenant,
+        payload={"space_id": space_id, "message_id": msg_id, "sender_type": payload.sender_type},
+    )
+    # Dépose/relève (HP-46): a HUMAN message triggers the async agent reply loop
+    # (only human — a role's own reply must never trigger another). Returns
+    # immediately; the agents work in the background and post their battements.
+    if payload.sender_type == "human":
+        from hivepilot.services import spaces_responder
+
+        spaces_responder.dispatch_reply(space_id, tenant=tenant)
+    return {"id": msg_id, "space_id": space_id}
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator (HP-49) — decompose a feature into a MissionPlan and surface it
+# in the project's persistent Orchestrateur Espace. `run`-gated. The plan's
+# `strategy` (HP-69) and per-role model+repli (HP-70) hang off the result.
+# ---------------------------------------------------------------------------
+
+
+class DecomposeRequest(BaseModel):
+    goal: str
+    project: str | None = None
+    #: HP-69 — optional execution/merge strategy from the UI mode card. An
+    #: unknown name is ignored server-side (the plan keeps a valid strategy).
+    strategy: str | None = None
+
+
+@v1.get("/orchestrator/strategies", dependencies=[Depends(require_role("read"))])
+@app.get("/orchestrator/strategies", dependencies=[Depends(require_role("read"))])
+def orchestrator_strategies_endpoint() -> dict:
+    """The catalog of execution/merge strategy presets (HP-69) — one per mockup
+    mode card, in display order. The Pollen decomposition panel renders these
+    directly (stages / dispatch / merge policy / guarantee label)."""
+    from hivepilot.services import mission_plan
+
+    return {
+        "strategies": [
+            mission_plan.STRATEGY_PRESETS[name].to_dict() for name in mission_plan.STRATEGIES
+        ],
+        "default": mission_plan.DEFAULT_STRATEGY,
+    }
+
+
+@v1.post("/orchestrator/decompose")
+@app.post("/orchestrator/decompose")
+def orchestrator_decompose_endpoint(
+    payload: DecomposeRequest, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    if not payload.goal.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty goal")
+    from hivepilot.services import orchestrator_service
+
+    return orchestrator_service.decompose_feature(
+        payload.goal, payload.project or "default", tenant=caller.tenant, strategy=payload.strategy
+    )
+
+
+@v1.post("/orchestrator/mission")
+@app.post("/orchestrator/mission")
+def orchestrator_mission_endpoint(
+    payload: DecomposeRequest, caller: token_service.TokenEntry = Depends(require_role("run"))
+) -> dict:
+    if not payload.goal.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty goal")
+    from hivepilot.services import orchestrator_service
+
+    return orchestrator_service.launch_mission(
+        payload.goal, payload.project or "default", tenant=caller.tenant, strategy=payload.strategy
+    )
+
+
+@v1.get("/orchestrator/missions/{mission_id}")
+@app.get("/orchestrator/missions/{mission_id}")
+def orchestrator_mission_status_endpoint(
+    mission_id: int, caller: token_service.TokenEntry = Depends(require_role("read"))
+) -> dict:
+    from hivepilot.services import orchestrator_service
+
+    result = orchestrator_service.check_mission(mission_id, tenant=caller.tenant)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"no mission {mission_id}"
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Pollen web UI surface (Sprint 3) — plugin panels. Read-only.
 # ---------------------------------------------------------------------------
 
 

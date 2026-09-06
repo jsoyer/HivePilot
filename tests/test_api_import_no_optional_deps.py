@@ -37,6 +37,17 @@ def _reimport_without_textual(modname):
         for k in [k for k in sys.modules if k == modname or k.startswith(modname + ".")]:
             del sys.modules[k]
         sys.modules.update(saved)
+        # `import_module` also rebinds the sub-module as an ATTRIBUTE on its
+        # parent package (e.g. sets `hivepilot.services.api_service` to the
+        # FRESH copy). Restoring `sys.modules` alone leaves that attribute
+        # dangling at the throwaway module, so a later test doing
+        # `from hivepilot.services import api_service` binds the wrong module
+        # object — its monkeypatches then miss the app's real endpoints
+        # entirely. Rebind every restored module on its parent package.
+        for name, module in saved.items():
+            parent, _, attr = name.rpartition(".")
+            if parent and parent in sys.modules:
+                setattr(sys.modules[parent], attr, module)
 
 
 def test_api_service_imports_without_textual():

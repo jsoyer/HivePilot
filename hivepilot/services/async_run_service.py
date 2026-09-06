@@ -111,6 +111,36 @@ def is_cancel_requested(run_id: int) -> bool:
     return event.is_set() if event is not None else False
 
 
+_bg_counter = 0
+
+
+def submit_background(fn: Callable[[], None]) -> None:
+    """Fire-and-forget a background task NOT tied to a run_id (e.g. a space's
+    async agent reply, HP-46). Tracked in the same in-flight registry as
+    `submit_run` under a synthetic NEGATIVE key (real run ids are always
+    positive, so they never collide), so `wait_until_idle` drains it too —
+    which is what keeps it from leaking across tests. Never raises; `fn`
+    self-handles its own errors, this is only a last-resort guard."""
+    global _bg_counter
+    with _registry_lock:
+        _bg_counter += 1
+        key = -_bg_counter
+        _registry[key] = threading.Event()
+
+    def _wrapper() -> None:
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 -- last-resort guard; fn should self-handle
+            from hivepilot.utils.logging import get_logger
+
+            get_logger(__name__).error("async_run.background_failed")
+        finally:
+            with _registry_lock:
+                _registry.pop(key, None)
+
+    _get_executor().submit(_wrapper)
+
+
 def submit_run(run_id: int, fn: Callable[[], None]) -> None:
     """Submit *fn* to run on a background thread, registering *run_id* in
     the in-flight cancellation registry for the duration.

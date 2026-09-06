@@ -19,6 +19,10 @@ import {
   Gauge,
   MessagesSquare,
   MessageCircle,
+  Boxes,
+  Waypoints,
+  ServerCog,
+  Plug,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -35,6 +39,7 @@ import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
 import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
+import { EspacesView } from './views/EspacesView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
@@ -47,7 +52,10 @@ import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { CacheView } from './views/CacheView'
+import { OrchestratorView } from './views/OrchestratorView'
+import { ProvidersView } from './views/ProvidersView'
 import { PluginsView } from './views/PluginsView'
+import { McpView } from './views/McpView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
@@ -73,6 +81,9 @@ const BUILTIN_TABS = [
   // signals, GET /v1/efficiency) — grouped with Cost under "Spend" in
   // nav-config.ts's NAV_GROUP_ORDER.
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
+  // Providers panel (HP-73): real per-provider spend + HP-70 fallback
+  // visibility. Grouped under "Spend" next to Cost/Models/Efficiency.
+  { value: 'providers', labelKey: 'nav.providers', Panel: ProvidersView, Icon: ServerCog },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
   // One card per curated plugin: description, on/off switch, and what it
@@ -81,6 +92,8 @@ const BUILTIN_TABS = [
   // installed (the interesting set) would be invisible. Read-only for any
   // token; the switches gate themselves on useRole().can('admin').
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
+  // MCP command center (HP-76): servers + catalog + paste-anything import.
+  { value: 'mcp', labelKey: 'nav.mcp', Panel: McpView, Icon: Plug },
   // Prompt-cache economics. Separate from the analytics screens on purpose:
   // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
   // cache creation nobody ever read back behind an 85% hit rate.
@@ -98,11 +111,10 @@ const BUILTIN_TABS = [
   // HP-22: talk to the agents in natural language — the same concierge brain
   // as the Telegram bot, exposed as a Grok-Bot-style chat (POST /v1/concierge).
   { value: 'chat', labelKey: 'nav.chat', Panel: ChatView, Icon: MessageCircle },
-  // Mirador Memory unification sprint: the formerly-separate Mem0 (search)
-  // and memory-quality built-ins merged into ONE `memory` item, plus a
-  // new Growth tab (`/v1/memory/growth`) — see `MemoryView`'s own
-  // docstring for the internal Quality/Growth/Search tab layout. Read-only
-  // for any token; individual `/v1/memory/*` endpoints gate themselves.
+  // Memory unification: Sources / Knowledge / Quality / Growth under one
+  // nav item (`/v1/memory/*` + `/v1/hindsight/*`). The mem0 Search tab is
+  // retired (HP-53). Read-only for any token; individual endpoints gate
+  // themselves.
   { value: 'memory', labelKey: 'nav.memory', Panel: MemoryView, Icon: Database },
   // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
   // Approve/Deny controls inside gate themselves on useRole().can('approve')
@@ -113,6 +125,14 @@ const BUILTIN_TABS = [
   // form and Stop controls inside gate themselves on useRole().can('run')
   // — see RunBoardView. Supersedes the old flat-table RunsView.
   { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
+  // Espaces (HP-45): conversation rooms — talk to an agent, or watch two
+  // agents talk. `run`-gated posting (composer hides for a read-only token);
+  // list/read for any token. Grouped under "Operate" (nav-config.ts).
+  { value: 'spaces', labelKey: 'nav.spaces', Panel: EspacesView, Icon: Boxes },
+  // Orchestrator decomposition panel (HP-49 / HP-69): a goal → a MissionPlan
+  // preview + the five strategy mode cards (execution & merge), then launch.
+  // `run`-gated actions (hide for a read-only token); grouped under "Operate".
+  { value: 'orchestrator', labelKey: 'nav.orchestrator', Panel: OrchestratorView, Icon: Waypoints },
   // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
   // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
   // pause|resume — read-only for any token, the Pause/Resume control inside
@@ -139,13 +159,12 @@ function panelTabValue(name: string): string {
 /**
  * The Pollen app shell — dark, grouped-sidebar insight dashboard (P0b:
  * sidebar nav + enriched header, upgrading the original flat top tab bar).
- * Eight built-in items (Home / Analytics / Cost / Health / Memory /
+ * Built-in items (Home / Analytics / Cost / Health / Memory /
  * Approvals / Runs / Graph, wired to real HivePilot API data — `/v1/models`,
- * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`, `/v1/memories`,
- * `/v1/memory/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`, see `./views/*`
- * and `@/lib/pollen-api`) — Memory itself merges the FORMER separate Mem0
- * (search) and memory-quality built-ins into one item with internal
- * Quality/Growth/Search tabs (see `MemoryView`'s own docstring) — grouped by
+ * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`,
+ * `/v1/memory/*`, `/v1/hindsight/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`,
+ * see `./views/*` and `@/lib/pollen-api`) — Memory is Sources / Knowledge /
+ * Quality / Growth (mem0 Search retired, HP-53) — grouped by
  * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
  * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —
  * ungrouped panels fall into a trailing "Panels" group automatically (see
