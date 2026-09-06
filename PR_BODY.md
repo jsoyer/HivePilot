@@ -16,3 +16,5 @@ Replay: `GET /v1/skills/proposals`, then `POST /v1/skills/proposals/{id}/accept`
 - [x] `cd web && npm test -- --run src/components/views/SkillsWorkshopView.test.tsx src/components/Pollen.test.tsx` (27 passed)
 - [x] `cd web && npm run build` (Node 26.5.0 → `index-D5N9sf4B.js`)
 - [x] `ruff check` on touched Python
+- [x] `python -m mypy hivepilot tests` (no issues)
+- [x] `python scripts/export_openapi.py --check` after adding workshop schemas to `web/openapi.json`
