@@ -26,6 +26,6 @@ hivepilot plugins packs install skills-kit --yes
 - [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 python -m pytest tests/test_hp77_plugin_packs.py tests/test_bundled_plugins_layout.py` (52 passed)
 - [x] `python -m mypy hivepilot tests`
 - [x] `ruff check` on the HP-77 modules
-- [x] `python scripts/export_openapi.py --check` then `cd web && npm run generate:api`
+- [x] `python scripts/export_openapi.py --check` then `cd web && npm run generate:api` (committed `openapi.d.ts` after CI drift)
 - [x] `cd web && npm test -- --run src/lib/pollen-api.test.ts` (60 passed)
 - [x] `hivepilot plugins packs list` / `info skills-kit`
