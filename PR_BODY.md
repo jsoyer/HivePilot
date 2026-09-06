@@ -1,19 +1,17 @@
 ## Summary
 
-HP-56: DB-backed **routines** per role. Skills stay files; YAML `schedules.yaml` stays the interval daemon. This slice is backend only (HP-57 is the editor).
+HP-57: Pollen **Automations** widget on Autopilot — one surface for role routines (HP-56) and YAML `schedules.yaml`, sharing the scheduler daemon tick.
 
-- Table `routines`: `crons[]`, IANA `timezone`, persisted `next_run_at` / `last_run_at`, optional `replace_key`.
-- Dedup: `UNIQUE (tenant, replace_key)` — a second POST with the same key updates the existing row (id stable).
-- Execution: scheduler daemon `_run_due_routines()` → role `command_task` via `Orchestrator.run_task`, same retry-queue contract as `run_entry` (`routine:{id}`). Cadence is always stamped so a failing routine cannot busy-loop.
-- API: `GET/POST/PATCH/DELETE /v1/routines`, `POST /v1/webhook/routines/{id}` (id or replace_key). Read = `read`, write/fire = `run`.
+- Editor: create a routine (role / crons / timezone / projects / replace_key), run now, enable/disable, delete.
+- Existing named-schedules card stays (index 05); routines sit above it.
+- `DELETE` added to API CORS so the editor can retire a routine from the Vite/dev origin.
 
-Linear: [HP-56](https://linear.app/js-workspace/issue/HP-56/modele-routines-par-role-cronstimezonewebhook-dedup-replacekey).
+Linear: [HP-57](https://linear.app/js-workspace/issue/HP-57/editeur-de-routines-ui-unification-schedulerautopilot-widget).
 
-Replay: `POST /v1/routines` with `role=developer`, `crons=["0 9 * * 1"]`, `timezone=Europe/Paris`, `replace_key=weekly-dev`, then `hivepilot schedule daemon` (or `POST /v1/webhook/routines/weekly-dev`).
+Replay: open Pollen → Operate → Autopilot, save a routine with `role=developer`, `crons=0 9 * * 1`, `replace_key=weekly-dev`.
 
 ## Testing
 
-- [x] `pytest tests/test_routine_service.py tests/test_routines_api.py tests/test_scheduler_daemon.py::TestSchedulerDaemonRoutines` (16 passed)
-- [x] `ruff check` / `ruff format` on touched files
-- [x] `python -m mypy hivepilot/services/routine_service.py hivepilot/services/scheduler_daemon.py hivepilot/services/api_service.py`
-- [x] `python scripts/export_openapi.py --check` after regenerating `web/openapi.json`
+- [x] `cd web && npm test -- --run src/components/views/RoutinesCard.test.tsx src/components/views/SchedulesCard.test.tsx src/components/views/AutopilotView.test.tsx src/components/Pollen.test.tsx` (56 passed)
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-DOggT_RQ.js`)
+- [x] `ruff check` on `api_service.py` CORS change
