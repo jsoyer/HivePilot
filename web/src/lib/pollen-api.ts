@@ -999,6 +999,15 @@ export function patchJson<T>(path: string, body: unknown): Promise<T> {
   })
 }
 
+export function putJson<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    on403: 'forbidden',
+  })
+}
+
 // ---------------------------------------------------------------------------
 // GET /v1/approvals, POST /v1/approvals/{run_id} — Pollen actionable
 // dashboard PRD, Sprint 2. Shapes transcribed from `hivepilot/services/
@@ -2376,4 +2385,65 @@ export function connectModel(body: {
   base_url?: string
 }): Promise<ModelConnectResult> {
   return postJson('/v1/models/connect', { ...body, consent: true })
+}
+
+// ---------------------------------------------------------------------------
+// Agent Studio (HP-66) — GET/POST/PUT/DELETE /v1/roles (HP-25 store CRUD).
+// Reads are `read`-gated; writes are `admin`-gated (403 stays a token).
+// ---------------------------------------------------------------------------
+
+export interface StudioRole {
+  name: string
+  title: string
+  display_name?: string | null
+  model_profile: string
+  model?: string | null
+  models?: string[] | null
+  runner?: string | null
+  inputs: string[]
+  outputs: string[]
+  optional_inputs?: string[] | null
+  can_block: boolean
+  order: number
+  prompt_text?: string | null
+  prompt_file?: string | null
+  allowed_tools?: string[] | null
+  permission_mode?: string | null
+  command_task?: string | null
+  host?: string | null
+  effort?: string | null
+}
+
+export interface RoleWritePayload {
+  name: string
+  title: string
+  model_profile: string
+  inputs: string[]
+  outputs: string[]
+  can_block: boolean
+  order: number
+  prompt_text?: string | null
+  prompt_file?: string | null
+  display_name?: string | null
+  runner?: string | null
+  model?: string | null
+}
+
+export function fetchRoles(): Promise<{ roles: StudioRole[] }> {
+  return apiFetch<{ roles: StudioRole[] }>('/v1/roles')
+}
+
+export function createRole(payload: RoleWritePayload): Promise<StudioRole> {
+  return postJson<StudioRole>('/v1/roles', payload)
+}
+
+export function updateRole(name: string, payload: RoleWritePayload): Promise<StudioRole> {
+  return putJson<StudioRole>(`/v1/roles/${encodeURIComponent(name)}`, payload)
+}
+
+export function deleteRole(name: string): Promise<{ deleted: boolean; name: string }> {
+  return apiFetch<{ deleted: boolean; name: string }>(`/v1/roles/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    on403: 'forbidden',
+  })
 }
