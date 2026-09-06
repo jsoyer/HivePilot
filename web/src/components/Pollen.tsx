@@ -25,6 +25,7 @@ import {
   ServerCog,
   Plug,
   Sparkles,
+  Cable,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -61,6 +62,7 @@ import { OrchestratorView } from './views/OrchestratorView'
 import { ProvidersView } from './views/ProvidersView'
 import { PluginsView } from './views/PluginsView'
 import { McpView } from './views/McpView'
+import { IntegrationsView } from './views/IntegrationsView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
@@ -100,6 +102,8 @@ const BUILTIN_TABS = [
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
   // MCP command center (HP-76): servers + catalog + paste-anything import.
   { value: 'mcp', labelKey: 'nav.mcp', Panel: McpView, Icon: Plug },
+  // HP-60: tool-source hub (OpenAPI + MCP sync + packs). MCP tab stays.
+  { value: 'integrations', labelKey: 'nav.integrations', Panel: IntegrationsView, Icon: Cable },
   // Prompt-cache economics. Separate from the analytics screens on purpose:
   // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
   // cache creation nobody ever read back behind an 85% hit rate.

@@ -52,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
   fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
   fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
+  fetchTypedTools: vi.fn().mockResolvedValue({ tools: [] }),
+  fetchPluginPacks: vi.fn().mockResolvedValue({ packs: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
   // Pollen now wraps its tree in RoleProvider (Sprint 1), which fetches
@@ -205,6 +207,8 @@ const GROUPED_TAB_ORDER = [
   'Plugins',
   // MCP command center (HP-76) sits next to Plugins under System.
   'MCP',
+  // HP-60 tool-source hub, next to MCP.
+  'Integrations',
   // Prompt-cache economics, beside Plugins under System. Separate from
   // Analytics on purpose: those aggregate, and an aggregate is what hid
   // 1.7M tokens of unread cache creation behind an 85% hit rate.
