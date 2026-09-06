@@ -54,6 +54,10 @@ const mocks = vi.hoisted(() => ({
   fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
   fetchTypedTools: vi.fn().mockResolvedValue({ tools: [] }),
   fetchPluginPacks: vi.fn().mockResolvedValue({ packs: [] }),
+  fetchManagedCatalogs: vi.fn().mockResolvedValue({
+    composio: { configured: false },
+    pipedream: { configured: false },
+  }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
   // Pollen now wraps its tree in RoleProvider (Sprint 1), which fetches

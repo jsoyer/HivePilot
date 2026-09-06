@@ -232,6 +232,19 @@
         "title": "CancelRunResponse",
         "type": "object"
       },
+      "ComposioSyncRequest": {
+        "properties": {
+          "toolkit": {
+            "title": "Toolkit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "toolkit"
+        ],
+        "title": "ComposioSyncRequest",
+        "type": "object"
+      },
       "ConciergeAsk": {
         "description": "A free-text message for the natural-language concierge (HP-22).\n\n`conversation_id` scopes the per-session rolling memory and pending\nfollow-up offers, so a bare \"yes\"/\"oui\" resolves against what the\nconcierge just proposed \u2014 exactly the Telegram behaviour, in the web UI.",
         "properties": {
@@ -1554,6 +1567,19 @@
           "status"
         ],
         "title": "PartitionTaskRow",
+        "type": "object"
+      },
+      "PipedreamSyncRequest": {
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app"
+        ],
+        "title": "PipedreamSyncRequest",
         "type": "object"
       },
       "PluginInstallResponse": {

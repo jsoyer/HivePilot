@@ -205,6 +205,11 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** ComposioSyncRequest */
+        ComposioSyncRequest: {
+            /** Toolkit */
+            toolkit: string;
+        };
         /**
          * ConciergeAsk
          * @description A free-text message for the natural-language concierge (HP-22).
@@ -669,6 +674,11 @@ export interface components {
             task_id: string;
             /** Wall Clock Seconds */
             wall_clock_seconds?: number | null;
+        };
+        /** PipedreamSyncRequest */
+        PipedreamSyncRequest: {
+            /** App */
+            app: string;
         };
         /** PluginInstallResponse */
         PluginInstallResponse: {
