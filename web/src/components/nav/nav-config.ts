@@ -67,7 +67,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   // its own demotion above).
   // `conversations` sits beside `agents`: same subject seen two ways -- the
   // roster of who ran, and the thread of what they actually said.
-  { label: 'nav.system', values: ['health', 'plugins', 'mcp', 'cache', 'agents', 'studio', 'conversations', 'graph'] },
+  { label: 'nav.system', values: ['health', 'plugins', 'mcp', 'integrations', 'cache', 'agents', 'studio', 'conversations', 'graph'] },
 ]
 
 export interface NavItem {
