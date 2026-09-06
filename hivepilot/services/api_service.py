@@ -61,7 +61,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
     allow_credentials="*" not in _allowed_origins,
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
@@ -921,19 +921,29 @@ def _run_async_task(
 
     try:
         if policy.require_approval:
+            from hivepilot.services.approval_rules_service import match_auto
+
             approval_meta = {
                 "task": task_name,
                 "project": project.path.name,
                 "extra_prompt": extra_prompt,
                 "auto_git": auto_git,
             }
-            state_service.record_approval_request(
-                run_id, project.path.name, task_name, approval_meta
-            )
-            notification_service.send_approval_keyboard(
-                run_id=run_id, project=project.path.name, task=task_name
-            )
-            return
+            auto = match_auto(project=project.path.name, task=task_name, metadata=approval_meta)
+            if auto == "approve":
+                pass
+            else:
+                state_service.record_approval_request(
+                    run_id, project.path.name, task_name, approval_meta
+                )
+                if auto == "deny":
+                    state_service.update_approval(run_id, "denied", "rule")
+                    state_service.complete_run(run_id, "denied", "auto-denied by approval rule")
+                    return
+                notification_service.send_approval_keyboard(
+                    run_id=run_id, project=project.path.name, task=task_name
+                )
+                return
 
         severity = policy.block_on_severity
         if severity:
@@ -1198,6 +1208,41 @@ class ApprovalAction(BaseModel):
     approver: str = "api"
     approve: bool = True
     reason: str | None = None
+
+
+class ApprovalRuleIn(BaseModel):
+    id: str | None = None
+    project: str = ""
+    task: str = ""
+    action: str = ""
+    auto: str
+
+
+class ApprovalRulesReplace(BaseModel):
+    rules: list[ApprovalRuleIn]
+
+
+@v1.get("/approval-rules")
+def list_approval_rules_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.approval_rules_service import list_rules
+
+    return {"rules": [rule.to_dict() for rule in list_rules()]}
+
+
+@v1.put("/approval-rules")
+def replace_approval_rules_endpoint(
+    payload: ApprovalRulesReplace,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.approval_rules_service import ApprovalRuleError, replace_rules
+
+    try:
+        rules = replace_rules([item.model_dump() for item in payload.rules])
+    except ApprovalRuleError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"rules": [rule.to_dict() for rule in rules]}
 
 
 class ConversationReply(BaseModel):

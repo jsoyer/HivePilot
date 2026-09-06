@@ -56,6 +56,8 @@ import {
   fetchTaskNames,
   fetchStepFailures,
   postJson,
+  fetchApprovalRules,
+  replaceApprovalRules,
   resumeAutopilot,
   whoami,
 } from './pollen-api'
@@ -217,6 +219,24 @@ describe('pollen-api fetch wrappers', () => {
       body: JSON.stringify({ approver: 'web', approve: false, reason: 'not this time' }),
       on403: 'forbidden',
     })
+  })
+
+  it('fetchApprovalRules calls GET /v1/approval-rules', async () => {
+    await fetchApprovalRules()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/approval-rules')
+  })
+
+  it('replaceApprovalRules PUTs /v1/approval-rules', async () => {
+    await replaceApprovalRules([{ id: 'r1', project: 'example-api', task: 'docs', action: '', auto: 'approve' }])
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/approval-rules',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({
+          rules: [{ id: 'r1', project: 'example-api', task: 'docs', action: '', auto: 'approve' }],
+        }),
+      }),
+    )
   })
 
   it('fetchMemoryReality calls GET /v1/memory/reality with a days window and opts into on403: "forbidden"', async () => {

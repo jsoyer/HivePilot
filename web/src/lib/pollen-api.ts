@@ -1118,6 +1118,22 @@ export function postApproval(runId: number, action: ApprovalActionInput): Promis
   return postJson<ApprovalActionResult>(`/v1/approvals/${runId}`, body)
 }
 
+export interface ApprovalRule {
+  id: string
+  project: string
+  task: string
+  action: string
+  auto: 'approve' | 'deny'
+}
+
+export function fetchApprovalRules(): Promise<{ rules: ApprovalRule[] }> {
+  return apiFetch('/v1/approval-rules')
+}
+
+export function replaceApprovalRules(rules: ApprovalRule[]): Promise<{ rules: ApprovalRule[] }> {
+  return putJson('/v1/approval-rules', { rules })
+}
+
 // ---------------------------------------------------------------------------
 // GET /v1/projects, GET /v1/tasks — the CATALOGUE endpoints. Both gate at
 // `read` (see `list_projects`/`list_tasks` in `api_service.py`), so any token

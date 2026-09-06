@@ -144,6 +144,33 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** ApprovalRuleIn */
+        ApprovalRuleIn: {
+            /**
+             * Action
+             * @default
+             */
+            action: string;
+            /** Auto */
+            auto: string;
+            /** Id */
+            id?: string | null;
+            /**
+             * Project
+             * @default
+             */
+            project: string;
+            /**
+             * Task
+             * @default
+             */
+            task: string;
+        };
+        /** ApprovalRulesReplace */
+        ApprovalRulesReplace: {
+            /** Rules */
+            rules: components["schemas"]["ApprovalRuleIn"][];
+        };
         /** AutopilotControlResponse */
         AutopilotControlResponse: {
             /** Paused */

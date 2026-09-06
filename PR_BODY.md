@@ -1,20 +1,17 @@
 ## Summary
 
-HP-59: Composio and Pipedream Connect become **catalog sources** in the typed-tool table. Tools are listed, never executed. Missing vendor credentials refuse instead of inventing a connect.
+HP-61: inline approval cards in Operate Chat plus persistable per-action auto-approve / auto-deny rules. No Disposition field. The existing `POST /v1/approvals/{id}` path stays the resolver.
 
-- `GET /v1/tools/managed` — `{configured: bool}` only (no keys)
-- `POST /v1/tools/composio/sync` `{toolkit}` — `GET https://backend.composio.dev/api/v3.1/tools`
-- `POST /v1/tools/pipedream/sync` `{app}` — OAuth client-credentials then Connect components
-- Hosts are hardcoded; foreign hosts are refused
-- Settings: `HIVEPILOT_COMPOSIO_API_KEY`, `HIVEPILOT_PIPEDREAM_CLIENT_ID` / `_SECRET` / `_PROJECT_ID`
-- Pollen Integrations cards replace the Coming-soon placeholders
+- Chat: concierge `approve`/`deny` with `run_id` renders `ApprovalActionCard` (not a proposal-only card)
+- `GET/PUT /v1/approval-rules` — admin writes; empty match fields are wildcards; more specific wins
+- Policy hook after `require_approval` / pipeline checkpoint: matching `approve` skips the pause; `deny` records denied
+- CORS allows `PUT`
 
-Linear: [HP-59](https://linear.app/js-workspace/issue/HP-59/catalogues-manages-composio-pipedream-connect).
+Linear: [HP-61](https://linear.app/js-workspace/issue/HP-61/cartes-dapprobation-regles-par-action-inline-dans-le-chat).
 
-Replay: set the Composio key, open Pollen → System → Integrations, sync toolkit `github`. Confirm `composio__github__…` in Typed tools.
+Replay: send a concierge “approve run N” in Chat; or `PUT /v1/approval-rules` then run a `require_approval` task.
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp59_managed_catalogs.py tests/test_settings_secret_repr.py -q`
-- [x] `cd web && npm test -- --run src/components/views/IntegrationsView.test.tsx src/lib/pollen-api.test.ts`
-- [x] `python scripts/export_openapi.py && cd web && npm run generate:api`
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp61_approval_rules.py -q`
+- [x] `cd web && npm test -- --run src/components/views/ChatView.test.tsx src/lib/pollen-api.test.ts`
