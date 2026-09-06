@@ -857,6 +857,12 @@ Defines recurring task runs, executed by the scheduler daemon.
 - `projects: list`
 - `interval_minutes` (default `1440`)
 - `enabled` (default `True`)
+- `remember` (default `False`) — **cron that remembers** (HP-74). When true, the
+  entry carries the prior run's output into the next run's context
+  (`prior_context`) and **skips the model call entirely** when its inputs
+  (task + projects + each project's git HEAD) are unchanged since the last run.
+  Cadence is still stamped on a skip, so it never busy-loops. Off = legacy
+  behavior (always run).
 
 ```yaml
 schedules:
@@ -865,9 +871,43 @@ schedules:
     projects: [acme-api]
     interval_minutes: 1440
     enabled: true
+    remember: true   # carry context + skip when nothing changed
 ```
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for running the scheduler daemon.
+
+## mail_watchers.yaml — inbound email/IMAP watchers (HP-75)
+
+An **inbound-only** trigger: for each new allowlisted message in a mailbox, HivePilot
+starts a **restricted reader run** — no HTTP hook, and it can neither send nor modify mail.
+
+### `MailWatcher`
+
+- `host`, `port` (default `993`), `username`, `password` (a literal, or `${env:NAME}`)
+- `mailbox` (default `INBOX`)
+- `allow_senders: list` — **required**; empty admits nothing (fail-closed). A rule
+  starting with `@` matches a whole domain, otherwise it's an exact address.
+- `task`, `projects` — the restricted reader run to start per admitted message.
+- `max_admission_failures` (default `3`) — a message whose dispatch keeps failing is
+  recorded skipped rather than retried forever.
+- `enabled` (default `False`)
+
+```yaml
+mail_watchers:
+  support-inbox:
+    enabled: true
+    host: imap.example.com
+    username: bot@example.com
+    password: ${env:IMAP_PASSWORD}
+    mailbox: INBOX
+    allow_senders: ["@example.com", "boss@acme.com"]
+    task: triage-email
+    projects: [support]
+```
+
+Run once with `hivepilot mail poll` (invoke on a cadence). The IMAP mailbox is selected
+`readonly=True` (never sets `\Seen`); dedup is by message-id in `mail_processed` and
+survives restart, so a message is never processed twice.
 
 ## model_profiles.yaml
 

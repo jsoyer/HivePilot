@@ -19,6 +19,7 @@ CONFIG_FILES = {
     "pipelines.yaml",
     "policies.yaml",
     "schedules.yaml",
+    "mail_watchers.yaml",
     "roles.yaml",
     "groups.yaml",
     "model_profiles.yaml",

@@ -221,6 +221,39 @@ export function fetchAnalyticsCost(days = 30): Promise<AnalyticsCost> {
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/analytics/whales — HP-81. Top-N individual model steps by spend,
+// then prompt tokens. Aggregates on `/v1/analytics/cost` hide a $1.50 /
+// 300k-token call inside "claude · 30d". Envelopes only — never prompt
+// bodies. Shape transcribed from `analytics_service.cost_whales`.
+// ---------------------------------------------------------------------------
+
+export interface WhaleStep {
+  step_id: number
+  run_id: number
+  project: string
+  task: string
+  step: string
+  provider: string
+  model: string
+  timestamp: string | null
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  /** False when `_step_cost` could not price the step — shown so a huge
+   * unpriced call never reads as a cheap one. */
+  priced: boolean
+}
+
+export interface AnalyticsWhales {
+  whales: WhaleStep[]
+  limit: number
+}
+
+export function fetchAnalyticsWhales(days = 30, limit = 20): Promise<AnalyticsWhales> {
+  return apiFetch<AnalyticsWhales>(`/v1/analytics/whales?days=${days}&limit=${limit}`)
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/sessions/cost — per-run cost split by what was actually billed.
 //
 // A total answers "how much" and cannot answer "where did it go". Measured on
@@ -262,6 +295,29 @@ export interface SessionCostsResponse {
 
 export function fetchSessionCosts(days = 30, limit = 25): Promise<SessionCostsResponse> {
   return apiFetch<SessionCostsResponse>(`/v1/sessions/cost?days=${days}&limit=${limit}`)
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/providers/fallbacks — recent HP-70 provider fallbacks (HP-73).
+// The queryable companion to HP-70's otherwise-invisible fallback: which
+// provider fell over, how often, when last, and why. Aggregated by source
+// provider from durable `provider.fallback` events (HP-40 bus).
+// ---------------------------------------------------------------------------
+
+export interface ProviderFallback {
+  provider: string
+  count: number
+  last_at: string | null
+  last_reason: string | null
+  last_to: string | null
+}
+
+export function fetchProviderFallbacks(
+  hours = 24,
+): Promise<{ hours: number; providers: ProviderFallback[] }> {
+  return apiFetch<{ hours: number; providers: ProviderFallback[] }>(
+    `/v1/providers/fallbacks?hours=${hours}`,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -760,6 +816,117 @@ export function fetchMemories(query: string, limit = 20): Promise<MemoriesRespon
 }
 
 // ---------------------------------------------------------------------------
+// HP-55 — Pollen Memory panel over Hindsight role banks
+// (`hivepilot/services/hindsight_panel.py`). Mental models + observations
+// live on `role:{name}` (HP-52), never the HP-51 episodic bank.
+// All free text (name/content/quotes) is UNTRUSTED — render via plain JSX.
+// ---------------------------------------------------------------------------
+
+export interface HindsightRoleOption {
+  name: string
+  display_name: string | null
+  bank_id: string
+}
+
+export interface HindsightStatusResponse {
+  configured: boolean
+  roles: HindsightRoleOption[]
+  detail?: string
+}
+
+export interface HindsightMentalModel {
+  id: string
+  name: string
+  source_query: string
+  content: string
+  last_refreshed_at: string | null
+  is_stale: boolean | null
+  tags: string[]
+}
+
+export interface HindsightQuote {
+  text: string
+  source_id: string
+}
+
+export interface HindsightEvidence {
+  id: string
+  text: string
+  fact_type: string
+  state: string
+}
+
+export interface HindsightObservation {
+  id: string
+  text: string
+  fact_type: string
+  state: string
+  proof_count: number
+  confidence: number | null
+  quotes: HindsightQuote[]
+  evidence: HindsightEvidence[]
+  edited_at: string | null
+}
+
+export interface HindsightRolePanel {
+  configured: boolean
+  role: string
+  bank_id: string
+  mental_models: HindsightMentalModel[]
+  observations: HindsightObservation[]
+  detail?: string
+}
+
+export function fetchHindsightStatus(): Promise<HindsightStatusResponse> {
+  return apiFetch<HindsightStatusResponse>('/v1/hindsight/status', { on403: 'forbidden' })
+}
+
+export function fetchHindsightRolePanel(role: string): Promise<HindsightRolePanel> {
+  return apiFetch<HindsightRolePanel>(`/v1/hindsight/roles/${encodeURIComponent(role)}`, {
+    on403: 'forbidden',
+  })
+}
+
+export function createHindsightMentalModel(
+  role: string,
+  body: { name: string; source_query: string; tags?: string[] },
+): Promise<{ ok: boolean; mental_model: HindsightMentalModel; operation_id?: string | null }> {
+  return postJson(`/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models`, body)
+}
+
+export function updateHindsightMentalModel(
+  role: string,
+  mentalModelId: string,
+  body: { name?: string; source_query?: string },
+): Promise<{ ok: boolean; mental_model: HindsightMentalModel }> {
+  return patchJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models/${encodeURIComponent(mentalModelId)}`,
+    body,
+  )
+}
+
+export function refreshHindsightMentalModel(
+  role: string,
+  mentalModelId: string,
+): Promise<{ ok: boolean; operation_id?: string | null }> {
+  return postJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models/${encodeURIComponent(mentalModelId)}/refresh`,
+    {},
+  )
+}
+
+export function curateHindsightMemory(
+  role: string,
+  memoryId: string,
+  body: { text?: string; reason?: string; state?: 'valid' | 'invalidated' },
+): Promise<{ ok: boolean; memory_id: string }> {
+  return patchJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/memories/${encodeURIComponent(memoryId)}`,
+    body,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/panels, GET /v1/panels/{name} — Pollen plugin `panel` type
 // (Sprint 3 web surface). Shapes transcribed from `hivepilot/plugins.py`
 // `PanelSpec` / `PanelData` / `PanelStatSection` / `PanelTableSection` /
@@ -851,6 +1018,15 @@ export function whoami(): Promise<WhoAmI> {
 export function postJson<T>(path: string, body: unknown): Promise<T> {
   return apiFetch<T>(path, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    on403: 'forbidden',
+  })
+}
+
+export function patchJson<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     on403: 'forbidden',
@@ -1002,6 +1178,11 @@ export interface RunSummary {
   started_at: string
   finished_at?: string | null
   tenant?: string
+  /** Latest step timestamp — the run's "heartbeat" (when it last did anything,
+   * distinct from when it started). Null for a run with no steps yet. */
+  last_activity_at?: string | null
+  /** How many steps the run has recorded so far — a cheap progress signal. */
+  step_count?: number
   /** Untrusted free text (redacted server-side, but still opaque to the
    * UI's trust model) — never render this. */
   detail?: string | null
@@ -1972,4 +2153,261 @@ export function replyToRole(role: string, text: string): Promise<{ role: string;
     method: 'POST',
     body: JSON.stringify({ role, text }),
   })
+}
+
+// ---------------------------------------------------------------------------
+// Espaces — conversation rooms (HP-45). GET /v1/spaces[/{id}[/messages]],
+// POST /v1/spaces, POST /v1/spaces/{id}/messages. Mirrors the shapes in
+// `hivepilot/services/state_service.py` + `api_service.py`.
+// ---------------------------------------------------------------------------
+
+export interface SpaceParticipant {
+  type: string
+  id?: string | null
+}
+
+export interface SpaceSummary {
+  id: number
+  kind: string
+  title?: string | null
+  participants: SpaceParticipant[]
+  message_count?: number
+  last_message_at?: string | null
+  created_at?: string
+  updated_at?: string
+  tenant?: string
+}
+
+export interface SpaceAction {
+  label: string
+  detail?: string | null
+}
+
+export interface SpaceMessage {
+  id: number
+  space_id: number
+  sender_type: string
+  sender_id?: string | null
+  body: string
+  /** Optional collapsible tool-action trace (HP-47). */
+  actions?: SpaceAction[] | null
+  created_at: string
+}
+
+export function fetchSpaces(): Promise<SpaceSummary[]> {
+  return apiFetch<{ spaces: SpaceSummary[] }>('/v1/spaces').then((r) => r.spaces)
+}
+
+export function fetchSpaceMessages(spaceId: number, after = 0): Promise<SpaceMessage[]> {
+  return apiFetch<{ messages: SpaceMessage[] }>(
+    `/v1/spaces/${spaceId}/messages?after=${after}`,
+  ).then((r) => r.messages)
+}
+
+/** Post a human message to a space. `run`-gated server-side — a `read`-only
+ * token gets `ApiForbiddenError` (not logged out) via `on403: 'forbidden'`. */
+export function postSpaceMessage(spaceId: number, body: string): Promise<{ id: number }> {
+  return apiFetch<{ id: number }>(`/v1/spaces/${spaceId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+    on403: 'forbidden',
+  })
+}
+
+export function createSpace(
+  participants: SpaceParticipant[],
+  opts: { kind?: string; title?: string } = {},
+): Promise<SpaceSummary> {
+  return apiFetch<SpaceSummary>('/v1/spaces', {
+    method: 'POST',
+    body: JSON.stringify({ participants, kind: opts.kind ?? 'dm', title: opts.title }),
+    on403: 'forbidden',
+  })
+}
+
+// ---- Orchestrator: decomposition + mission strategies (HP-49 / HP-69) ------
+
+/** A resolved execution/merge strategy preset — one mockup mode card. */
+export interface MissionStrategyDetail {
+  name: string
+  stages: string[]
+  dispatch: 'sequential' | 'parallel'
+  merge: 'per_task' | 'per_branch' | 'final' | 'none'
+  new_mission: boolean
+  /** i18n key for the mockup's guarantee label. */
+  guarantee: string
+}
+
+export interface MissionTask {
+  id: string
+  title: string
+  role: string
+  description?: string
+  depends_on?: string[]
+}
+
+export interface MissionPlan {
+  goal: string
+  strategy: string
+  strategy_detail: MissionStrategyDetail
+  tasks: MissionTask[]
+  roles_config?: Record<string, Record<string, unknown>>
+}
+
+export interface DecomposeResult {
+  plan: MissionPlan
+  space_id: number
+}
+
+export interface LaunchMissionResult extends DecomposeResult {
+  runs: Record<string, number>
+  mission_id: number
+}
+
+/** The catalog of strategy presets (mockup mode cards) + the default name. */
+export function fetchMissionStrategies(): Promise<{
+  strategies: MissionStrategyDetail[]
+  default: string
+}> {
+  return apiFetch<{ strategies: MissionStrategyDetail[]; default: string }>(
+    '/v1/orchestrator/strategies',
+  )
+}
+
+/** Decompose a goal into a plan (PREVIEW — no spawn). `run`-gated. */
+export function decomposeFeature(
+  goal: string,
+  project?: string,
+  strategy?: string,
+): Promise<DecomposeResult> {
+  return postJson<DecomposeResult>('/v1/orchestrator/decompose', { goal, project, strategy })
+}
+
+/** Decompose + spawn each task as a background run. `run`-gated. */
+export function launchMission(
+  goal: string,
+  project?: string,
+  strategy?: string,
+): Promise<LaunchMissionResult> {
+  return postJson<LaunchMissionResult>('/v1/orchestrator/mission', { goal, project, strategy })
+}
+
+// ---------------------------------------------------------------------------
+// MCP command center (HP-76). GET /v1/mcp/servers + /catalog, POST /import,
+// POST /servers/{id}/probe, DELETE /servers/{id}. Shapes from mcp_registry
+// + mcp_probe + state_service.mcp_servers.
+// ---------------------------------------------------------------------------
+
+export interface McpServer {
+  id: number
+  name: string
+  transport: 'stdio' | 'http' | string
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  env?: Record<string, string>
+  source?: string
+  last_probe_status?: string | null
+  last_probe_detail?: string | null
+  last_probe_at?: string | null
+}
+
+export interface McpCatalogEntry {
+  name: string
+  description: string
+  transport: string
+  command?: string | null
+  args?: string[]
+  url?: string | null
+  paste: string
+  installed: boolean
+}
+
+export function fetchMcpServers(): Promise<{ servers: McpServer[]; cost_note: string }> {
+  return apiFetch<{ servers: McpServer[]; cost_note: string }>('/v1/mcp/servers')
+}
+
+export function fetchMcpCatalog(): Promise<{ catalog: McpCatalogEntry[] }> {
+  return apiFetch<{ catalog: McpCatalogEntry[] }>('/v1/mcp/catalog')
+}
+
+export function importMcpConfig(text: string): Promise<{
+  drafts: unknown[]
+  servers: McpServer[]
+  stripped_env_keys: string[]
+}> {
+  return postJson('/v1/mcp/import', { text })
+}
+
+export function addMcpFromCatalog(name: string): Promise<{ server: McpServer }> {
+  return postJson('/v1/mcp/catalog/add', { name })
+}
+
+export function probeMcpServer(id: number): Promise<{ server: McpServer }> {
+  return postJson(`/v1/mcp/servers/${id}/probe`, {})
+}
+
+export function deleteMcpServer(id: number): Promise<{ deleted: number }> {
+  return apiFetch(`/v1/mcp/servers/${id}`, { method: 'DELETE', on403: 'forbidden' })
+}
+
+// ---------------------------------------------------------------------------
+// HP-78 — onboarding: reuse what's already on the machine, verify first.
+// ---------------------------------------------------------------------------
+
+export interface LocalBackend {
+  kind: string
+  base_url: string
+  reachable: boolean
+  models: string[]
+  error: string | null
+}
+
+export interface CliSession {
+  kind: string
+  state: string
+  login_available: boolean
+}
+
+export interface OnboardingMachine {
+  local: LocalBackend[]
+  cli: CliSession[]
+}
+
+export interface ModelVerifyResult {
+  ok: boolean
+  target: string
+  detail: string
+  models: string[]
+  error: string | null
+}
+
+export function fetchOnboardingMachine(): Promise<OnboardingMachine> {
+  return apiFetch<OnboardingMachine>('/v1/onboarding/machine')
+}
+
+export function verifyModel(body: {
+  provider?: string
+  agent_kind?: string
+  base_url?: string
+}): Promise<ModelVerifyResult> {
+  return postJson('/v1/models/verify', body)
+}
+
+export interface ModelConnectResult {
+  ok: boolean
+  provider: string
+  env_key: string | null
+  detail: string
+  models: string[]
+  saved: boolean
+  error: string | null
+}
+
+export function connectModel(body: {
+  provider: string
+  api_key: string
+  base_url?: string
+}): Promise<ModelConnectResult> {
+  return postJson('/v1/models/connect', { ...body, consent: true })
 }

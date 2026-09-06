@@ -10,7 +10,7 @@ import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
 /**
- * The two memory backends, side by side on the same counters.
+ * The memory backends, side by side on the same counters.
  *
  * They are **not** interchangeable and this panel says so. Measured on real
  * steps, their recalls overlap by 2–4%: mem0 answers semantically from a

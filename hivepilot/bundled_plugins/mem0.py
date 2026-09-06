@@ -718,14 +718,17 @@ def health(**kwargs: Any) -> HealthStatus:
     from hivepilot.config import settings
 
     if not settings.mem0_enabled:
-        return HealthStatus("degraded", "installed but disabled (mem0_enabled=False)")
+        return HealthStatus(
+            "degraded",
+            "installed but disabled (mem0_enabled=False); deprecated — hivepilot memory migrate-mem0",
+        )
 
     client = _get_client()
     if client is None:
         return HealthStatus("error", "mem0_enabled but client could not be built")
 
     mode = "hosted mode configured" if settings.mem0_api_key else "self-host"
-    return HealthStatus("ok", mode)
+    return HealthStatus("ok", f"{mode}; deprecated — hivepilot memory migrate-mem0")
 
 
 def register() -> dict[str, Any]:

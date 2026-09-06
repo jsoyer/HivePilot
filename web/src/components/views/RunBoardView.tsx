@@ -1,17 +1,27 @@
 import { Plus } from 'lucide-react'
-import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
 import { EmptyState } from '@/components/dashboard/EmptyState'
+import { StatusGlyph } from '@/components/dashboard/StatusGlyph'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { formatAge, formatClock, formatElapsed, formatTimestamp } from '@/lib/format-time'
 import { useT, type TranslationKey } from '@/lib/i18n'
 import { cancelRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
+import {
+  type AttentionZone,
+  attentionZone,
+  DONE_STATUSES,
+  FAILED_STATUSES,
+  type RunColumn,
+  runColumn,
+} from '@/lib/status-contract'
 import { useAsyncData } from '@/lib/use-async-data'
+import { useEventStream } from '@/lib/use-event-stream'
 import { usePersistedState } from '@/lib/use-persisted-state'
 import { cn } from '@/lib/utils'
 import { NewRunDrawer } from './NewRunDrawer'
@@ -28,61 +38,36 @@ const POLL_INTERVAL_MS = 3000
 const RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
 const DEFAULT_RUN_LIMIT = 50
 
-// ---------------------------------------------------------------------------
-// Status -> Kanban column mapping. Mirrors `hivepilot/services/
-// analytics_service.py`'s canonical status classification (its
-// `_SUCCEEDED_STATUSES`/`_FAILED_STATUSES`/`_SKIPPED_STATUSES` sets and the
-// comment above them listing every non-terminal state) AND `state_service.
-// py`'s `RunStatus` enum + its `"pending"` legacy alias / `api_service.py`'s
-// `create_run` (which stores that literal directly). Read both before
-// changing any set below — this view NEVER invents a status the backend
-// doesn't already use.
-// ---------------------------------------------------------------------------
-
-export type RunColumn = 'queued' | 'running' | 'waitingApproval' | 'failed' | 'done' | 'other'
-
-/** Pre-execution states: the formal `RunStatus.NEW`/`RunStatus.PLANNED`
- * enum values, plus the literal `"pending"` `create_run` stores directly
- * for a require-approval initial run (see `api_service.py`) — `"pending"`
- * is ALSO `RunStatus.from_str`'s legacy alias for `NEW`. */
-const QUEUED_STATUSES = new Set(['new', 'planned', 'pending'])
-/** A human decision is needed: the formal `RunStatus.APPROVAL`/`RunStatus.
- * REVIEW` enum values, plus the literal `"awaiting_approval"` orchestrator.
- * py sets at its own approval checkpoint. */
-const WAITING_APPROVAL_STATUSES = new Set(['approval', 'awaiting_approval', 'review'])
-/** Mirrors `analytics_service.py`'s `_FAILED_STATUSES` exactly. */
-const FAILED_STATUSES = new Set([
-  'failed',
-  'denied',
-  'rate_limit',
-  'auth_expired',
-  'test_failure',
-  'security_blocker',
-])
-/** Mirrors `analytics_service.py`'s `_SUCCEEDED_STATUSES` exactly. */
-const DONE_STATUSES = new Set(['success', 'complete'])
-
-/**
- * Maps a real `RunSummary.status` to a Kanban column — faithfully, never
- * inventing a status. Anything not in one of the four sets above (`paused`
- * — an operator mid-run pause, `cancelled` — operator-stopped, `deferred`
- * — quota/backoff retry-later, or a genuinely unrecognized string) lands in
- * `'other'`: exactly the same "everything else" bucket `analytics_service.
- * py`'s own `canonical_outcome()` falls back to for these same statuses —
- * this view never asserts a stronger classification than the backend
- * itself does.
- */
-export function runColumn(status: string): RunColumn {
-  const normalised = status.trim().toLowerCase()
-  if (QUEUED_STATUSES.has(normalised)) return 'queued'
-  if (normalised === 'running') return 'running'
-  if (WAITING_APPROVAL_STATUSES.has(normalised)) return 'waitingApproval'
-  if (FAILED_STATUSES.has(normalised)) return 'failed'
-  if (DONE_STATUSES.has(normalised)) return 'done'
-  return 'other'
-}
+// Status -> column/zone classification lives in the shared derived-status
+// contract (`@/lib/status-contract`, HP-42), the single source of truth
+// mirrored from `hivepilot/services/status_contract.py`. Re-exported here so
+// existing importers of `RunBoardView` keep resolving `runColumn`/`RunColumn`.
+export { type RunColumn, runColumn }
 
 const COLUMN_ORDER: RunColumn[] = ['queued', 'running', 'waitingApproval', 'failed', 'done']
+
+// Attention zones (HP-42/HP-43): the "where should I look?" lens over the board,
+// most → least urgent. A representative status per zone drives the zone chip's
+// glyph so it matches the cards' glyphs exactly.
+const ATTENTION_ZONE_ORDER: AttentionZone[] = ['needs_you', 'in_review', 'working', 'queued', 'ready']
+
+const ZONE_LABEL_KEY: Record<AttentionZone, TranslationKey> = {
+  needs_you: 'board.zoneNeedsYou',
+  in_review: 'board.zoneInReview',
+  working: 'board.zoneWorking',
+  queued: 'board.zoneQueued',
+  ready: 'board.zoneReady',
+  other: 'board.zoneOther',
+}
+
+const ZONE_SAMPLE_STATUS: Record<AttentionZone, string> = {
+  needs_you: 'failed',
+  in_review: 'review',
+  working: 'running',
+  queued: 'new',
+  ready: 'success',
+  other: 'cancelled',
+}
 
 const COLUMN_LABEL_KEY: Record<RunColumn, TranslationKey> = {
   queued: 'board.colQueued',
@@ -271,7 +256,10 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <StatusGlyph status={run.status} />
+          <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
+        </div>
         <Badge variant={statusVariant(run.status)} className="shrink-0">
           {run.status}
         </Badge>
@@ -290,6 +278,24 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
               ? t('board.duration', { duration })
               : t('board.startedAgo', { age: duration })}
           </span>
+        </div>
+      )}
+
+      {!compact && (run.step_count !== undefined || run.last_activity_at) && (
+        <div
+          data-testid={`run-board-progress-${run.id}`}
+          className="metric-mono flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
+        >
+          {run.step_count !== undefined ? (
+            <span>{t('board.stepCount', { count: run.step_count })}</span>
+          ) : (
+            <span />
+          )}
+          {run.last_activity_at && (
+            <span title={formatTimestamp(run.last_activity_at)}>
+              {t('board.lastHeartbeat', { age: formatAge(run.last_activity_at) })}
+            </span>
+          )}
         </div>
       )}
 
@@ -448,6 +454,85 @@ function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardPr
 
 const ALL = '__all__'
 const NO_RUNS: RunSummary[] = []
+
+interface AttentionSummaryProps {
+  runs: RunSummary[]
+  active: AttentionZone | null
+  onSelect: (zone: AttentionZone | null) => void
+}
+
+/**
+ * Attention-first lens over the board (HP-43): a row of zone chips — glyph +
+ * label + count — ordered most → least urgent, driven by the shared
+ * derived-status contract (HP-42). Clicking a zone filters the board to it (and
+ * clicking it again, or "All", clears). Counts are over ALL runs (not the
+ * filtered set) so the operator can always see and switch the full
+ * distribution. A chip only appears when its zone is non-empty.
+ */
+function AttentionSummary({ runs, active, onSelect }: AttentionSummaryProps) {
+  const t = useT()
+  const counts = useMemo(() => {
+    const c: Record<AttentionZone, number> = {
+      needs_you: 0,
+      in_review: 0,
+      working: 0,
+      queued: 0,
+      ready: 0,
+      other: 0,
+    }
+    for (const run of runs) c[attentionZone(run.status)] += 1
+    return c
+  }, [runs])
+
+  const zones = [...ATTENTION_ZONE_ORDER, 'other' as const].filter((zone) => counts[zone] > 0)
+  if (zones.length === 0) return null
+
+  return (
+    <div
+      data-testid="board-attention-summary"
+      role="group"
+      aria-label={t('board.attentionFilterLabel')}
+      className="flex flex-wrap items-center gap-2"
+    >
+      <span className="eyebrow">{t('board.attentionTitle')}</span>
+      <button
+        type="button"
+        data-testid="board-attention-all"
+        aria-pressed={active === null}
+        onClick={() => onSelect(null)}
+        className={cn(
+          'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+          active === null
+            ? 'border-primary bg-primary/10 text-foreground'
+            : 'border-border text-muted-foreground hover:bg-muted',
+        )}
+      >
+        {t('board.allZones')}
+      </button>
+      {zones.map((zone) => (
+        <button
+          key={zone}
+          type="button"
+          data-testid={`board-attention-zone-${zone}`}
+          aria-pressed={active === zone}
+          onClick={() => onSelect(active === zone ? null : zone)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+            active === zone
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:bg-muted',
+          )}
+        >
+          <StatusGlyph status={ZONE_SAMPLE_STATUS[zone]} />
+          <span>{t(ZONE_LABEL_KEY[zone])}</span>
+          <span className="metric-mono" data-testid={`board-attention-count-${zone}`}>
+            {counts[zone]}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
 
 interface ToolbarProps {
   projects: string[]
@@ -612,6 +697,7 @@ export function RunBoardView() {
   const [creating, setCreating] = useState(false)
   const [projectFilter, setProjectFilter] = useState<string>(ALL)
   const [taskFilter, setTaskFilter] = useState<string>(ALL)
+  const [zoneFilter, setZoneFilter] = useState<AttentionZone | null>(null)
   const [density, setDensity] = usePersistedState<BoardDensity>('pollen.board.density', 'comfortable')
   // How many runs to ask the API for. Persisted like density: an operator
   // watching one pipeline should not have to re-narrow the board on every
@@ -621,13 +707,38 @@ export function RunBoardView() {
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   // Poll on an interval, cleaned up on unmount (or before the next interval
-  // is registered) so a stale timer from a previous mount never leaks.
+  // is registered) so a stale timer from a previous mount never leaks. This is
+  // now a SAFETY NET behind the realtime SSE subscription below — it still
+  // catches up if the stream is unavailable (proxy, network), but the live
+  // feed is what makes status transitions appear near-instantly.
   useEffect(() => {
     const interval = window.setInterval(() => {
       setRefreshKey((key) => key + 1)
     }, POLL_INTERVAL_MS)
     return () => window.clearInterval(interval)
   }, [])
+
+  // Realtime: refresh the board the moment a run changes (HP-40 bus → HP-41
+  // SSE). Coalesced so a burst of step events triggers one refetch, not one
+  // per event. Disabled when the board itself is forbidden (a read-only token
+  // sees no runs, so there is nothing to keep live).
+  const refreshTimer = useRef<number | null>(null)
+  useEffect(() => {
+    return () => {
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current)
+    }
+  }, [])
+  useEventStream(
+    (event) => {
+      if (event.entity_type !== 'run') return
+      if (refreshTimer.current !== null) return
+      refreshTimer.current = window.setTimeout(() => {
+        refreshTimer.current = null
+        setRefreshKey((key) => key + 1)
+      }, 250)
+    },
+    { enabled: !isForbidden },
+  )
 
   // A module-level constant for the not-yet-loaded case, so `runs` keeps a
   // stable identity between renders and the memos below actually memoize.
@@ -647,9 +758,10 @@ export function RunBoardView() {
       runs.filter(
         (run) =>
           (projectFilter === ALL || run.project === projectFilter) &&
-          (taskFilter === ALL || run.task === taskFilter),
+          (taskFilter === ALL || run.task === taskFilter) &&
+          (zoneFilter === null || attentionZone(run.status) === zoneFilter),
       ),
-    [runs, projectFilter, taskFilter],
+    [runs, projectFilter, taskFilter, zoneFilter],
   )
 
   function handleRefresh() {
@@ -716,6 +828,7 @@ export function RunBoardView() {
 
           {!isForbidden && state.status === 'success' && runs.length > 0 && (
             <>
+              <AttentionSummary runs={runs} active={zoneFilter} onSelect={setZoneFilter} />
               <Toolbar
                 projects={projects}
                 tasks={tasks}
@@ -742,6 +855,7 @@ export function RunBoardView() {
                       onClick={() => {
                         setProjectFilter(ALL)
                         setTaskFilter(ALL)
+                        setZoneFilter(null)
                       }}
                     >
                       {t('board.clearFilters')}

@@ -584,6 +584,74 @@ class TestAnalyticsCostCsvExport:
 
 
 # ---------------------------------------------------------------------------
+# HP-81 — GET /v1/analytics/whales
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyticsWhalesAuth:
+    def test_requires_auth(self, api_client):
+        resp = api_client.get("/v1/analytics/whales")
+        assert resp.status_code == 401
+
+    def test_allows_read_role(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+        assert resp.json() == {"whales": [], "limit": 20}
+
+
+class TestAnalyticsWhalesTenantIsolation:
+    def test_scoped_to_caller_tenant(self, api_client, tmp_tokens_file):
+        from hivepilot.services import state_service
+
+        run_acme = state_service.record_run_start("p", "t", status="running", tenant="acme")
+        run_other = state_service.record_run_start("p", "t", status="running", tenant="other")
+        state_service.record_step(
+            run_acme,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=296_865,
+            output_tokens=71,
+            cost_usd=1.4861,
+        )
+        state_service.record_step(
+            run_other,
+            "s1",
+            "success",
+            provider="claude",
+            model="claude-opus-4-8",
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=9.0,
+        )
+
+        raw, _ = add_token("read", tenant="acme")
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+        whales = resp.json()["whales"]
+        assert len(whales) == 1
+        assert whales[0]["cost_usd"] == 1.4861
+        assert whales[0]["input_tokens"] == 296_865
+
+
+class TestAnalyticsWhalesShape:
+    def test_days_limit_project_task_params_accepted(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get(
+            "/v1/analytics/whales?days=7&limit=5&project=p&task=t", headers=_auth(raw)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["limit"] == 5
+
+    def test_unversioned_route_also_registered(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.get("/analytics/whales", headers=_auth(raw))
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # Pollen data endpoints sprint — /v1/analytics/cost by_project/by_role
 # ---------------------------------------------------------------------------
 
@@ -712,6 +780,184 @@ class TestModelsEndpoint:
         resp = api_client.get("/v1/models", headers=_auth(raw))
         assert resp.status_code == 200
         assert resp.json()["overall"]["total_steps"] == 2
+
+
+# ---------------------------------------------------------------------------
+# HP-78 — local discovery + verify-before-save
+# ---------------------------------------------------------------------------
+
+
+class TestOnboardingMachine:
+    def test_requires_auth(self, api_client):
+        assert api_client.get("/v1/onboarding/machine").status_code == 401
+
+    def test_lists_local_and_cli(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import local_models
+        from hivepilot.services.local_models import LocalBackend
+
+        monkeypatch.setattr(
+            local_models,
+            "discover",
+            lambda: [
+                LocalBackend(
+                    kind="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    reachable=True,
+                    models=["llama3.2"],
+                )
+            ],
+        )
+        raw, _ = add_token("read")
+        resp = api_client.get("/v1/onboarding/machine", headers=_auth(raw))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["local"][0]["kind"] == "ollama"
+        assert body["local"][0]["models"] == ["llama3.2"]
+        assert any(row["kind"] == "claude" for row in body["cli"])
+
+
+class TestModelsVerify:
+    def test_requires_auth(self, api_client):
+        assert api_client.post("/v1/models/verify", json={"provider": "ollama"}).status_code == 401
+
+    def test_read_can_verify_local_without_key(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(
+                ok=True, target=provider, detail="ok", models=["llama3.2"]
+            ),
+        )
+        raw, _ = add_token("read")
+        resp = api_client.post("/v1/models/verify", headers=_auth(raw), json={"provider": "ollama"})
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert resp.json()["models"] == ["llama3.2"]
+
+    def test_read_cannot_submit_api_key(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/verify",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-secret"},
+        )
+        assert resp.status_code == 403
+
+    def test_rejects_ssrf_base_url(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/verify",
+            headers=_auth(raw),
+            json={"provider": "openai", "base_url": "http://169.254.169.254/"},
+        )
+        assert resp.status_code == 400
+
+    def test_agent_kind_uses_session_probe(self, api_client, tmp_tokens_file, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        monkeypatch.setattr(
+            mv,
+            "verify_agent",
+            lambda kind: mv.VerifyResult(ok=True, target=f"agent:{kind}", detail="session present"),
+        )
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/verify", headers=_auth(raw), json={"agent_kind": "claude"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["target"] == "agent:claude"
+
+
+class TestModelsConnect:
+    def test_requires_auth(self, api_client):
+        assert (
+            api_client.post(
+                "/v1/models/connect",
+                json={"provider": "openai", "api_key": "sk-x", "consent": True},
+            ).status_code
+            == 401
+        )
+
+    def test_read_cannot_connect(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("read")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-x", "consent": True},
+        )
+        assert resp.status_code == 403
+
+    def test_requires_consent(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-x"},
+        )
+        assert resp.status_code == 400
+
+    def test_admin_saves_after_verify(self, api_client, tmp_tokens_file, tmp_path, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        env = tmp_path / ".env"
+        monkeypatch.setenv("HIVEPILOT_ENV_FILE", str(env))
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(
+                ok=True, target=provider, detail="HTTP 200 · 1 models", models=["gpt-x"]
+            ),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-never-echo", "consent": True},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["saved"] is True
+        assert body["env_key"] == "OPENAI_API_KEY"
+        assert "sk-never-echo" not in resp.text
+        assert "OPENAI_API_KEY=sk-never-echo" in env.read_text(encoding="utf-8")
+
+    def test_failed_verify_does_not_write(self, api_client, tmp_tokens_file, tmp_path, monkeypatch):
+        from hivepilot.services import model_verify as mv
+
+        env = tmp_path / ".env"
+        monkeypatch.setenv("HIVEPILOT_ENV_FILE", str(env))
+        monkeypatch.setattr(
+            mv,
+            "verify",
+            lambda provider, **kw: mv.VerifyResult(ok=False, target=provider, detail="HTTP 401"),
+        )
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={"provider": "openai", "api_key": "sk-bad", "consent": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is False
+        assert not env.exists()
+
+    def test_rejects_ssrf_base_url(self, api_client, tmp_tokens_file):
+        raw, _ = add_token("admin")
+        resp = api_client.post(
+            "/v1/models/connect",
+            headers=_auth(raw),
+            json={
+                "provider": "openai",
+                "api_key": "sk-x",
+                "base_url": "http://169.254.169.254/",
+                "consent": True,
+            },
+        )
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
@@ -2939,7 +3185,7 @@ class TestAgentLoginEndpoint:
 
     def test_an_unverified_kind_is_a_400_naming_the_verified_ones(self, monkeypatch):
         response, _ = self._call(
-            "codex", True, monkeypatch, error="'codex' has no verified headless login flow"
+            "opencode", True, monkeypatch, error="'opencode' has no verified headless login flow"
         )
 
         assert response.status_code == 400

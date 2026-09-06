@@ -438,6 +438,18 @@ different machines. Configure the target host via `~/.ssh/config` and tune the S
 with `HIVEPILOT_SSH_OPTIONS`. See [PIPELINES-AND-ROLES.md](PIPELINES-AND-ROLES.md) for role
 configuration and [CONFIGURATION.md](CONFIGURATION.md) for environment variables.
 
+## MCP command center (HP-76)
+
+Pollen's **MCP** tab (System group) is a unified servers + catalog page:
+
+- **Paste-anything import** — Claude/Cursor `{"mcpServers": …}` JSON, a bare `https://…` URL, or a command (`npx -y @modelcontextprotocol/server-filesystem /tmp`). Admin-only (`POST /v1/mcp/import`).
+- **Literal secrets are stripped** — only `${env:NAME}` refs are stored.
+- **URLs are never fetched** on import (SSRF). A non-loopback HTTP server is recorded as `remote` and not probed; loopback GETs are allowed.
+- **Health** — `shutil.which` for stdio commands; refreshed on `GET /v1/mcp/servers` (60s TTL) and via **Probe**.
+- **Cost per server** is not metered yet (HP-73 tracks LLM providers, not MCP tool calls).
+
+Catalog entries are templates (filesystem, github, fetch, memory, token-savior). Adding one writes a registry row; it does not install npm/pip.
+
 ## See also
 
 - [CLI-REFERENCE.md](CLI-REFERENCE.md)

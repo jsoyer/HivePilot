@@ -26,8 +26,11 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/approvals/latency
     GET /v1/analytics/providers
     GET /v1/analytics/cost
+    GET /v1/analytics/whales
     GET /v1/plugins/health
     GET /v1/memories
+    GET /v1/hindsight/status
+    GET /v1/hindsight/roles/{role}
     GET /v1/panels
     GET /v1/panels/{name}
 
@@ -293,6 +296,40 @@ class TestAnalyticsCostContract:
 
 
 # ---------------------------------------------------------------------------
+# GET /v1/analytics/whales (HP-81)
+# ---------------------------------------------------------------------------
+
+
+_WHALE_KEYS = {
+    "step_id",
+    "run_id",
+    "project",
+    "task",
+    "step",
+    "provider",
+    "model",
+    "timestamp",
+    "input_tokens",
+    "output_tokens",
+    "cost_usd",
+    "priced",
+}
+
+
+class TestAnalyticsWhalesContract:
+    def test_top_level_keys(self, api_client, read_token, seeded_run):
+        resp = api_client.get("/v1/analytics/whales", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"whales", "limit"}
+        assert data["limit"] == 20
+        assert data["whales"]
+        assert set(data["whales"][0].keys()) == _WHALE_KEYS
+        # Envelopes only — a Langfuse-sized prompt body must never appear.
+        assert "detail" not in data["whales"][0]
+
+
+# ---------------------------------------------------------------------------
 # GET /v1/plugins/health
 # ---------------------------------------------------------------------------
 
@@ -376,6 +413,68 @@ class TestMemoriesContract:
         assert set(data.keys()) == {"configured", "memories", "detail"}
         assert data["configured"] is False
         assert data["memories"] == []
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/hindsight/status, GET /v1/hindsight/roles/{role} (HP-55)
+# ---------------------------------------------------------------------------
+
+
+class TestHindsightPanelContract:
+    def test_status_keys(self, api_client, read_token, monkeypatch):
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "hindsight_enabled", False)
+        resp = api_client.get("/v1/hindsight/status", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"configured", "roles", "detail"}
+        assert data["roles"]
+        assert set(data["roles"][0].keys()) == {"name", "display_name", "bank_id"}
+
+    def test_role_panel_keys(self, api_client, read_token, monkeypatch):
+        from hivepilot.services import hindsight_panel
+
+        class _Client:
+            def list_mental_models(self, bank_id, **kwargs):
+                return {
+                    "items": [
+                        {
+                            "id": "prefs",
+                            "name": "Preferences",
+                            "source_query": "q",
+                            "content": "c",
+                            "last_refreshed_at": None,
+                            "is_stale": False,
+                            "tags": [],
+                        }
+                    ]
+                }
+
+            def list_memories(self, bank_id, **kwargs):
+                return {"items": []}
+
+        monkeypatch.setattr(hindsight_panel, "_enabled", lambda: True)
+        monkeypatch.setattr(hindsight_panel, "default_client", lambda: _Client())
+        resp = api_client.get("/v1/hindsight/roles/developer", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) >= {
+            "configured",
+            "role",
+            "bank_id",
+            "mental_models",
+            "observations",
+        }
+        assert set(data["mental_models"][0].keys()) == {
+            "id",
+            "name",
+            "source_query",
+            "content",
+            "last_refreshed_at",
+            "is_stale",
+            "tags",
+        }
 
 
 # ---------------------------------------------------------------------------

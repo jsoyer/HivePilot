@@ -18,6 +18,10 @@ import {
   Zap,
   Gauge,
   MessagesSquare,
+  Boxes,
+  Waypoints,
+  ServerCog,
+  Plug,
 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -33,6 +37,7 @@ import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
 import { ConversationsView } from './views/ConversationsView'
+import { EspacesView } from './views/EspacesView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
@@ -45,7 +50,10 @@ import { HomeView } from './views/HomeView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { CacheView } from './views/CacheView'
+import { OrchestratorView } from './views/OrchestratorView'
+import { ProvidersView } from './views/ProvidersView'
 import { PluginsView } from './views/PluginsView'
+import { McpView } from './views/McpView'
 import { PanelView } from './views/PanelView'
 import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
@@ -71,6 +79,9 @@ const BUILTIN_TABS = [
   // signals, GET /v1/efficiency) — grouped with Cost under "Spend" in
   // nav-config.ts's NAV_GROUP_ORDER.
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
+  // Providers panel (HP-73): real per-provider spend + HP-70 fallback
+  // visibility. Grouped under "Spend" next to Cost/Models/Efficiency.
+  { value: 'providers', labelKey: 'nav.providers', Panel: ProvidersView, Icon: ServerCog },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
   // One card per curated plugin: description, on/off switch, and what it
@@ -79,6 +90,8 @@ const BUILTIN_TABS = [
   // installed (the interesting set) would be invisible. Read-only for any
   // token; the switches gate themselves on useRole().can('admin').
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
+  // MCP command center (HP-76): servers + catalog + paste-anything import.
+  { value: 'mcp', labelKey: 'nav.mcp', Panel: McpView, Icon: Plug },
   // Prompt-cache economics. Separate from the analytics screens on purpose:
   // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
   // cache creation nobody ever read back behind an 85% hit rate.
@@ -108,6 +121,14 @@ const BUILTIN_TABS = [
   // form and Stop controls inside gate themselves on useRole().can('run')
   // — see RunBoardView. Supersedes the old flat-table RunsView.
   { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
+  // Espaces (HP-45): conversation rooms — talk to an agent, or watch two
+  // agents talk. `run`-gated posting (composer hides for a read-only token);
+  // list/read for any token. Grouped under "Operate" (nav-config.ts).
+  { value: 'spaces', labelKey: 'nav.spaces', Panel: EspacesView, Icon: Boxes },
+  // Orchestrator decomposition panel (HP-49 / HP-69): a goal → a MissionPlan
+  // preview + the five strategy mode cards (execution & merge), then launch.
+  // `run`-gated actions (hide for a read-only token); grouped under "Operate".
+  { value: 'orchestrator', labelKey: 'nav.orchestrator', Panel: OrchestratorView, Icon: Waypoints },
   // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
   // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
   // pause|resume — read-only for any token, the Pause/Resume control inside

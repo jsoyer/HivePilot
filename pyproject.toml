@@ -59,6 +59,11 @@ langchain = [
 postgres = [
   "psycopg[binary]>=3.1,<4.0",
 ]
+# HTTP client for the Hindsight memory server (HP-51). The server itself is
+# `hindsight-api` / Docker — this extra is only the SDK the plugin imports.
+hindsight = [
+  "hindsight-client>=0.1",
+]
 langgraph = [
   "langgraph>=0.0.59,<1.0",
 ]

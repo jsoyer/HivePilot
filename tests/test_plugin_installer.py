@@ -139,6 +139,11 @@ def test_mem0_prereq_matches_source_derived_package_name() -> None:
     assert "mem0ai" in KNOWN_EXAMPLE_PLUGINS["mem0"].prereq_detail
 
 
+def test_hindsight_prereq_matches_source_derived_package_name() -> None:
+    """The plugin imports `hindsight_client` (`pip install hindsight-client`)."""
+    assert "hindsight-client" in KNOWN_EXAMPLE_PLUGINS["hindsight"].prereq_detail
+
+
 def test_headroom_prereq_matches_source_derived_package_name() -> None:
     """headroom's plugin source lazily imports `headroom` (`pip install
     "headroom-ai[all]"`) -- see plugins/headroom.py's own docstring."""

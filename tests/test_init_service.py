@@ -101,6 +101,7 @@ def test_scaffold_writes_valid_yaml_for_every_config_model(tmp_path: Path) -> No
         "policies.yaml",
         "model_profiles.yaml",
         "schedules.yaml",
+        "mail_watchers.yaml",
         "api_tokens.yaml",
     ):
         path = tmp_path / name
@@ -109,11 +110,12 @@ def test_scaffold_writes_valid_yaml_for_every_config_model(tmp_path: Path) -> No
 
 
 def test_scaffold_plain_yaml_surfaces_pass_their_real_loaders(tmp_path: Path) -> None:
-    """The 4 plain-YAML surfaces that have a cheap, override-able runtime
+    """The 5 plain-YAML surfaces that have a cheap, override-able runtime
     loader must parse through that REAL loader, not just yaml.safe_load —
     catching structurally-wrong-but-parseable YAML that safe_load can't.
     `roles.yaml` has no such loader (see `_plain_yaml_loaders` docstring) so
     it is intentionally excluded here."""
+    from hivepilot.services.mail_watcher import load_mail_watchers
     from hivepilot.services.policy_service import load_policies
     from hivepilot.services.profile_service import load_claude_profiles
     from hivepilot.services.schedule_service import load_schedules
@@ -128,6 +130,7 @@ def test_scaffold_plain_yaml_surfaces_pass_their_real_loaders(tmp_path: Path) ->
     assert scaffolded["coding"]["claude"] == "sonnet"
     assert scaffolded["coding"]["grok"] == "grok-4.6"
     assert load_schedules(tmp_path / "schedules.yaml") == {}
+    assert load_mail_watchers(tmp_path / "mail_watchers.yaml") == {}
     assert load_tokens(tmp_path / "api_tokens.yaml") == []
 
 

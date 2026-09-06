@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
     by_role_note: 'by_role is unavailable',
     unpriced_models: [],
   }),
+  fetchAnalyticsWhales: vi.fn().mockResolvedValue({ whales: [], limit: 20 }),
   fetchAnalyticsProviders: vi.fn().mockResolvedValue({ by_provider: [], by_model: [] }),
   // Mirador Spend section sprint: ModelsView fetches its own /v1/models —
   // mocked genuinely-empty so this shell test exercises tab switching only,
@@ -49,6 +50,8 @@ const mocks = vi.hoisted(() => ({
     latency_note: 'p50/p95 latency is not computable from current data.',
   }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
+  fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
+  fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
   fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
@@ -174,6 +177,10 @@ import { Pollen } from './Pollen'
 // the same shell).
 const GROUPED_TAB_ORDER = [
   'Home',
+  // Espaces (HP-45): conversation rooms lead the Operate group (nav-config.ts).
+  'Spaces',
+  // Orchestrator decomposition panel (HP-49 / HP-69) sits next to Spaces.
+  'Orchestrator',
   'Runs',
   'Approvals',
   // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate
@@ -182,6 +189,8 @@ const GROUPED_TAB_ORDER = [
   'Autopilot',
   'Cost',
   'Models',
+  // Providers panel (HP-73) sits in the Spend group next to Models.
+  'Providers',
   'Efficiency',
   'Analytics',
   'Memory',
@@ -189,6 +198,8 @@ const GROUPED_TAB_ORDER = [
   // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
   // System beside Health, which is where plugin state already lived.
   'Plugins',
+  // MCP command center (HP-76) sits next to Plugins under System.
+  'MCP',
   // Prompt-cache economics, beside Plugins under System. Separate from
   // Analytics on purpose: those aggregate, and an aggregate is what hid
   // 1.7M tokens of unread cache creation behind an 85% hit rate.

@@ -13,10 +13,11 @@ construction).
 
 Three rules:
 
-  * VERIFIED-ONLY contracts. A kind nobody verified is absent from the
-    registry and surfaces as "unknown" — the honoured_controls doctrine
-    applied to auth. An invented store path would report "absent" for an
-    agent that is in fact logged in, which is worse than admitting ignorance.
+  * GROUNDED contracts. grok/cursor/gh were proven on the box; the
+    market-leader agents (codex/claude/gemini) use their DOCUMENTED vendor
+    default store paths + login commands. A kind with neither surfaces as
+    "unknown" rather than a guessed store path — admitting ignorance beats a
+    fabricated "absent" for an agent that is in fact logged in.
   * NO SECRET is ever read. The store probe checks existence and size, never
     content. The login path returns a URL and records THAT a login started —
     never a token, and never the log's other lines (some CLIs echo token
@@ -71,8 +72,15 @@ class AuthContract:
     probe_argv: list[str] | None = None
 
 
-#: kind -> verified contract. Everything here was PROVEN on the box
-#: (2026-08-21/22); a kind not listed surfaces as "unknown".
+#: kind -> auth contract. `grok`/`cursor`/`gh` were PROVEN on the box
+#: (2026-08-21/22); the market-leader agents (`codex`/`claude`/`gemini`) use
+#: their DOCUMENTED vendor default store paths + login commands. The safety
+#: invariants hold for all: a probe reads existence/size only (never content),
+#: and a login returns a URL only (never a token). A kind with neither a store
+#: nor a login surfaces as "unknown". A login command that opens a browser
+#: instead of printing a URL degrades to `url=None` + the log path — never a
+#: guess — so declaring one is safe even where the exact output wasn't
+#: box-verified.
 AUTH_CONTRACTS: dict[str, AuthContract] = {
     "grok": AuthContract(
         auth_store="~/.grok/auth.json",
@@ -86,10 +94,26 @@ AUTH_CONTRACTS: dict[str, AuthContract] = {
         login_argv=["cursor-agent", "login"],
         login_env={"NO_OPEN_BROWSER": "1"},
     ),
+    "codex": AuthContract(
+        # OpenAI Codex CLI: `codex login` runs the ChatGPT sign-in / device
+        # flow and prints an auth URL; the credential lands in the store below
+        # (https://github.com/openai/codex).
+        auth_store="~/.codex/auth.json",
+        login_argv=["codex", "login"],
+    ),
     "claude": AuthContract(
-        # Verified present on the box. A HEADLESS login command was NOT
-        # verified, so none is declared — the UI gets no button, not a guess.
         auth_store="~/.claude/.credentials.json",
+        # `claude setup-token` is Anthropic's documented headless token flow
+        # (prints an authorize URL). If a build opens a browser instead, the
+        # scraper returns url=None + the log path — never a guessed URL.
+        login_argv=["claude", "setup-token"],
+    ),
+    "gemini": AuthContract(
+        # Google Gemini CLI stores OAuth creds here. Its sign-in is an
+        # interactive BROWSER flow with no documented headless/device argv, so
+        # no login command is declared — store detection only
+        # (https://github.com/google-gemini/gemini-cli).
+        auth_store="~/.gemini/oauth_creds.json",
     ),
     "gh": AuthContract(
         auth_store="~/.config/gh/hosts.yml",

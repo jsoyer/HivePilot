@@ -35,8 +35,16 @@ const BOTH: MemoryBackendsResponse = {
       last_activity: null,
       actors: 0,
     },
+    hindsight: {
+      searches: 0,
+      empty_searches: 0,
+      stores: 0,
+      reads: 0,
+      last_activity: null,
+      actors: 0,
+    },
   },
-  egress: { mem0: true, obsidian: false },
+  egress: { mem0: true, obsidian: false, hindsight: false },
 }
 
 async function mountWith(data: MemoryBackendsResponse) {
@@ -70,6 +78,7 @@ describe('MemoryBackendsView', () => {
 
     expect(container.querySelector('[data-testid="memory-backend-mem0"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="memory-backend-obsidian"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="memory-backend-hindsight"]')).not.toBeNull()
   })
 
   it('shows empty recalls, not a raw result count', async () => {
