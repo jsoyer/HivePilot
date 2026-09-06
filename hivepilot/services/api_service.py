@@ -617,6 +617,66 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
     return {"role": caller.role, "tenant": caller.tenant}
 
 
+class PushSubscribeBody(BaseModel):
+    """Browser PushSubscription JSON (HP-63) — endpoint + p256dh/auth keys."""
+
+    endpoint: str
+    keys: dict[str, str]
+
+
+class PushUnsubscribeBody(BaseModel):
+    endpoint: str
+
+
+@v1.get("/push/config")
+def push_config(_caller: token_service.TokenEntry = Depends(require_role("read"))) -> dict:
+    """Whether Web Push is operator-configured. Never returns the private key."""
+    from hivepilot.services import web_push_service
+
+    return web_push_service.public_config()
+
+
+@v1.post("/push/subscribe")
+def push_subscribe(
+    body: PushSubscribeBody,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, bool]:
+    from hivepilot.services import web_push_service
+
+    if not web_push_service.push_configured():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    try:
+        web_push_service.upsert_subscription(
+            tenant=caller.tenant,
+            endpoint=body.endpoint,
+            p256dh=body.keys.get("p256dh", ""),
+            auth=body.keys.get("auth", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@v1.post("/push/unsubscribe")
+def push_unsubscribe(
+    body: PushUnsubscribeBody,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, bool]:
+    from hivepilot.services import web_push_service
+
+    if not web_push_service.push_configured():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    try:
+        web_push_service.delete_subscription(
+            tenant=caller.tenant,
+            endpoint=body.endpoint,
+            admin=caller.role == "admin",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    return {"ok": True}
+
+
 @v1.get("/projects", dependencies=[Depends(require_role("read"))])
 @app.get("/projects", dependencies=[Depends(require_role("read"))])
 def list_projects():
@@ -4621,6 +4681,78 @@ def serve_webui_favicon() -> FileResponse:
     if file_path is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     return FileResponse(str(file_path))
+
+
+# PWA root files (HP-63): Vite emits these next to index.html with
+# root-absolute hrefs (`/manifest.webmanifest`, `/sw.js`, `/pwa-192.png`),
+# same as favicon. Allowlisted names only — never a catch-all `/{file}`.
+_PWA_ROOT_FILES = frozenset(
+    {
+        "manifest.webmanifest",
+        "sw.js",
+        "registerSW.js",
+        "pwa-192.png",
+        "pwa-512.png",
+        "apple-touch-icon.png",
+    }
+)
+_PWA_MEDIA_TYPES = {
+    "manifest.webmanifest": "application/manifest+json",
+    "sw.js": "application/javascript",
+    "registerSW.js": "application/javascript",
+}
+
+
+def _serve_webui_root_file(name: str) -> FileResponse:
+    if not _webui_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    allowed = name in _PWA_ROOT_FILES or (
+        name.startswith("workbox-") and name.endswith(".js") and name.count("/") == 0
+    )
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    file_path = webui.resolve_static_path(name)
+    if file_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    media = _PWA_MEDIA_TYPES.get(name)
+    return FileResponse(str(file_path), media_type=media) if media else FileResponse(str(file_path))
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def serve_webui_manifest() -> FileResponse:
+    return _serve_webui_root_file("manifest.webmanifest")
+
+
+@app.get("/sw.js", include_in_schema=False)
+def serve_webui_sw() -> FileResponse:
+    return _serve_webui_root_file("sw.js")
+
+
+@app.get("/registerSW.js", include_in_schema=False)
+def serve_webui_register_sw() -> FileResponse:
+    return _serve_webui_root_file("registerSW.js")
+
+
+@app.get("/pwa-192.png", include_in_schema=False)
+def serve_webui_pwa_192() -> FileResponse:
+    return _serve_webui_root_file("pwa-192.png")
+
+
+@app.get("/pwa-512.png", include_in_schema=False)
+def serve_webui_pwa_512() -> FileResponse:
+    return _serve_webui_root_file("pwa-512.png")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+def serve_webui_apple_touch() -> FileResponse:
+    return _serve_webui_root_file("apple-touch-icon.png")
+
+
+@app.get("/workbox-{wb_hash}.js", include_in_schema=False)
+def serve_webui_workbox(wb_hash: str) -> FileResponse:
+    if not wb_hash.isalnum():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return _serve_webui_root_file(f"workbox-{wb_hash}.js")
 
 
 app.include_router(v1)

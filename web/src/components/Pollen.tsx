@@ -38,6 +38,8 @@ import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
+import { InstallPrompt } from './pwa/InstallPrompt'
+import { PushToggle } from './pwa/PushToggle'
 import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
 import { EspacesView } from './views/EspacesView'
@@ -238,7 +240,7 @@ function PollenShell() {
        * The header stays a "glass panel" (semi-transparent + backdrop-blur,
        * unchanged from before this sprint) floating over that texture. */}
       <div className="bg-grid flex min-h-screen flex-col text-foreground">
-        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/80 px-3 py-3 backdrop-blur-md sm:px-6">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/80 py-3 pr-[max(0.75rem,env(safe-area-inset-right))] pb-3 pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md sm:px-6">
           <Button
             type="button"
             variant="ghost"
@@ -293,6 +295,8 @@ function PollenShell() {
               </kbd>
             </Button>
             <StatusPills />
+            <InstallPrompt />
+            <PushToggle />
             <LanguageToggle />
             <ThemeToggle />
           </div>

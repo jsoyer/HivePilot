@@ -2478,3 +2478,27 @@ export function deleteRole(name: string): Promise<{ deleted: boolean; name: stri
     on403: 'forbidden',
   })
 }
+
+// ---------------------------------------------------------------------------
+// PWA Web Push (HP-63)
+// ---------------------------------------------------------------------------
+
+export interface PushConfig {
+  enabled: boolean
+  vapid_public_key: string | null
+}
+
+export function fetchPushConfig(): Promise<PushConfig> {
+  return apiFetch<PushConfig>('/v1/push/config', { on403: 'forbidden' })
+}
+
+export function subscribePush(body: {
+  endpoint: string
+  keys: { p256dh: string; auth: string }
+}): Promise<{ ok: boolean }> {
+  return postJson<{ ok: boolean }>('/v1/push/subscribe', body)
+}
+
+export function unsubscribePush(endpoint: string): Promise<{ ok: boolean }> {
+  return postJson<{ ok: boolean }>('/v1/push/unsubscribe', { endpoint })
+}

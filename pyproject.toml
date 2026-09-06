@@ -81,6 +81,7 @@ api = [
 ]
 notifications = [
   "python-telegram-bot>=21.0,<22.0",
+  "pywebpush>=1.14,<3.0",
 ]
 slack = [
   "slack-bolt>=1.18,<2.0",
@@ -174,6 +175,7 @@ webui = [
   "uvicorn>=0.24,<1.0",
   "prometheus-client>=0.17,<1.0",
   "itsdangerous>=2.1,<3.0",
+  "pywebpush>=1.14,<3.0",
 ]
 # Phase 18 — OpenTelemetry distributed tracing (hivepilot/observability/
 # tracing.py), gated behind HIVEPILOT_ENABLE_TRACING (default off). Not

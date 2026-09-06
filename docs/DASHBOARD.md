@@ -32,10 +32,16 @@ The web UI is served by the HTTP API process. Start the API server:
 hivepilot api serve --host 0.0.0.0 --port 8000 --workers 1
 ```
 
-Then open the served web UI in a browser. It's a React/Vite/Tailwind single-page app
-bundled with the API — no separate frontend server to run. Unlike the TUI, the web
-dashboard is actionable, not just a viewer: you can approve gated actions,
-launch runs, and toggle plugins directly from the UI.
+Then open the served web UI in a browser (`/ui/`). It's a React/Vite/Tailwind
+single-page app bundled with the API — no separate frontend server to run. Unlike
+the TUI, the web dashboard is actionable, not just a viewer: you can approve gated
+actions, launch runs, and toggle plugins directly from the UI.
+
+The same bundle is a **PWA** (HP-63): installable on a phone home screen
+(`manifest.webmanifest` + service worker at the API root). Optional Web Push uses
+operator VAPID keys (`HIVEPILOT_WEB_PUSH_VAPID_*`) and the `webpush` notification
+channel — add `webpush` to `HIVEPILOT_NOTIFICATION_CHANNELS` after generating keys.
+iOS only delivers Web Push after the app is installed to the home screen.
 
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
 

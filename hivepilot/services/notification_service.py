@@ -71,7 +71,7 @@ NOTIFIER_MAP: dict[str, Callable[[str], None]] = {}
 
 # Built-in notifier channels, for docs/help/inventory only (mirrors
 # KNOWN_RUNNER_KINDS) — NOT enforced at runtime; see NotifierRegistry.
-KNOWN_NOTIFIER_NAMES: tuple[str, ...] = ("slack", "discord", "telegram")
+KNOWN_NOTIFIER_NAMES: tuple[str, ...] = ("slack", "discord", "telegram", "webpush")
 
 
 class NotifierKindCollisionError(RuntimeError):
@@ -256,9 +256,19 @@ def _send_telegram(
         )
 
 
+def _send_web_push(message: str) -> None:
+    from hivepilot.services.web_push_service import WebPushNotConfigured, send_web_push_notification
+
+    try:
+        send_web_push_notification(message)
+    except WebPushNotConfigured as exc:
+        raise _NotConfigured(str(exc)) from exc
+
+
 NotifierRegistry.register("slack", _send_slack)
 NotifierRegistry.register("discord", _send_discord)
 NotifierRegistry.register("telegram", _send_telegram)
+NotifierRegistry.register("webpush", _send_web_push)
 
 
 # ---------------------------------------------------------------------------
