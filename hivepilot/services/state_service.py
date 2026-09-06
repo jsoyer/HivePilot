@@ -837,6 +837,30 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_skill_proposals_status "
             "ON skill_patch_proposals (status, created_ts)"
         )
+        # HP-56 per-role routines: cron[] + timezone + persisted next_run_at.
+        # Dedup is UNIQUE (tenant, replace_key); NULL keys do not collide.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routines (
+                id TEXT PRIMARY KEY,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                role TEXT NOT NULL,
+                projects TEXT NOT NULL DEFAULT '[]',
+                crons TEXT NOT NULL,
+                timezone TEXT NOT NULL DEFAULT 'UTC',
+                next_run_at TIMESTAMP,
+                last_run_at TIMESTAMP,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                replace_key TEXT,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (tenant, replace_key)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routines_due ON routines (tenant, enabled, next_run_at)"
+        )
 
 
 def upsert_worker(name: str, url: str, status: str, detail: str | None = None) -> None:

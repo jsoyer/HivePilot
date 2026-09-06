@@ -4869,6 +4869,202 @@ def metrics():
 
 
 # ---------------------------------------------------------------------------
+# Routines (HP-56) — per-role crons[] + timezone + webhook + replace_key.
+# GET -> read. POST/PATCH/DELETE -> run. Webhook fire -> run. No UI here (HP-57).
+# ---------------------------------------------------------------------------
+class RoutineWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str
+    projects: list[str] = Field(default_factory=list)
+    crons: list[str]
+    timezone: str = "UTC"
+    enabled: bool = True
+    replace_key: str | None = None
+
+
+class RoutinePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: str | None = None
+    projects: list[str] | None = None
+    crons: list[str] | None = None
+    timezone: str | None = None
+    enabled: bool | None = None
+    replace_key: str | None = None
+
+
+class RoutineOut(BaseModel):
+    id: str
+    tenant: str
+    role: str
+    projects: list[str] = Field(default_factory=list)
+    crons: list[str] = Field(default_factory=list)
+    timezone: str = "UTC"
+    next_run_at: str | None = None
+    last_run_at: str | None = None
+    enabled: bool = True
+    replace_key: str | None = None
+    created_ts: str | None = None
+    updated_ts: str | None = None
+
+
+class RoutineListResponse(BaseModel):
+    routines: list[RoutineOut]
+
+
+class RoutineTriggerResponse(BaseModel):
+    routine_id: str
+    status: str
+    detail: str
+
+
+def _routine_tenant(caller: token_service.TokenEntry) -> str | None:
+    return None if caller.role == "admin" else caller.tenant
+
+
+def _routine_out(routine: Any) -> RoutineOut:
+    from hivepilot.services.routine_service import to_dict
+
+    return RoutineOut(**to_dict(routine))
+
+
+def _routine_http_error(exc: Exception) -> HTTPException:
+    from hivepilot.services.routine_service import RoutineError
+
+    if not isinstance(exc, RoutineError):
+        return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    text = str(exc)
+    if text.startswith("unknown routine"):
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=text)
+    if "already belongs" in text:
+        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=text)
+    return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=text)
+
+
+@v1.get("/routines")
+def list_routines_endpoint(
+    role: str | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> RoutineListResponse:
+    from hivepilot.services import routine_service
+
+    rows = routine_service.list_routines(tenant=_routine_tenant(caller), role=role)
+    return RoutineListResponse(routines=[_routine_out(r) for r in rows])
+
+
+@v1.get("/routines/{routine_id}")
+def get_routine_endpoint(
+    routine_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> RoutineOut:
+    from hivepilot.services import routine_service
+
+    row = routine_service.get_routine(routine_id, tenant=_routine_tenant(caller))
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown routine {routine_id!r}"
+        )
+    return _routine_out(row)
+
+
+@v1.post("/routines")
+def create_routine_endpoint(
+    payload: RoutineWrite,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> RoutineOut:
+    from hivepilot.services import routine_service
+
+    try:
+        row = routine_service.upsert_routine(
+            role=payload.role,
+            crons=payload.crons,
+            timezone=payload.timezone,
+            projects=payload.projects,
+            enabled=payload.enabled,
+            replace_key=payload.replace_key,
+            tenant=caller.tenant,
+        )
+    except routine_service.RoutineError as exc:
+        raise _routine_http_error(exc) from exc
+    return _routine_out(row)
+
+
+@v1.patch("/routines/{routine_id}")
+def patch_routine_endpoint(
+    routine_id: str,
+    payload: RoutinePatch,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> RoutineOut:
+    from hivepilot.services import routine_service
+
+    current = routine_service.get_routine(routine_id, tenant=_routine_tenant(caller))
+    if current is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown routine {routine_id!r}"
+        )
+    try:
+        row = routine_service.patch_routine(
+            current.id,
+            tenant=current.tenant,
+            role=payload.role,
+            crons=payload.crons,
+            timezone=payload.timezone,
+            projects=payload.projects,
+            enabled=payload.enabled,
+            replace_key=payload.replace_key,
+        )
+    except routine_service.RoutineError as exc:
+        raise _routine_http_error(exc) from exc
+    return _routine_out(row)
+
+
+@v1.delete("/routines/{routine_id}")
+def delete_routine_endpoint(
+    routine_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> dict[str, Any]:
+    from hivepilot.services import routine_service
+
+    tenant = _routine_tenant(caller)
+    row = routine_service.get_routine(routine_id, tenant=tenant)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown routine {routine_id!r}"
+        )
+    routine_service.delete_routine(row.id, tenant=row.tenant)
+    return {"deleted": True, "id": row.id}
+
+
+@v1.post("/webhook/routines/{routine_id}")
+def trigger_routine(
+    routine_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> RoutineTriggerResponse:
+    """Fire a routine immediately (Bearer run), same async shape as schedule trigger."""
+    from hivepilot.services import routine_service
+
+    row = routine_service.get_routine(routine_id, tenant=_routine_tenant(caller))
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown routine {routine_id!r}"
+        )
+
+    def _fire() -> None:
+        try:
+            routine_service.run_routine(row, _get_orchestrator(), trigger="webhook")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("webhook.routine.failed", extra={"routine": row.id, "error": str(exc)})
+
+    threading.Thread(target=_fire, daemon=True).start()
+    return RoutineTriggerResponse(
+        routine_id=row.id,
+        status="triggered",
+        detail=f"Routine '{row.id}' fired asynchronously",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Generic named webhook trigger (Phase 25) — POST /webhook/trigger/{name}
 # Fires a named schedule entry on demand. Returns immediately; run is async.
 # ---------------------------------------------------------------------------

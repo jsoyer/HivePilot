@@ -22,6 +22,7 @@ dependencies = [
   "python-dotenv>=1.0,<2.0",
   "requests>=2.31,<3.0",
   "ruamel.yaml>=0.18",
+  "croniter>=2.0,<7.0",
 ]
 # NOTE: the bitwarden/vaultwarden secrets backends (plugins/bitwarden.py /
 # plugins/vaultwarden.py) shell out to the official Bitwarden `bw` CLI. That is

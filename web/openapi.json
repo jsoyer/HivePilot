@@ -1856,6 +1856,276 @@
         "title": "RoleWrite",
         "type": "object"
       },
+      "RoutineListResponse": {
+        "properties": {
+          "routines": {
+            "items": {
+              "$ref": "#/components/schemas/RoutineOut"
+            },
+            "title": "Routines",
+            "type": "array"
+          }
+        },
+        "required": [
+          "routines"
+        ],
+        "title": "RoutineListResponse",
+        "type": "object"
+      },
+      "RoutineOut": {
+        "properties": {
+          "created_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created Ts"
+          },
+          "crons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Crons",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "replace_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace Key"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "updated_ts": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated Ts"
+          }
+        },
+        "required": [
+          "id",
+          "tenant",
+          "role"
+        ],
+        "title": "RoutineOut",
+        "type": "object"
+      },
+      "RoutinePatch": {
+        "additionalProperties": false,
+        "properties": {
+          "crons": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Crons"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "projects": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projects"
+          },
+          "replace_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace Key"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "title": "RoutinePatch",
+        "type": "object"
+      },
+      "RoutineTriggerResponse": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "routine_id": {
+            "title": "Routine Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "routine_id",
+          "status",
+          "detail"
+        ],
+        "title": "RoutineTriggerResponse",
+        "type": "object"
+      },
+      "RoutineWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "crons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Crons",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "replace_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replace Key"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "timezone": {
+            "default": "UTC",
+            "title": "Timezone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "crons"
+        ],
+        "title": "RoutineWrite",
+        "type": "object"
+      },
       "RunDetailResponse": {
         "properties": {
           "detail": {

@@ -173,6 +173,7 @@ class SchedulerDaemon:
         self._maybe_hot_reload_plugins()
         self._maybe_hot_reload_roles()
         self._run_due_schedules()
+        self._run_due_routines()
         self._run_drift_scans()
         self._expire_stale_retries()
         self._process_deferred_rows()
@@ -275,6 +276,31 @@ class SchedulerDaemon:
                 run_entry(sched, orch)
             except Exception:  # noqa: BLE001
                 logger.exception("scheduler_daemon.run_entry_error", extra={"schedule": sched})
+
+    def _run_due_routines(self) -> None:
+        """HP-56 — fire DB-backed per-role routines whose next_run_at is due.
+
+        Local imports so tests can patch ``hivepilot.services.routine_service``
+        the same way ``_run_drift_scans`` patches ``drift_schedule``. A missing
+        table or a single routine failure must never crash the tick.
+        """
+        from hivepilot.services.routine_service import due_routines, run_routine
+
+        try:
+            routines = due_routines()
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler_daemon.due_routines_error")
+            return
+        if not routines:
+            return
+        orch = Orchestrator(plugins=self._hot_reload_manager)
+        for routine in routines:
+            try:
+                run_routine(routine, orch)
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "scheduler_daemon.run_routine_error", extra={"routine": routine.id}
+                )
 
     def _run_drift_scans(self) -> None:
         """Phase 20 D3 — scan due IaC projects for drift and alert.

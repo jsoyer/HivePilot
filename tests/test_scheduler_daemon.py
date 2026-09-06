@@ -900,3 +900,44 @@ class TestSchedulerDaemonStartupPathLogging:
 
         source = inspect.getsource(SchedulerDaemon.run)
         assert "_log_startup_paths_once" in source
+
+
+class TestSchedulerDaemonRoutines:
+    """HP-56: due routines dispatch through the same Orchestrator injection."""
+
+    def test_tick_source_calls_due_routines(self):
+        import inspect
+
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        source = inspect.getsource(SchedulerDaemon._tick)
+        assert "_run_due_routines" in source
+
+    def test_due_routine_is_dispatched(self, monkeypatch):
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        fake = MagicMock()
+        fake.id = "routine-1"
+        ran: list[str] = []
+
+        monkeypatch.setattr("hivepilot.services.routine_service.due_routines", lambda: [fake])
+        monkeypatch.setattr(
+            "hivepilot.services.routine_service.run_routine",
+            lambda routine, orch, **kwargs: ran.append(routine.id) or True,
+        )
+        monkeypatch.setattr(
+            "hivepilot.services.scheduler_daemon.Orchestrator",
+            MagicMock,
+        )
+
+        SchedulerDaemon()._run_due_routines()
+        assert ran == ["routine-1"]
+
+    def test_due_routines_error_does_not_crash_tick(self, monkeypatch):
+        from hivepilot.services.scheduler_daemon import SchedulerDaemon
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr("hivepilot.services.routine_service.due_routines", _boom)
+        SchedulerDaemon()._run_due_routines()  # must not raise
