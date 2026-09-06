@@ -6943,7 +6943,7 @@ class Orchestrator:
                         # skills re-applied to it via `_prepare_payload_for`. Empty
                         # when no skills are declared, which keeps that path a
                         # no-op -- byte-identical to before this fix.
-                        _resolved_skills: list[SkillSpec] = []
+                        _resolved_skills = []
                         if _skill_names:
                             for _skill_name in _skill_names:
                                 _skill_spec = self.plugins.get_skill(_skill_name)

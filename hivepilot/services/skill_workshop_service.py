@@ -40,7 +40,14 @@ class SkillWorkshopError(RuntimeError):
 
 
 class SkillLookup(Protocol):
-    def get_skill(self, name: str) -> dict[str, Any] | None: ...
+    """Minimal plugin surface so tests can inject a stub.
+
+    ``get_skill`` may return a ``SkillSpec`` TypedDict or a plain mapping;
+    callers only read string keys. Typed as ``Any`` so PluginManager (which
+    returns ``SkillSpec | None``) is a structural match under mypy.
+    """
+
+    def get_skill(self, name: str) -> Any: ...
 
 
 def files_digest(files: dict[str, str]) -> str:
