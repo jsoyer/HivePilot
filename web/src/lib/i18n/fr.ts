@@ -893,6 +893,17 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.allowlistEmptyTitle': 'Aucun pipeline ne peut être lancé automatiquement',
   'autopilot.allowlistEmptyBody':
     'L’autopilote peut toujours mettre des objectifs en file, mais il n’en exécutera aucun. Ajoutez un pipeline à auto_dispatch dans policies.yaml pour l’autoriser à agir.',
+  'schedules.title': 'Planifications nommées',
+  'schedules.emptyTitle': 'Aucune planification configurée',
+  'schedules.emptyBody':
+    'Ajoutez des entrées dans schedules.yaml pour lancer des tâches ou vider l’autopilote à intervalle. Vous pouvez en déclencher une immédiatement ici.',
+  'schedules.trigger': 'Lancer',
+  'schedules.triggerConfirm': 'Déclencher la planification « {name} » maintenant ? Elle s’exécute en asynchrone.',
+  'schedules.interval': 'toutes les {minutes} min',
+  'schedules.lastRun': 'dernier run {age}',
+  'schedules.neverRun': 'jamais lancée',
+  'schedules.disabled': 'désactivée',
+  'schedules.triggered': '{name} déclenchée',
 
   // ---- Partitions view (propose -> ratify -> dispatch PRD, Sprint 4) ----
   // Registre sobre et littéral, comme en anglais : rien ici n'enjolive ce qui

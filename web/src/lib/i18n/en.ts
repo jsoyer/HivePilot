@@ -890,6 +890,17 @@ export const en = {
   'autopilot.allowlistEmptyTitle': 'No pipeline may auto-dispatch',
   'autopilot.allowlistEmptyBody':
     'Autopilot can still queue objectives, but it will never run one. Add a pipeline to auto_dispatch in policies.yaml to let it act.',
+  'schedules.title': 'Named schedules',
+  'schedules.emptyTitle': 'No schedules configured',
+  'schedules.emptyBody':
+    'Add entries to schedules.yaml to run tasks or drain Autopilot on an interval. You can fire one immediately from here.',
+  'schedules.trigger': 'Run now',
+  'schedules.triggerConfirm': 'Fire schedule “{name}” now? It runs asynchronously.',
+  'schedules.interval': 'every {minutes} min',
+  'schedules.lastRun': 'last run {age}',
+  'schedules.neverRun': 'never run',
+  'schedules.disabled': 'disabled',
+  'schedules.triggered': 'Fired {name}',
 
   // ---- Partitions view (propose -> ratify -> dispatch PRD, Sprint 4) ----
   // Register note: sober and literal. Nothing here dresses up what is, in

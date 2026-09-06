@@ -158,6 +158,41 @@ jobs:
       - name: Fail if committed static/ is stale vs the source build
         run: git diff --exit-code hivepilot/webui/static
 
+  openapi-drift:
+    name: OpenAPI client drift (HP-64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project + dev extras
+        run: pip install -e ".[dev]"
+
+      - name: Fail if web/openapi.json is stale
+        run: python scripts/export_openapi.py --check
+
+      - name: Set up Node (pinned via web/.nvmrc)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web/.nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Fail if generated TS types are stale
+        working-directory: web
+        run: |
+          npm run generate:api
+          git diff --exit-code -- src/lib/generated/
+
   helm-lint:
     name: Helm chart lint
     runs-on: ubuntu-latest

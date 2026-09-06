@@ -1,21 +1,23 @@
 ## Summary
 
-HP-62: voice mode in Pollen — dictation, “call an agent”, and optional BYO cloud TTS.
+HP-64: typed Pollen client from FastAPI OpenAPI, plus a CI drift gate.
 
-- Browser Web Speech is the default (no keys): mic on Chat + Espaces composers, `speechSynthesis` for spoken replies.
-- Chat “Call an agent” toggle (`hivepilot.webui.voice-call`) speaks concierge `answer_text`.
-- Optional cloud TTS (OpenAI / ElevenLabs / Cartesia): operator BYO key stays on the server. `GET /v1/voice/config` advertises engines; `POST /v1/voice/tts` proxies MPEG. Keys never reach the browser.
-- Cloud STT is advertised only; upload is a later slice.
+- Curated contract (`roles`, `concierge`, `schedules` + named trigger) exported to `web/openapi.json`.
+- Generated TS types (`web/src/lib/generated/openapi.d.ts`) via `openapi-typescript`.
+- CI job `OpenAPI client drift` fails if the spec or generated types are stale.
+- Response models on roles / concierge / trigger so the spec is not `{}`.
+- New `GET /v1/schedules`; Autopilot lists named schedules and can fire `POST /v1/webhook/trigger/{name}`.
+- `fetchRole` + complete `RoleWritePayload` optional fields.
 
-Linear: [HP-62](https://linear.app/js-workspace/issue/HP-62/mode-voix-stttts-byo-elevenlabsopenaicartesia-micro-composer-appeler).
+Linear: [HP-64](https://linear.app/js-workspace/issue/HP-64/client-ts-type-genere-depuis-lopenapi-fastapi-gate-anti-drift-cable).
 
-Does not implement HP-18 (concierge OSS runner).
+Replay: `python scripts/export_openapi.py && cd web && npm run generate:api`.
 
 ## Testing
 
-- [x] `cd web && npm test -- --run src/lib/browser-speech.test.ts src/lib/voice-reply.test.ts src/lib/api.test.ts src/lib/pollen-api.test.ts src/components/voice/ComposerMic.test.tsx src/components/views/ChatView.test.tsx src/lib/i18n/fr.test.ts src/components/Pollen.test.tsx`
-- [x] `cd web && npm run build` (Node 26.5.0 → `index-D4xc0GnV.js` + `sw.js`)
-- [x] `pytest tests/test_voice_service.py tests/test_settings_secret_repr.py`
+- [x] `pytest tests/test_openapi_contract.py tests/test_roles_api.py tests/test_concierge_endpoint.py`
+- [x] `cd web && npm test -- --run src/lib/generated/contract.test.ts src/lib/pollen-api.test.ts src/components/views/SchedulesCard.test.tsx src/components/views/AutopilotView.test.tsx src/lib/i18n/fr.test.ts`
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-BVOaHhYS.js`)
+- [x] `python scripts/export_openapi.py --check`
 - [x] `ruff check` on touched Python
-
-Replay: `HIVEPILOT_ENABLE_WEBUI=1 hivepilot api serve`; open Chat; click the mic (Chrome) to dictate; toggle the phone icon to hear answers. Set `HIVEPILOT_VOICE_TTS_PROVIDER=openai` + `HIVEPILOT_VOICE_TTS_API_KEY` to use the proxy instead of `speechSynthesis`.
+- [x] `mypy` on `api_service.py` / `openapi_contract.py` (CI typecheck fix: return models, not dicts)

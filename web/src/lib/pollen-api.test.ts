@@ -32,6 +32,9 @@ import {
   fetchModels,
   fetchOnboardingMachine,
   fetchVoiceConfig,
+  fetchRole,
+  fetchSchedules,
+  triggerSchedule,
   connectModel,
   fetchRun,
   fetchVerdicts,
@@ -399,6 +402,27 @@ describe('catalogue endpoints', () => {
     apiFetchMock.mockResolvedValue(['deploy'])
     await expect(fetchTaskNames()).resolves.toEqual(['deploy'])
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/tasks', { on403: 'forbidden' })
+  })
+
+  it('fetchRole calls GET /v1/roles/{name}', async () => {
+    apiFetchMock.mockResolvedValue({ name: 'developer', title: 'Dev' })
+    await expect(fetchRole('developer')).resolves.toEqual({ name: 'developer', title: 'Dev' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/roles/developer')
+  })
+
+  it('fetchSchedules calls GET /v1/schedules', async () => {
+    apiFetchMock.mockResolvedValue({ schedules: [] })
+    await expect(fetchSchedules()).resolves.toEqual({ schedules: [] })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/schedules', { on403: 'forbidden' })
+  })
+
+  it('triggerSchedule posts to the named webhook', async () => {
+    apiFetchMock.mockResolvedValue({ schedule_name: 'docs-weekly', status: 'triggered', detail: 'ok' })
+    await triggerSchedule('docs-weekly')
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/webhook/trigger/docs-weekly',
+      expect.objectContaining({ method: 'POST' }),
+    )
   })
 
   it('fetchVoiceConfig calls GET /v1/voice/config', async () => {
