@@ -42,6 +42,8 @@ Parallel final stage: Documentation runs after CISO clearance, alongside QA.
 - blockers: unresolved issues or "none"
 - next_handoff: target agent and required context
 - confidence: HIGH | MEDIUM | LOW, with reason
+- block_if: (HP-50) bullets of the conditions that keep this review blocking — « je bloque si »
+- findings: improve-style blocks when a location is known (`severity:`, `file:line:`, `why:`)
 
 A report without an explicit verdict is invalid.
 
