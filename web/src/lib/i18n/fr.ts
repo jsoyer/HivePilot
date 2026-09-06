@@ -65,7 +65,7 @@ export const fr: Record<TranslationKey, string> = {
   'nav.models': 'Modèles',
   'nav.efficiency': 'Efficacité',
   'nav.health': 'Santé',
-  'memoryBackends.notInterchangeable': 'Ces backends se complètent, ils ne se remplacent pas. mem0 et Obsidian ne se recoupent qu’à 2–4 % sur des étapes réelles. Hindsight est un moteur retain/recall sur Postgres/pgvector que l’opérateur déploie.',
+  'memoryBackends.notInterchangeable': 'Ces backends se complètent, ils ne se remplacent pas. Obsidian est le coffre local ; Hindsight est le moteur retain/recall sur Postgres/pgvector. Des lignes mem0 historiques peuvent encore apparaître après migration.',
   'memoryBackends.egressYes': 'sort de la box',
   'memoryBackends.egressNo': 'reste sur la box',
   'memoryBackends.about.mem0': 'Stockage sémantique hébergé, clé projet:tâche:rôle. La sortie des étapes part chez un tiers ; seuls les secrets enregistrés sont masqués.',
@@ -471,23 +471,6 @@ export const fr: Record<TranslationKey, string> = {
   'graph.statusSkipped': 'ignoré',
   'graph.statusFailed': 'échoué',
 
-  // ---- Mem0 view ---------------------------------------------------------
-  'mem0.title': 'Recherche de mémoire Mem0',
-  'mem0.description': 'Recherche sémantique dans le magasin mem0 — nécessite un jeton admin',
-  'mem0.searchPlaceholder': 'Rechercher des mémoires…',
-  'mem0.searchAriaLabel': 'Rechercher des mémoires',
-  'mem0.searchButton': 'Rechercher',
-  'mem0.searchHint': 'Saisissez une recherche ci-dessus pour consulter les mémoires.',
-  'mem0.requiresTokenLead': 'Cette vue nécessite un rôle',
-  'mem0.requiresTokenTail': '.',
-  'mem0.requiresTokenNote':
-    'Votre jeton actuel fonctionne toujours pour les autres onglets de Pollen — seule la recherche Mem0 nécessite un rôle supérieur.',
-  'mem0.notConfigured': "mem0 n'est pas configuré.",
-  'mem0.noResults': 'Aucune mémoire trouvée pour cette recherche.',
-  'mem0.category': 'Catégorie',
-  'mem0.timestamp': 'Horodatage',
-  'mem0.memory': 'Mémoire',
-
   // ---- Approvals view ------------------------------------------------------
   'approvals.descriptionCanApprove': 'Approbations de pipeline en attente — approuvez ou refusez ci-dessous.',
   'approvals.descriptionReadOnly':
@@ -639,7 +622,7 @@ export const fr: Record<TranslationKey, string> = {
   'quality.colActor': 'Acteur',
   'quality.emptyTitle': 'Aucune activité mémoire enregistrée pour le moment',
   'quality.emptyState':
-    "Ces indicateurs proviennent de l'instrumentation mem0, qui est facultative. Une fois activée, dès que les agents recherchent et stockent de la mémoire, le taux de succès des recherches, la fraîcheur du rappel et les manques par namespace apparaissent ici.",
+    "Ces indicateurs proviennent de l'instrumentation mémoire facultative. Une fois que les agents recherchent et stockent de la mémoire, le taux de succès des recherches, la fraîcheur du rappel et les manques par namespace apparaissent ici.",
   'quality.requiresTokenLead': 'Cette section nécessite un rôle',
   'quality.requiresTokenTail': 'à privilège supérieur.',
   'quality.requiresTokenNote':
@@ -647,10 +630,9 @@ export const fr: Record<TranslationKey, string> = {
 
   // ---- Memory view (onglets unifiés Qualité/Croissance/Recherche) ------
   'memory.description':
-    'Savoir curaté par rôle (Savoir), si le rappel aide (Qualité), quelle quantité est stockée (Croissance), et l’onglet Recherche historique.',
+    'Savoir curaté par rôle (Savoir), si le rappel aide (Qualité), et quelle quantité est stockée (Croissance).',
   'memory.tabQuality': 'Qualité',
   'memory.tabGrowth': 'Croissance',
-  'memory.tabSearch': 'Recherche',
   'memory.tabKnowledge': 'Savoir',
   'memory.knowledgeTitle': 'Savoir par rôle',
   'memory.knowledgeDescription':

@@ -69,7 +69,7 @@ export const en = {
   'nav.models': 'Models',
   'nav.efficiency': 'Efficiency',
   'nav.health': 'Health',
-  'memoryBackends.notInterchangeable': 'These backends complement each other — they do not replace one another. mem0 and Obsidian recalls overlap by only 2–4% on real steps. Hindsight is a retain/recall engine on Postgres/pgvector the operator deploys.',
+  'memoryBackends.notInterchangeable': 'These backends complement each other — they do not replace one another. Obsidian is the local vault; Hindsight is the retain/recall engine on Postgres/pgvector. Historical mem0 rows may still appear after migration.',
   'memoryBackends.egressYes': 'leaves the host',
   'memoryBackends.egressNo': 'stays on the host',
   'memoryBackends.about.mem0': 'Hosted semantic store, keyed by project:task:role. Step output is sent to a third party; only registered secrets are redacted.',
@@ -473,23 +473,6 @@ export const en = {
   'graph.statusSkipped': 'skipped',
   'graph.statusFailed': 'failed',
 
-  // ---- Mem0 view ---------------------------------------------------------
-  'mem0.title': 'Mem0 memory search',
-  'mem0.description': 'Semantic search over the mem0 store — requires an admin token',
-  'mem0.searchPlaceholder': 'Search memories…',
-  'mem0.searchAriaLabel': 'Search memories',
-  'mem0.searchButton': 'Search',
-  'mem0.searchHint': 'Enter a search query above to look up memories.',
-  'mem0.requiresTokenLead': 'This view requires an',
-  'mem0.requiresTokenTail': 'token.',
-  'mem0.requiresTokenNote':
-    'Your current token can still use the other Pollen tabs — only Mem0 search needs a higher role.',
-  'mem0.notConfigured': 'mem0 is not configured.',
-  'mem0.noResults': 'No memories found for that query.',
-  'mem0.category': 'Category',
-  'mem0.timestamp': 'Timestamp',
-  'mem0.memory': 'Memory',
-
   // ---- Approvals view ------------------------------------------------------
   'approvals.descriptionCanApprove': 'Pending pipeline approvals — approve or deny below.',
   'approvals.descriptionReadOnly':
@@ -635,7 +618,7 @@ export const en = {
   'quality.colActor': 'Actor',
   'quality.emptyTitle': 'No memory activity recorded yet',
   'quality.emptyState':
-    'These figures come from mem0 instrumentation, which is opt-in. Once it is enabled and agents start searching and storing memory, search success, recall freshness and the gaps by namespace appear here.',
+    'These figures come from optional memory instrumentation. Once agents start searching and storing memory, search success, recall freshness and the gaps by namespace appear here.',
   'quality.requiresTokenLead': 'This section requires a',
   'quality.requiresTokenTail': 'higher-privilege token.',
   'quality.requiresTokenNote':
@@ -643,10 +626,9 @@ export const en = {
 
   // ---- Memory view (unified Quality/Growth/Search tabs) -----------------
   'memory.description':
-    'Curated knowledge per role (Knowledge), whether recall helps (Quality), how much is stored (Growth), and the legacy Search tab.',
+    'Curated knowledge per role (Knowledge), whether recall helps (Quality), and how much is stored (Growth).',
   'memory.tabQuality': 'Quality',
   'memory.tabGrowth': 'Growth',
-  'memory.tabSearch': 'Search',
   'memory.tabKnowledge': 'Knowledge',
   'memory.knowledgeTitle': 'Knowledge by role',
   'memory.knowledgeDescription':

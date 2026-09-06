@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiForbiddenError } from '@/lib/api'
 
-// Pollen wires seven real data views (Analytics/Cost/Health/Mem0/Approvals/
+// Pollen wires seven real data views (Analytics/Cost/Health/Memory/Approvals/
 // Runs/Graph) — mock every endpoint they call so this test exercises the
 // shell (sidebar nav, header, default view, switching) without depending on
 // network behavior. Each view's own loading/error/empty/data states are
@@ -52,7 +52,6 @@ const mocks = vi.hoisted(() => ({
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
   fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
   fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
-  fetchMemories: vi.fn().mockResolvedValue({ configured: true, memories: [] }),
   fetchPanels: vi.fn().mockResolvedValue({ panels: [] }),
   fetchPanel: vi.fn().mockResolvedValue({ sections: [] }),
   // Pollen now wraps its tree in RoleProvider (Sprint 1), which fetches

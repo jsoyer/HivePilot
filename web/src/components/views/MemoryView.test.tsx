@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import memoryViewSource from './MemoryView.tsx?raw'
 import { ApiForbiddenError } from '@/lib/api'
 import type {
-  MemoriesResponse,
   MemoryEvaluationsResponse,
   MemoryGapsResponse,
   MemoryGrowth,
@@ -21,7 +20,6 @@ const mocks = vi.hoisted(() => ({
   fetchMemoryEvaluations: vi.fn(),
   fetchMemoryJournal: vi.fn(),
   fetchMemoryGrowth: vi.fn(),
-  fetchMemories: vi.fn(),
   fetchHindsightStatus: vi.fn(),
   fetchHindsightRolePanel: vi.fn(),
 }))
@@ -82,16 +80,15 @@ const filledGrowth: MemoryGrowth = {
   source: 'mem0',
 }
 
-/** Every endpoint MemoryView's three tabs (across all of Quality/Growth/
- * Search) could call, defaulted to a genuinely-empty-but-successful
- * response — individual tests override just the ones they care about. */
+/** Every endpoint MemoryView's tabs (Sources/Knowledge/Quality/Growth)
+ * could call, defaulted to a genuinely-empty-but-successful response —
+ * individual tests override just the ones they care about. */
 function mockAllEmpty() {
   mocks.fetchMemoryReality.mockResolvedValue(emptyReality)
   mocks.fetchMemoryGaps.mockResolvedValue({ gaps: [] } satisfies MemoryGapsResponse)
   mocks.fetchMemoryEvaluations.mockResolvedValue({ evaluations: [] } satisfies MemoryEvaluationsResponse)
   mocks.fetchMemoryJournal.mockResolvedValue({ journal: [] } satisfies MemoryJournalResponse)
   mocks.fetchMemoryGrowth.mockResolvedValue(emptyGrowth)
-  mocks.fetchMemories.mockResolvedValue({ configured: true, memories: [] } satisfies MemoriesResponse)
   mocks.fetchHindsightStatus.mockResolvedValue({
     configured: false,
     roles: [{ name: 'developer', display_name: 'Gustave', bank_id: 'role:developer' }],
@@ -156,7 +153,7 @@ describe('MemoryView — tabs', () => {
     // Sources leads: Quality and Growth describe the CORPUS, Sources
     // describes the RETRIEVAL — which backend answered, how often it came
     // back with nothing, and whether it sends work off the host.
-    expect(tabs).toEqual(['Sources', 'Knowledge', 'Quality', 'Growth', 'Search'])
+    expect(tabs).toEqual(['Sources', 'Knowledge', 'Quality', 'Growth'])
   })
 
   it('defaults to the Quality tab, rendering MemoryQualityView content', async () => {
@@ -173,9 +170,8 @@ describe('MemoryView — tabs', () => {
     expect(qualityTab?.getAttribute('aria-selected')).toBe('true')
     expect(container.textContent).toContain('82%')
     expect(mocks.fetchMemoryReality).toHaveBeenCalled()
-    // Growth/Search haven't been fetched yet — only the active tab mounts.
+    // Growth hasn't been fetched yet — only the active tab mounts.
     expect(mocks.fetchMemoryGrowth).not.toHaveBeenCalled()
-    expect(mocks.fetchMemories).not.toHaveBeenCalled()
   })
 
   it('switching to Knowledge fetches the Hindsight role panel', async () => {
@@ -190,19 +186,6 @@ describe('MemoryView — tabs', () => {
     expect(mocks.fetchHindsightStatus).toHaveBeenCalled()
     expect(container.textContent).toContain('Knowledge by role')
     expect(container.textContent).toContain('role:developer')
-  })
-
-  it('switching to Search shows the existing Mem0View search box', async () => {
-    await act(async () => {
-      mount()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    await clickTab('Search')
-
-    expect(container.textContent).toContain('Mem0 memory search')
-    expect(container.querySelector('input[aria-label="Search memories"]')).not.toBeNull()
   })
 
   it('switching to Growth fetches and renders /v1/memory/growth data', async () => {
