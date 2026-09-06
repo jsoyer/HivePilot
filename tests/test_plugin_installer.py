@@ -126,17 +126,11 @@ def test_binary_prereq_plugins_name_their_binary(name: str) -> None:
     assert spec.prereq_kind == "binary"
 
 
-@pytest.mark.parametrize("name", ["mem0", "headroom"])
+@pytest.mark.parametrize("name", ["headroom"])
 def test_pip_prereq_plugins_name_a_pip_package(name: str) -> None:
     spec = KNOWN_EXAMPLE_PLUGINS[name]
     assert spec.prereq_kind == "pip"
     assert "pip install" in spec.prereq_detail
-
-
-def test_mem0_prereq_matches_source_derived_package_name() -> None:
-    """mem0's plugin source lazily imports `mem0` (`pip install mem0ai`) --
-    see plugins/mem0.py's own docstring/comment citing the exact pip name."""
-    assert "mem0ai" in KNOWN_EXAMPLE_PLUGINS["mem0"].prereq_detail
 
 
 def test_hindsight_prereq_matches_source_derived_package_name() -> None:

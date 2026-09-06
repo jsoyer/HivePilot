@@ -20,7 +20,10 @@ import {
   fetchAutopilot,
   fetchEfficiency,
   fetchLessons,
-  fetchMemories,
+  fetchHindsightStatus,
+  fetchHindsightRolePanel,
+  createHindsightMentalModel,
+  patchJson,
   fetchMemoryEvaluations,
   fetchMemoryGaps,
   fetchMemoryGrowth,
@@ -116,18 +119,36 @@ describe('pollen-api fetch wrappers', () => {
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/plugins/health')
   })
 
-  it('fetchMemories calls GET /v1/memories with query/limit and opts into on403: "forbidden"', async () => {
-    await fetchMemories('deploy', 20)
-    expect(apiFetchMock).toHaveBeenCalledWith('/v1/memories?query=deploy&limit=20', {
+  it('fetchHindsightStatus calls GET /v1/hindsight/status with on403: "forbidden"', async () => {
+    await fetchHindsightStatus()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/hindsight/status', { on403: 'forbidden' })
+  })
+
+  it('fetchHindsightRolePanel encodes the role name', async () => {
+    await fetchHindsightRolePanel('dev/ops')
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/hindsight/roles/dev%2Fops', {
       on403: 'forbidden',
     })
   })
 
-  it('fetchMemories URL-encodes the query text', async () => {
-    await fetchMemories('rate limit / retry', 10)
-    const [url] = apiFetchMock.mock.calls[0] as [string]
-    expect(url).toContain('query=rate+limit+%2F+retry')
-    expect(url).not.toContain(' ')
+  it('createHindsightMentalModel POSTs to the role bank', async () => {
+    await createHindsightMentalModel('developer', { name: 'Prefs', source_query: 'q' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/hindsight/roles/developer/mental-models', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Prefs', source_query: 'q' }),
+      on403: 'forbidden',
+    })
+  })
+
+  it('patchJson sends PATCH with a JSON body', async () => {
+    await patchJson('/v1/hindsight/roles/developer/memories/w1', { text: 'fixed' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/hindsight/roles/developer/memories/w1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'fixed' }),
+      on403: 'forbidden',
+    })
   })
 
   it('fetchPanels calls GET /v1/panels', async () => {

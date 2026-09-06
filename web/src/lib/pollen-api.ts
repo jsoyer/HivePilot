@@ -1,6 +1,6 @@
 /**
  * Typed shapes + fetch wrappers for the Pollen web UI's data sources —
- * HivePilot's own `/v1/analytics/*`, `/v1/plugins/health`, and `/v1/memories`
+ * HivePilot's own `/v1/analytics/*`, `/v1/plugins/health`, and `/v1/hindsight/*`
  * endpoints. Field names/shapes are transcribed directly from
  * `hivepilot/services/analytics_service.py` and `hivepilot/services/
  * api_service.py` (read those before changing anything here — this file
@@ -782,37 +782,114 @@ export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// GET /v1/memories — admin-only (see api_service.py `list_memories`
-// docstring for the full scope/tenant analysis). Uses `on403: 'forbidden'`
-// so a valid non-admin token isn't cleared just because this one endpoint is
-// out of its reach — see `ApiForbiddenError` in `./api`.
+// HP-55 — Pollen Memory panel over Hindsight role banks
+// (`hivepilot/services/hindsight_panel.py`). Mental models + observations
+// live on `role:{name}` (HP-52), never the HP-51 episodic bank.
+// All free text (name/content/quotes) is UNTRUSTED — render via plain JSX.
 // ---------------------------------------------------------------------------
 
-export interface MemoryProvenance {
-  project?: string
-  task?: string
-  role?: string
-  category?: string
-  ts?: string
-  [key: string]: unknown
+export interface HindsightRoleOption {
+  name: string
+  display_name: string | null
+  bank_id: string
 }
 
-export interface MemoryItem {
-  memory: string
-  id?: string | number
-  metadata?: MemoryProvenance
-  score?: number
-}
-
-export interface MemoriesResponse {
+export interface HindsightStatusResponse {
   configured: boolean
-  memories: MemoryItem[]
+  roles: HindsightRoleOption[]
   detail?: string
 }
 
-export function fetchMemories(query: string, limit = 20): Promise<MemoriesResponse> {
-  const params = new URLSearchParams({ query, limit: String(limit) })
-  return apiFetch<MemoriesResponse>(`/v1/memories?${params.toString()}`, { on403: 'forbidden' })
+export interface HindsightMentalModel {
+  id: string
+  name: string
+  source_query: string
+  content: string
+  last_refreshed_at: string | null
+  is_stale: boolean | null
+  tags: string[]
+}
+
+export interface HindsightQuote {
+  text: string
+  source_id: string
+}
+
+export interface HindsightEvidence {
+  id: string
+  text: string
+  fact_type: string
+  state: string
+}
+
+export interface HindsightObservation {
+  id: string
+  text: string
+  fact_type: string
+  state: string
+  proof_count: number
+  confidence: number | null
+  quotes: HindsightQuote[]
+  evidence: HindsightEvidence[]
+  edited_at: string | null
+}
+
+export interface HindsightRolePanel {
+  configured: boolean
+  role: string
+  bank_id: string
+  mental_models: HindsightMentalModel[]
+  observations: HindsightObservation[]
+  detail?: string
+}
+
+export function fetchHindsightStatus(): Promise<HindsightStatusResponse> {
+  return apiFetch<HindsightStatusResponse>('/v1/hindsight/status', { on403: 'forbidden' })
+}
+
+export function fetchHindsightRolePanel(role: string): Promise<HindsightRolePanel> {
+  return apiFetch<HindsightRolePanel>(`/v1/hindsight/roles/${encodeURIComponent(role)}`, {
+    on403: 'forbidden',
+  })
+}
+
+export function createHindsightMentalModel(
+  role: string,
+  body: { name: string; source_query: string; tags?: string[] },
+): Promise<{ ok: boolean; mental_model: HindsightMentalModel; operation_id?: string | null }> {
+  return postJson(`/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models`, body)
+}
+
+export function updateHindsightMentalModel(
+  role: string,
+  mentalModelId: string,
+  body: { name?: string; source_query?: string },
+): Promise<{ ok: boolean; mental_model: HindsightMentalModel }> {
+  return patchJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models/${encodeURIComponent(mentalModelId)}`,
+    body,
+  )
+}
+
+export function refreshHindsightMentalModel(
+  role: string,
+  mentalModelId: string,
+): Promise<{ ok: boolean; operation_id?: string | null }> {
+  return postJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/mental-models/${encodeURIComponent(mentalModelId)}/refresh`,
+    {},
+  )
+}
+
+export function curateHindsightMemory(
+  role: string,
+  memoryId: string,
+  body: { text?: string; reason?: string; state?: 'valid' | 'invalidated' },
+): Promise<{ ok: boolean; memory_id: string }> {
+  return patchJson(
+    `/v1/hindsight/roles/${encodeURIComponent(role)}/memories/${encodeURIComponent(memoryId)}`,
+    body,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -907,6 +984,15 @@ export function whoami(): Promise<WhoAmI> {
 export function postJson<T>(path: string, body: unknown): Promise<T> {
   return apiFetch<T>(path, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    on403: 'forbidden',
+  })
+}
+
+export function patchJson<T>(path: string, body: unknown): Promise<T> {
+  return apiFetch<T>(path, {
+    method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     on403: 'forbidden',

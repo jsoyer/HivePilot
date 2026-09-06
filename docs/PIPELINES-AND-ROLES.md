@@ -118,7 +118,7 @@ fires unbidden and needs no pipeline-level opt-out.
 | plugin | contributes | scoped by `enable:`? |
 |---|---|---|
 | `headroom`, `token_savior` | `before_step` | **yes** |
-| `mem0`, `obsidian` | `before_step` / `after_step` | **yes** |
+| `hindsight`, `obsidian` | `before_step` / `after_step` | **yes** |
 | `rtk`, `gh`, `herdr`, `hugo` | runners | no — a task names the runner it wants |
 | `headroom_panel` | panel | no |
 | any | health check | no — health must report on everything installed |

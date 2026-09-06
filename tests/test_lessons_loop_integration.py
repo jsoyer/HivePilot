@@ -4,10 +4,10 @@ Cross-cutting integration tests for the Auto-Learning Lessons Loop PRD
 the redaction guarantee and the opt-in semantic fallback, end to end across
 `hivepilot.orchestrator`, `hivepilot.services.lessons_service`,
 `hivepilot.services.state_service`, `hivepilot.services.knowledge_service`,
-and the `mem0`/`obsidian` plugins -- rather than each module's own unit
+and the `obsidian` plugin -- rather than each module's own unit
 tests in isolation (`tests/test_lessons_distillation.py`,
 `tests/test_lessons_validation.py`, `tests/test_lessons_injection.py`,
-`tests/test_mem0.py`, `tests/test_plugin_obsidian.py`).
+`tests/test_plugin_obsidian.py`).
 
 Only the LLM boundary is mocked (`RunnerRegistry.capture_definition` /
 the distiller's `capture_fn`) -- every other layer (SQLite persistence,
@@ -23,7 +23,7 @@ Covers:
   prompt.
 - A `${secret:...}`-resolved value present in a run's outputs/detail never
   reaches: the persisted `lessons` table text, the prompt sent to the
-  distiller's `capture_fn`, or the `mem0`/`obsidian` `store()` hook args.
+  distiller's `capture_fn`, or the `obsidian` `store()` hook args.
 - `enable_semantic_lesson_retrieval=True` with the optional embedding
   extra unavailable never crashes `retrieve_lessons(semantic=True)` --
   falls back to the SQLite-ranked validated lessons.
@@ -59,15 +59,13 @@ from hivepilot.services.knowledge_service import build_lessons_context
 from hivepilot.services.lessons_service import retrieve_lessons
 
 REPO_ROOT = Path(__file__).parent.parent
-MEM0_PLUGIN_PATH = BUNDLED_PLUGINS / "mem0.py"
 OBSIDIAN_PLUGIN_PATH = BUNDLED_PLUGINS / "obsidian.py"
 
 
 def _load_plugin_module(path: Path, name: str) -> ModuleType:
     """Load a local-file plugin by path -- same mechanism
     `hivepilot.plugins._scan_local_plugins` uses. Mirrors
-    `tests/test_mem0.py::_load_mem0_module` / `tests/test_plugin_obsidian.
-    py::_load_obsidian_module`."""
+    `tests/test_plugin_obsidian.py::_load_obsidian_module`."""
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -340,36 +338,6 @@ class TestSecretNeverLeaksThroughLoop:
         rows = state_service.list_lessons("p", validated_only=False)
         assert len(rows) == 1
         assert _SECRET_VALUE not in rows[0]["text"]
-
-    def test_secret_never_in_mem0_store_args(self, tmp_path: Path) -> None:
-        config_provenance.register_secret_value(_SECRET_VALUE)
-        mem0_module = _load_plugin_module(MEM0_PLUGIN_PATH, "hivepilot_plugin_mem0_integration")
-
-        payload = RunnerPayload(
-            project_name="p",
-            project=ProjectConfig(path=tmp_path),
-            task_name="t",
-            step=TaskStep(name="s", runner="claude"),
-            metadata={"extra_prompt": f"use token {_SECRET_VALUE} to auth"},
-            secrets={"API_TOKEN": _SECRET_VALUE},
-        )
-        mock_client = MagicMock()
-
-        with (
-            patch.object(settings, "mem0_enabled", True),
-            patch.object(mem0_module, "_get_client", return_value=mock_client),
-        ):
-            mem0_module.store(
-                payload=payload,
-                role="developer",
-                output=f"result used {_SECRET_VALUE}",
-            )
-
-        assert mock_client.add.called
-        content = mock_client.add.call_args.args[0]
-        metadata = mock_client.add.call_args.kwargs["metadata"]
-        assert _SECRET_VALUE not in content
-        assert not any(_SECRET_VALUE in str(v) for v in metadata.values())
 
     def test_secret_never_in_obsidian_store_args(self, tmp_path: Path) -> None:
         config_provenance.register_secret_value(_SECRET_VALUE)

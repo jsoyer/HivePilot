@@ -1,4 +1,4 @@
-"""HP-53 slice 1: mem0 → Hindsight retain, idempotent, no plugin deletion."""
+"""HP-53: mem0 → Hindsight retain, idempotent. Plugin is retired; CLI remains."""
 
 from __future__ import annotations
 

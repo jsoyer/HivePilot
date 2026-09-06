@@ -12,6 +12,8 @@ Each nudge persists `verdicts.kind="nudge"` (new `findings_json` / `block_if_jso
 
 Does not ingest GitHub review webhooks. Does not enforce ownership as a merge gate. Does not change `orchestrator.Verdict`. Disposition still unset. Banks stay `{project}:{task}:{role}` vs `role:{name}`.
 
+Rebased onto current `main` (HP-55 / HP-53 / HP-20).
+
 Linear: [HP-50](https://linear.app/js-workspace/issue/HP-50/nudge-engine-sortie-verdict-structuree-re-route-cireviewechec-je). Parent HP-31.
 
 ## Testing

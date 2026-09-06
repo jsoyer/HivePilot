@@ -69,7 +69,7 @@ export const en = {
   'nav.models': 'Models',
   'nav.efficiency': 'Efficiency',
   'nav.health': 'Health',
-  'memoryBackends.notInterchangeable': 'These backends complement each other — they do not replace one another. mem0 and Obsidian recalls overlap by only 2–4% on real steps. Hindsight is a retain/recall engine on Postgres/pgvector the operator deploys.',
+  'memoryBackends.notInterchangeable': 'These backends complement each other — they do not replace one another. Obsidian is the local vault; Hindsight is the retain/recall engine on Postgres/pgvector. Historical mem0 rows may still appear after migration.',
   'memoryBackends.egressYes': 'leaves the host',
   'memoryBackends.egressNo': 'stays on the host',
   'memoryBackends.about.mem0': 'Hosted semantic store, keyed by project:task:role. Step output is sent to a third party; only registered secrets are redacted.',
@@ -473,23 +473,6 @@ export const en = {
   'graph.statusSkipped': 'skipped',
   'graph.statusFailed': 'failed',
 
-  // ---- Mem0 view ---------------------------------------------------------
-  'mem0.title': 'Mem0 memory search',
-  'mem0.description': 'Semantic search over the mem0 store — requires an admin token',
-  'mem0.searchPlaceholder': 'Search memories…',
-  'mem0.searchAriaLabel': 'Search memories',
-  'mem0.searchButton': 'Search',
-  'mem0.searchHint': 'Enter a search query above to look up memories.',
-  'mem0.requiresTokenLead': 'This view requires an',
-  'mem0.requiresTokenTail': 'token.',
-  'mem0.requiresTokenNote':
-    'Your current token can still use the other Pollen tabs — only Mem0 search needs a higher role.',
-  'mem0.notConfigured': 'mem0 is not configured.',
-  'mem0.noResults': 'No memories found for that query.',
-  'mem0.category': 'Category',
-  'mem0.timestamp': 'Timestamp',
-  'mem0.memory': 'Memory',
-
   // ---- Approvals view ------------------------------------------------------
   'approvals.descriptionCanApprove': 'Pending pipeline approvals — approve or deny below.',
   'approvals.descriptionReadOnly':
@@ -635,7 +618,7 @@ export const en = {
   'quality.colActor': 'Actor',
   'quality.emptyTitle': 'No memory activity recorded yet',
   'quality.emptyState':
-    'These figures come from mem0 instrumentation, which is opt-in. Once it is enabled and agents start searching and storing memory, search success, recall freshness and the gaps by namespace appear here.',
+    'These figures come from optional memory instrumentation. Once agents start searching and storing memory, search success, recall freshness and the gaps by namespace appear here.',
   'quality.requiresTokenLead': 'This section requires a',
   'quality.requiresTokenTail': 'higher-privilege token.',
   'quality.requiresTokenNote':
@@ -643,10 +626,43 @@ export const en = {
 
   // ---- Memory view (unified Quality/Growth/Search tabs) -----------------
   'memory.description':
-    'Whether the memory substrate actually helps (Quality), how much of it there is (Growth), and what is in it (Search).',
+    'Curated knowledge per role (Knowledge), whether recall helps (Quality), and how much is stored (Growth).',
   'memory.tabQuality': 'Quality',
   'memory.tabGrowth': 'Growth',
-  'memory.tabSearch': 'Search',
+  'memory.tabKnowledge': 'Knowledge',
+  'memory.knowledgeTitle': 'Knowledge by role',
+  'memory.knowledgeDescription':
+    'Mental Models and Observations on the Hindsight identity bank for this role (role:name).',
+  'memory.roleLabel': 'Role',
+  'memory.bankId': 'Bank',
+  'memory.knowledgeDisabledTitle': 'Hindsight is not configured',
+  'memory.knowledgeDisabledBody':
+    'Enable HIVEPILOT_HINDSIGHT_ENABLED and install hindsight-client to inspect role banks.',
+  'memory.mentalModelsTitle': 'Mental Models',
+  'memory.mentalModelsHelp':
+    'Curated summaries the role can reuse. Edit the query, then refresh to regenerate content.',
+  'memory.mentalModelsEmpty': 'No mental models on this bank yet.',
+  'memory.mentalModelNoContent': 'No content yet — refresh after the bank has memories.',
+  'memory.mentalModelName': 'Mental model name',
+  'memory.mentalModelQuery': 'Source query',
+  'memory.createMentalModel': 'Create a mental model',
+  'memory.create': 'Create',
+  'memory.save': 'Save',
+  'memory.cancel': 'Cancel',
+  'memory.edit': 'Edit',
+  'memory.refresh': 'Refresh',
+  'memory.stale': 'May be stale',
+  'memory.observationsTitle': 'Observations',
+  'memory.observationsHelp':
+    'Consolidated knowledge with supporting quotes. Observations are derived — edit the source facts underneath.',
+  'memory.observationsEmpty': 'No observations on this bank yet.',
+  'memory.proofCount': 'Proofs',
+  'memory.confidence': 'Confidence',
+  'memory.confidenceUnknown': 'No confidence score on this observation',
+  'memory.editSourceFact': 'Correct source fact',
+  'memory.editSourceFactHelp': 'Editing a source fact re-consolidates the observation.',
+  'memory.sourceFactText': 'Source fact text',
+  'memory.editReason': 'Why this correction',
   'memory.growthTitle': 'Memory growth',
   'memory.growthDescription': 'How much is stored, where, over time, and by whom.',
   'memory.totalMemories': 'Total memories',
