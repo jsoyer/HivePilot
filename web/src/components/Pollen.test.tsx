@@ -143,6 +143,7 @@ const mocks = vi.hoisted(() => ({
   }, note: 'Per-role attribution requires steps.role.' }),
   fetchLessons: vi.fn().mockResolvedValue({ lessons: [], by_role: {} }),
   fetchVerdicts: vi.fn().mockResolvedValue({ verdicts: [], by_role: {} }),
+  fetchRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
@@ -205,6 +206,8 @@ const GROUPED_TAB_ORDER = [
   // 1.7M tokens of unread cache creation behind an 85% hit rate.
   'Cache',
   'Agents',
+  // Agent Studio (HP-66) sits beside the Agents roster under System.
+  'Studio',
   // The agents' exchanges as threads, beside the roster of who ran.
   'Conversations',
   'Graph',

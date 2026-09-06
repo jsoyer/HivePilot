@@ -14,6 +14,7 @@ import {
   Search,
   Split,
   Users,
+  UserRoundCog,
   Workflow,
   Zap,
   Gauge,
@@ -40,6 +41,7 @@ import { ThemeToggle } from './nav/ThemeToggle'
 import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
 import { EspacesView } from './views/EspacesView'
+import { AgentStudioView } from './views/AgentStudioView'
 import { AgentsView } from './views/AgentsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
@@ -103,6 +105,9 @@ const BUILTIN_TABS = [
   // token, grouped with Health/Graph under "System" in nav-config.ts's
   // NAV_GROUP_ORDER (an observability surface over the fleet's roles).
   { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
+  // Agent Studio (HP-66): store-backed role CRUD on GET/POST/PUT/DELETE
+  // /v1/roles. Reads for any token; writes gate on useRole().can('admin').
+  { value: 'studio', labelKey: 'nav.studio', Panel: AgentStudioView, Icon: UserRoundCog },
   // The agents' exchanges, read as conversations. Adds no capture: every
   // stage's output has been persisted as an `interactions` row carrying its
   // role key all along, and nothing ever presented it as a thread. Replying
