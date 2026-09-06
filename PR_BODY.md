@@ -1,24 +1,19 @@
 ## Summary
 
-HP-20: per-role procedural avatars on the Pollen Agents page.
+HP-66: Agent Studio UI on the store-backed `/v1/roles` CRUD (HP-25).
 
-- Pin `@bible-strong/avatar-react` + `@bible-strong/avatar-core` at `0.1.0`.
-- One Strobi base rig (`web/src/assets/avatars/base.avatar.json`); each of the 8 roles overrides body colour only.
-- `<RoleAvatar>` maps run state → animation (`idle` / `working` / `thinking` / `happy` / `sad` / `suspicious`).
-- Wired on the Agents roster, attention band, and role drawer. Unmapped roles keep the hashed initial badge.
-- AGPL-3.0-only renderer documented in `web/src/assets/avatars/ATTRIBUTION.md` (compatible with HivePilot GPL-3.0).
+- New System tab **Studio**: roster table + drawer editor.
+- Reads for any token; New / Save / Delete only when `can('admin')`.
+- Payload matches `RoleWrite` (name, title, profile, runner, model, inputs/outputs, can_block, order, prompt_text / prompt_file).
+- Known roles reuse HP-20 `RoleAvatar`.
 
-Rebased onto current `main` (includes HP-55 Knowledge panel + HP-53 mem0 retirement). Rebuilt committed `hivepilot/webui/static/`.
+Does not add NL authoring (HP-24 Phase 3). Does not change the roles store or governance (`bypassPermissions` still fail-closed server-side).
 
-Does not author 8 unique Lab exports, and does not yet replace badges on Sweep graph nodes / activity feed / run cards.
-
-Linear: [HP-20](https://linear.app/js-workspace/issue/HP-20/role-avatars-in-pollen-animated-bible-strongavatar-react).
+Linear: [HP-66](https://linear.app/js-workspace/issue/HP-66/ui-agent-studio-front-crud-des-roles-backend-hp-25-livre). Parent HP-38.
 
 ## Testing
 
-- [x] `cd web && npm test -- --run src/components/RoleAvatar.test.tsx src/components/views/AgentsView.test.tsx`
-- [x] `cd web && npm run build` (Node 26.5.0)
-- [ ] `pytest` — re-run after push; previous CI failure was against stale `main`
-- [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
+- [x] `cd web && npm test -- --run src/components/views/AgentStudioView.test.tsx src/components/Pollen.test.tsx` (29 passed)
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-BBCGRB4x.js`)
 
-Replay: open Pollen → Agents; the eight first-class roles show coloured procedural avatars; custom roles stay initials.
+Replay: Pollen → Studio; admin token can create/edit/delete; read token sees the roster only.
