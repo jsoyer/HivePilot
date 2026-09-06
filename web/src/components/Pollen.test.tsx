@@ -126,6 +126,8 @@ const mocks = vi.hoisted(() => ({
     recent_dispatches: [],
     auto_dispatch_allowlist: [],
   }),
+  fetchSchedules: vi.fn().mockResolvedValue({ schedules: [] }),
+  fetchRoutines: vi.fn().mockResolvedValue({ routines: [] }),
   // Mirador "Agents" view: GET /v1/agents (roster) + /v1/verdicts (severity
   // signal, fetched unfiltered on mount) — mocked genuinely-empty so this
   // shell test exercises tab switching only, not AgentsView's own

@@ -5,18 +5,28 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { AutopilotState } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchAutopilot, pauseAutopilot, resumeAutopilot, fetchSchedules, useRoleMock } =
+const { fetchAutopilot, pauseAutopilot, resumeAutopilot, fetchSchedules, fetchRoutines, fetchRoles, useRoleMock } =
   vi.hoisted(() => ({
     fetchAutopilot: vi.fn(),
     pauseAutopilot: vi.fn(),
     resumeAutopilot: vi.fn(),
     fetchSchedules: vi.fn(),
+    fetchRoutines: vi.fn(),
+    fetchRoles: vi.fn(),
     useRoleMock: vi.fn(),
   }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchAutopilot, pauseAutopilot, resumeAutopilot, fetchSchedules }
+  return {
+    ...actual,
+    fetchAutopilot,
+    pauseAutopilot,
+    resumeAutopilot,
+    fetchSchedules,
+    fetchRoutines,
+    fetchRoles,
+  }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -64,6 +74,10 @@ beforeEach(() => {
   resumeAutopilot.mockReset()
   fetchSchedules.mockReset()
   fetchSchedules.mockResolvedValue({ schedules: [] })
+  fetchRoutines.mockReset()
+  fetchRoutines.mockResolvedValue({ routines: [] })
+  fetchRoles.mockReset()
+  fetchRoles.mockResolvedValue({ roles: [] })
   useRoleMock.mockReset()
   vi.spyOn(window, 'confirm').mockReturnValue(true)
   container = document.createElement('div')
@@ -99,6 +113,8 @@ describe('AutopilotView', () => {
 
     expect(container.textContent).toContain('Active')
     expect(container.textContent).not.toContain('Paused')
+    expect(container.querySelector('[data-testid="automations-widget"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="routines-card"]')).not.toBeNull()
   })
 
   it('renders Paused status when paused', async () => {

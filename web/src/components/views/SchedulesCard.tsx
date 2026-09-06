@@ -28,7 +28,7 @@ export function SchedulesCard() {
 
   return (
     <section className="flex flex-col gap-3" data-testid="schedules-card">
-      <SectionHeader index="04" title={t('schedules.title')} />
+      <SectionHeader index="05" title={t('schedules.title')} />
       {state.status === 'success' ? (
         <ScheduleList
           schedules={state.data.schedules}
