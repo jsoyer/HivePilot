@@ -69,6 +69,16 @@ class TestConnect:
         mc.connect("openrouter", "sk-or", env_path=tmp_path / ".env")
         assert __import__("os").environ["OPENROUTER_API_KEY"] == "sk-or"
 
+    def test_nous_saves_nous_api_key(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setattr(mv, "verify", lambda *a, **k: _ok())
+        monkeypatch.delenv("NOUS_API_KEY", raising=False)
+        env = tmp_path / ".env"
+        result = mc.connect("nous", "sk-nous", env_path=env)
+        assert result.ok is True
+        assert result.env_key == "NOUS_API_KEY"
+        assert "NOUS_API_KEY=sk-nous" in env.read_text(encoding="utf-8")
+        assert __import__("os").environ["NOUS_API_KEY"] == "sk-nous"
+
     def test_fingerprint_is_not_the_key(self):
         fp = mc.key_fingerprint("sk-super-secret")
         assert "sk-super" not in fp

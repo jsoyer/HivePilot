@@ -29,6 +29,7 @@ import { AsyncSection } from './AsyncSection'
 const CONNECT_PROVIDERS = [
   'openai',
   'openrouter',
+  'nous',
   'anthropic',
   'google',
   'mistral',

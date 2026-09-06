@@ -1,23 +1,19 @@
 ## Summary
 
-HP-64: typed Pollen client from FastAPI OpenAPI, plus a CI drift gate.
+HP-71: Hermes-4 as an OpenAI-compat **model** (Nous Portal / OpenRouter). The Hermes Agent framework is not embedded.
 
-- Curated contract (`roles`, `concierge`, `schedules` + named trigger) exported to `web/openapi.json`.
-- Generated TS types (`web/src/lib/generated/openapi.d.ts`) via `openapi-typescript`.
-- CI job `OpenAPI client drift` fails if the spec or generated types are stale.
-- Response models on roles / concierge / trigger so the spec is not `{}`.
-- New `GET /v1/schedules`; Autopilot lists named schedules and can fire `POST /v1/webhook/trigger/{name}`.
-- `fetchRole` + complete `RoleWritePayload` optional fields.
+- `model_profiles.yaml` adds `openrouter:` / `nous:` columns plus dedicated `hermes-4` and `hermes-4-405b` profiles.
+- `api_provider: nous` posts to `https://inference-api.nousresearch.com/v1/chat/completions` (`NOUS_API_KEY`).
+- Providers panel + `POST /v1/models/verify|connect` accept `nous` (SSRF allowlist includes `inference-api.nousresearch.com`).
+- Default `HIVEPILOT_DEV_FALLBACK_RUNNERS` is `codex`, `cursor`, `openrouter`. A developer quota/credit miss falling over to OpenRouter gets the profile's Hermes-4 slug and `mode: api` (not the originating Claude alias).
 
-Linear: [HP-64](https://linear.app/js-workspace/issue/HP-64/client-ts-type-genere-depuis-lopenapi-fastapi-gate-anti-drift-cable).
+Linear: [HP-71](https://linear.app/js-workspace/issue/HP-71/integrer-hermes4-comme-providermodele-nous-portal-openrouter).
 
-Replay: `python scripts/export_openapi.py && cd web && npm run generate:api`.
+Replay: `hivepilot run example-api docs --dry-run` (profiles only). Live check: `hivepilot` model verify `nous` with `NOUS_API_KEY`, or OpenRouter with `OPENROUTER_API_KEY`.
 
 ## Testing
 
-- [x] `pytest tests/test_openapi_contract.py tests/test_roles_api.py tests/test_concierge_endpoint.py`
-- [x] `cd web && npm test -- --run src/lib/generated/contract.test.ts src/lib/pollen-api.test.ts src/components/views/SchedulesCard.test.tsx src/components/views/AutopilotView.test.tsx src/lib/i18n/fr.test.ts`
-- [x] `cd web && npm run build` (Node 26.5.0 → `index-BVOaHhYS.js`)
-- [x] `python scripts/export_openapi.py --check`
+- [x] `pytest tests/test_hermes4_profiles.py tests/test_model_verify.py tests/test_model_connect.py tests/test_local_models.py tests/test_prompt_cli_runner.py tests/test_quota_fallback.py tests/test_model_profiles_single_source.py` (74 passed)
+- [x] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx` (8 passed)
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-C0GPgnZk.js`)
 - [x] `ruff check` on touched Python
-- [x] `mypy` on `api_service.py` / `openapi_contract.py` (CI typecheck fix: return models, not dicts)

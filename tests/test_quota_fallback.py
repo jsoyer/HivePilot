@@ -220,6 +220,62 @@ def test_non_developer_role_does_not_fallback():
     assert orch.registry.capture_definition.call_count == 1
 
 
+def test_developer_quota_falls_back_to_openrouter_with_hermes_model(monkeypatch):
+    """HP-71: last-resort OSS fallback is OpenRouter + the profile's Hermes-4 slug."""
+    from hivepilot import config
+
+    monkeypatch.setattr(config.settings, "dev_fallback_runners", ["openrouter"])
+
+    orch = _make_orchestrator_with_mocked_registry()
+    task, step = _make_task_config(role="developer")
+    project = _make_project_config()
+    seen = {}
+
+    def capture_definition_side_effect(runner_def, payload):
+        if runner_def.kind == "claude":
+            raise RuntimeError(QUOTA_MSG)
+        if runner_def.kind == "openrouter":
+            seen["def"] = runner_def
+            seen["payload"] = payload
+            return "hermes output"
+        raise RuntimeError(f"unexpected runner {runner_def.kind}")
+
+    orch.registry.capture_definition.side_effect = capture_definition_side_effect
+
+    with (
+        patch("hivepilot.roles.get_role") as mock_get_role,
+        patch("hivepilot.roles.resolve_runner", return_value=("claude", "sonnet", None)),
+        patch("hivepilot.roles.resolve_host", return_value=None),
+        patch("hivepilot.services.state_service.record_step"),
+        patch(
+            "hivepilot.services.profile_service.resolve_profile_model",
+            return_value="nousresearch/hermes-4-70b",
+        ),
+    ):
+        mock_role = MagicMock()
+        mock_role.models = []
+        mock_role.permission_mode = None
+        mock_role.model_profile = "coding"
+        mock_get_role.return_value = mock_role
+
+        result = orch._execute_task(
+            project=project,
+            task_name="dev-task",
+            task=task,
+            extra_prompt=None,
+            auto_git=False,
+            simulate=False,
+            dry_run=True,
+        )
+
+    assert result == "hermes output"
+    assert seen["def"].kind == "openrouter"
+    assert seen["def"].model == "nousresearch/hermes-4-70b"
+    assert seen["def"].options["mode"] == "api"
+    assert seen["payload"].step.metadata["model"] == "nousresearch/hermes-4-70b"
+    assert seen["payload"].step.metadata["mode"] == "api"
+
+
 def test_developer_credit_error_falls_back_to_codex():
     """HP-70 quick-win: a NON-quota "no credit" error on the primary also fails
     over to the fallback runner (not just quota)."""

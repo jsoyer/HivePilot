@@ -522,6 +522,25 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
                 timeout=timeout,
             )
+        elif provider == "nous":
+            # Hermes-4 (HP-71) via Nous Portal's OpenAI-compat endpoint.
+            # The Hermes *agent* framework is deliberately not embedded.
+            api_key = (
+                env.get("NOUS_API_KEY")
+                or env.get("NOUS_PORTAL_API_KEY")
+                or env.get("NOUSRESEARCH_API_KEY")
+            )
+            if not api_key:
+                raise RuntimeError("NOUS_API_KEY missing.")
+            endpoint = (
+                env.get("NOUS_BASE_URL") or "https://inference-api.nousresearch.com/v1"
+            ).rstrip("/")
+            return self._post_json(
+                url=f"{endpoint}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
+                timeout=timeout,
+            )
         else:
             raise ValueError(f"Unsupported API provider: {provider}")
 

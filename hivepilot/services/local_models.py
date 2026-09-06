@@ -24,6 +24,7 @@ _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
 _VERIFY_CLOUD_HOSTS = {
     "api.openai.com",
     "openrouter.ai",
+    "inference-api.nousresearch.com",
     "api.anthropic.com",
     "generativelanguage.googleapis.com",
     "api.mistral.ai",

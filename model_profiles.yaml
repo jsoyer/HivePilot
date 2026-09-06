@@ -4,16 +4,39 @@ claude_profiles:
     grok: grok-4.6
     cursor: gpt-5.3-codex-high
     ollama: qwen2.5-coder
+    # HP-71: Hermes-4 as the OpenAI-compat OSS column. OpenRouter slug for
+    # the built-in `openrouter` runner; native Nous Portal name for
+    # `api_provider: nous`.
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
   architecture:
     model: opus
     grok: grok-4.6
     cursor: cursor-grok-4.6-high
     ollama: llama3.1
+    openrouter: nousresearch/hermes-4-405b
+    nous: Hermes-4-405B
   automation:
     model: haiku
     grok: grok-4.5
     cursor: composer-2.5-fast
     ollama: llama3.2
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
+  # Dedicated Hermes-4 profiles — bind a role with `model_profile: hermes-4`
+  # (or hermes-4-405b) to use the model as primary via `runner: openrouter`
+  # or `api_provider: nous`. Claude `model:` stays so a claude roster still
+  # resolves.
+  hermes-4:
+    model: sonnet
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
+    ollama: qwen2.5-coder
+  hermes-4-405b:
+    model: opus
+    openrouter: nousresearch/hermes-4-405b
+    nous: Hermes-4-405B
+    ollama: llama3.1
 
 # Role-to-profile bindings for V4 agent roles (Phase 1 — all Claude).
 # Strategy/security roles use architecture (opus); implementation/review

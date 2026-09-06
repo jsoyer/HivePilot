@@ -52,6 +52,7 @@ class TestDispatch:
         monkeypatch.setattr(mv, "_get_json", _ok({"data": [{"id": "m"}]}))
         assert mv.verify("openai", api_key="k").ok is True
         assert mv.verify("openrouter", api_key="k").target == "openrouter"
+        assert mv.verify("nous", api_key="k").target == "nous"
 
     def test_ollama_defaults_to_local_endpoint(self, monkeypatch):
         seen = {}
@@ -104,6 +105,21 @@ class TestKeyResolution:
         monkeypatch.setattr(mv, "_get_json", lambda url, headers, timeout: (200, {"data": []}))
         # would fail if the key weren't resolved into a Bearer header path
         assert mv.verify("openrouter").ok is True
+
+    def test_nous_env_var_and_default_url(self, monkeypatch):
+        monkeypatch.setenv("NOUS_API_KEY", "sk-nous")
+        seen = {}
+
+        def _capture(url, headers, timeout):  # noqa: ANN001
+            seen["url"] = url
+            seen["headers"] = headers
+            return 200, {"data": [{"id": "Hermes-4-70B"}]}
+
+        monkeypatch.setattr(mv, "_get_json", _capture)
+        res = mv.verify("nous")
+        assert res.ok is True
+        assert seen["url"] == "https://inference-api.nousresearch.com/v1/models"
+        assert seen["headers"]["Authorization"] == "Bearer sk-nous"
 
     def test_openai_compatible_falls_back_to_openai_key(self, monkeypatch):
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)

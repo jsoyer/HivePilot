@@ -15,6 +15,7 @@ def test_loopback_accepted():
 
 def test_verify_target_allows_known_cloud_and_loopback():
     assert local_models.verify_target_allowed("https://api.openai.com/v1")
+    assert local_models.verify_target_allowed("https://inference-api.nousresearch.com/v1")
     assert local_models.verify_target_allowed("http://127.0.0.1:1234/v1")
     assert not local_models.verify_target_allowed("http://169.254.169.254/latest")
 

@@ -92,6 +92,11 @@ Registered at import time — no PATH check required. Each can be opted out via
 - `claude`
 - `vibe`
 - `openrouter` — **API-only**: `supported_modes == {"api"}`, no CLI binary exists for it.
+  Default `model_profiles.yaml` maps each profile's `openrouter:` column to Hermes-4
+  (HP-71). A developer quota/unavailable miss falls over here after `codex` / `cursor`
+  (`HIVEPILOT_DEV_FALLBACK_RUNNERS`). Direct Nous Portal is `api_provider: nous`
+  (OpenAI-compat at `https://inference-api.nousresearch.com/v1`, key `NOUS_API_KEY`)
+  — the Hermes Agent framework is not embedded.
 
 ### PATH-gated plugin agent kinds
 

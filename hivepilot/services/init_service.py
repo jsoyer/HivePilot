@@ -48,12 +48,26 @@ model_profiles:
   coding:
     claude: sonnet
     grok: grok-4.6
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
   architecture:
     claude: opus
     grok: grok-4.6
+    openrouter: nousresearch/hermes-4-405b
+    nous: Hermes-4-405B
   automation:
     claude: haiku
     grok: grok-4.5
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
+  hermes-4:
+    claude: sonnet
+    openrouter: nousresearch/hermes-4-70b
+    nous: Hermes-4-70B
+  hermes-4-405b:
+    claude: opus
+    openrouter: nousresearch/hermes-4-405b
+    nous: Hermes-4-405B
 """
 
 _SCHEDULES_YAML = """\

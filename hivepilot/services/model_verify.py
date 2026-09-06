@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 _OPENAI_COMPATIBLE = {
     "openai",
     "openrouter",
+    "nous",
     "mistral",
     "perplexity",
     "ollama",
@@ -41,6 +42,7 @@ _OPENAI_COMPATIBLE = {
 _DEFAULT_BASE_URL = {
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    "nous": "https://inference-api.nousresearch.com/v1",
     "mistral": "https://api.mistral.ai/v1",
     "perplexity": "https://api.perplexity.ai",
     "ollama": "http://localhost:11434/v1",
@@ -52,6 +54,7 @@ _DEFAULT_BASE_URL = {
 _ENV_KEY = {
     "openai": "OPENAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "nous": "NOUS_API_KEY",
     "mistral": "MISTRAL_API_KEY",
     "perplexity": "PERPLEXITY_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
