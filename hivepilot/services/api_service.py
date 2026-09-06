@@ -2143,20 +2143,22 @@ def concierge_ask(
         conversation_id=conversation_id,
         user_id=caller.token,
     )
-    return {
-        "kind": decision.kind,
-        "answer_text": decision.answer_text,
-        "role_key": decision.role_key,
-        "target": decision.target,
-        "order": decision.order,
-        "action": decision.action,
-        "params": decision.params,
-        "destructive": decision.destructive,
-        "dispatches": [
-            {"role_key": d.role_key, "target": d.target, "order": d.order}
-            for d in (decision.dispatches or [])
-        ],
-    }
+    return ConciergeDecisionOut.model_validate(
+        {
+            "kind": decision.kind,
+            "answer_text": decision.answer_text,
+            "role_key": decision.role_key,
+            "target": decision.target,
+            "order": decision.order,
+            "action": decision.action,
+            "params": decision.params,
+            "destructive": decision.destructive,
+            "dispatches": [
+                {"role_key": d.role_key, "target": d.target, "order": d.order}
+                for d in (decision.dispatches or [])
+            ],
+        }
+    )
 
 
 @v1.get("/analytics/trends")
@@ -3981,7 +3983,7 @@ def _apply_role_write(payload: RoleWrite) -> dict:
 def list_roles_endpoint(
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> RoleListResponse:
-    return RoleListResponse(roles=roles.api_roster())
+    return RoleListResponse(roles=[RoleOut.model_validate(row) for row in roles.api_roster()])
 
 
 @v1.get("/roles/{name}")

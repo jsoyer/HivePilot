@@ -20,3 +20,4 @@ Replay: `python scripts/export_openapi.py && cd web && npm run generate:api`.
 - [x] `cd web && npm run build` (Node 26.5.0 → `index-BVOaHhYS.js`)
 - [x] `python scripts/export_openapi.py --check`
 - [x] `ruff check` on touched Python
+- [x] `mypy` on `api_service.py` / `openapi_contract.py` (CI typecheck fix: return models, not dicts)
