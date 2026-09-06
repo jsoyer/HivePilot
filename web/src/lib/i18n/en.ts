@@ -898,6 +898,32 @@ export const en = {
   'autopilot.allowlistEmptyTitle': 'No pipeline may auto-dispatch',
   'autopilot.allowlistEmptyBody':
     'Autopilot can still queue objectives, but it will never run one. Add a pipeline to auto_dispatch in policies.yaml to let it act.',
+  'automations.title': 'Automations',
+  'automations.subtitle':
+    'Role routines and YAML schedules share the scheduler daemon. Autopilot drains from the same tick.',
+  'routines.title': 'Role routines',
+  'routines.subtitle':
+    'Cron expressions in an IANA timezone, one role per routine. The same replace key updates the existing row.',
+  'routines.emptyTitle': 'No routines yet',
+  'routines.emptyBody':
+    'Save a routine to run a role’s command task on a cron. Fire one immediately, or let the daemon wait for next_run_at.',
+  'routines.fieldRole': 'Role',
+  'routines.fieldCrons': 'Crons',
+  'routines.fieldTimezone': 'Timezone',
+  'routines.fieldProjects': 'Projects',
+  'routines.fieldReplaceKey': 'Replace key',
+  'routines.save': 'Save routine',
+  'routines.trigger': 'Run now',
+  'routines.enable': 'Enable',
+  'routines.disable': 'Disable',
+  'routines.delete': 'Delete',
+  'routines.deleteConfirm': 'Delete the {role} routine?',
+  'routines.needRun': 'Creating or firing a routine needs a run-rank token.',
+  'routines.disabled': 'disabled',
+  'routines.nextRun': 'next {age}',
+  'routines.noNext': 'no next run',
+  'routines.lastRun': 'last run {age}',
+  'routines.neverRun': 'never run',
   'schedules.title': 'Named schedules',
   'schedules.emptyTitle': 'No schedules configured',
   'schedules.emptyBody':

@@ -901,6 +901,32 @@ export const fr: Record<TranslationKey, string> = {
   'autopilot.allowlistEmptyTitle': 'Aucun pipeline ne peut être lancé automatiquement',
   'autopilot.allowlistEmptyBody':
     'L’autopilote peut toujours mettre des objectifs en file, mais il n’en exécutera aucun. Ajoutez un pipeline à auto_dispatch dans policies.yaml pour l’autoriser à agir.',
+  'automations.title': 'Automatisations',
+  'automations.subtitle':
+    'Les routines par rôle et les planifications YAML partagent le daemon. L’autopilote se vide sur le même tick.',
+  'routines.title': 'Routines par rôle',
+  'routines.subtitle':
+    'Expressions cron dans un fuseau IANA, un rôle par routine. La même clé de remplacement met à jour la ligne existante.',
+  'routines.emptyTitle': 'Aucune routine',
+  'routines.emptyBody':
+    'Enregistrez une routine pour lancer la tâche de commande d’un rôle sur un cron. Déclenchement immédiat, ou le daemon attend next_run_at.',
+  'routines.fieldRole': 'Rôle',
+  'routines.fieldCrons': 'Crons',
+  'routines.fieldTimezone': 'Fuseau',
+  'routines.fieldProjects': 'Projets',
+  'routines.fieldReplaceKey': 'Clé de remplacement',
+  'routines.save': 'Enregistrer',
+  'routines.trigger': 'Lancer',
+  'routines.enable': 'Activer',
+  'routines.disable': 'Désactiver',
+  'routines.delete': 'Supprimer',
+  'routines.deleteConfirm': 'Supprimer la routine {role} ?',
+  'routines.needRun': 'Créer ou lancer une routine demande un jeton de rang run.',
+  'routines.disabled': 'désactivée',
+  'routines.nextRun': 'prochain {age}',
+  'routines.noNext': 'pas de prochain run',
+  'routines.lastRun': 'dernier run {age}',
+  'routines.neverRun': 'jamais lancée',
   'schedules.title': 'Planifications nommées',
   'schedules.emptyTitle': 'Aucune planification configurée',
   'schedules.emptyBody':

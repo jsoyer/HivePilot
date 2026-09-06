@@ -2560,6 +2560,67 @@ export function triggerSchedule(name: string): Promise<TriggerResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// Routines (HP-56/HP-57) — GET/POST/PATCH/DELETE /v1/routines + webhook fire
+// ---------------------------------------------------------------------------
+
+export interface Routine {
+  id: string
+  tenant: string
+  role: string
+  projects: string[]
+  crons: string[]
+  timezone: string
+  next_run_at: string | null
+  last_run_at: string | null
+  enabled: boolean
+  replace_key: string | null
+  created_ts?: string | null
+  updated_ts?: string | null
+}
+
+export interface RoutineListResponse {
+  routines: Routine[]
+}
+
+export interface RoutineWrite {
+  role: string
+  projects: string[]
+  crons: string[]
+  timezone: string
+  enabled: boolean
+  replace_key?: string | null
+}
+
+export interface RoutineTriggerResponse {
+  routine_id: string
+  status: string
+  detail: string
+}
+
+export function fetchRoutines(): Promise<RoutineListResponse> {
+  return apiFetch<RoutineListResponse>('/v1/routines', { on403: 'forbidden' })
+}
+
+export function createRoutine(payload: RoutineWrite): Promise<Routine> {
+  return postJson<Routine>('/v1/routines', payload)
+}
+
+export function patchRoutine(id: string, payload: Partial<RoutineWrite>): Promise<Routine> {
+  return patchJson<Routine>(`/v1/routines/${encodeURIComponent(id)}`, payload)
+}
+
+export function deleteRoutine(id: string): Promise<{ deleted: boolean; id: string }> {
+  return apiFetch<{ deleted: boolean; id: string }>(`/v1/routines/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    on403: 'forbidden',
+  })
+}
+
+export function triggerRoutine(id: string): Promise<RoutineTriggerResponse> {
+  return postJson<RoutineTriggerResponse>(`/v1/webhook/routines/${encodeURIComponent(id)}`, {})
+}
+
+// ---------------------------------------------------------------------------
 // Skill workshop (HP-79) — usage + propose/accept/reject. Never auto-applies.
 // ---------------------------------------------------------------------------
 
