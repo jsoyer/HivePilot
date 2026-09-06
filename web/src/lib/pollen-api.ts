@@ -782,6 +782,38 @@ export function installPlugin(name: string): Promise<PluginInstallResult> {
   })
 }
 
+export interface PluginPackPreview {
+  pack: {
+    name: string
+    version: string
+    description: string
+    source: string
+    plugins: { name: string; enable: boolean }[]
+    capabilities: string[]
+    credentials: string[]
+  }
+  compatible: boolean
+  blockers: string[]
+  warnings: string[]
+  yaml?: string
+}
+
+export function fetchPluginPacks(): Promise<{ packs: PluginPackPreview[] }> {
+  return apiFetch('/v1/plugin-packs')
+}
+
+export function fetchPluginPack(name: string): Promise<PluginPackPreview> {
+  return apiFetch(`/v1/plugin-packs/${encodeURIComponent(name)}`)
+}
+
+export function installPluginPack(name: string): Promise<{
+  pack: string
+  installed: { name: string; installed_to: string; enabled: boolean; prereq_detail: string }[]
+  restart_required: boolean
+}> {
+  return postJson(`/v1/plugin-packs/${encodeURIComponent(name)}/install`, { consent: true })
+}
+
 export function fetchPluginsHealth(): Promise<PluginsHealthResponse> {
   return apiFetch<PluginsHealthResponse>('/v1/plugins/health')
 }

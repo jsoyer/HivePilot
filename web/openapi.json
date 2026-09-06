@@ -1589,6 +1589,40 @@
         "title": "PluginInstallResponse",
         "type": "object"
       },
+      "PluginPackImportRequest": {
+        "properties": {
+          "consent": {
+            "default": false,
+            "title": "Consent",
+            "type": "boolean"
+          },
+          "install": {
+            "default": false,
+            "title": "Install",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "PluginPackImportRequest",
+        "type": "object"
+      },
+      "PluginPackInstallRequest": {
+        "properties": {
+          "consent": {
+            "default": false,
+            "title": "Consent",
+            "type": "boolean"
+          }
+        },
+        "title": "PluginPackInstallRequest",
+        "type": "object"
+      },
       "PluginToggleResponse": {
         "properties": {
           "disabled": {

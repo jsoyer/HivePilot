@@ -304,6 +304,22 @@ hivepilot plugins enable codex      # installs the codex CLI if missing, places 
 hivepilot plugins disable codex     # flips CODEX_ENABLED=false — does not uninstall the codex binary
 ```
 
+## Plugin packs (HP-77)
+
+A pack is a YAML manifest: curated plugin names + config env refs + credential *names* + host/capability guards. Installing one is a loop over `plugins install` — the hub never ships plugin code.
+
+```bash
+hivepilot plugins packs list
+hivepilot plugins packs info skills-kit
+hivepilot plugins packs install skills-kit --yes
+```
+
+- Bundled packs live in `hivepilot/bundled_packs/` (`skills-kit`, `obsidian-memory`).
+- Paste/import via `POST /v1/plugin-packs/import` (admin). Share with `GET /v1/plugin-packs/{name}` (`yaml` field).
+- Literal `HIVEPILOT_*TOKEN`/`*KEY`/`*SECRET` values are refused — use `${env:}` / `${secret:}` refs.
+- Install requires `consent: true`. Preview reports platform/version blockers, capability-policy gaps, and missing credential env vars.
+- Optional hub: `HIVEPILOT_PLUGIN_PACKS_INDEX_URL` (metadata JSON/YAML only).
+
 ## Installing built-in example plugins
 
 Before this command existed, trying one of the built-in example plugins (`rtk`, `herdr`, `headroom`, `hugo`, `obsidian`, `kms`, …) meant manually downloading its `plugins/<name>.py` into your config repo, committing, `hivepilot config sync`-ing, and setting its `<NAME>_ENABLED` flag by hand. `hivepilot plugins install` collapses that into one command.

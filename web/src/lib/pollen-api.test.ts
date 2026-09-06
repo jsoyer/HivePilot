@@ -33,6 +33,8 @@ import {
   fetchOnboardingMachine,
   fetchVoiceConfig,
   fetchTypedTools,
+  fetchPluginPacks,
+  installPluginPack,
   importOpenApi,
   syncMcpServer,
   fetchRole,
@@ -466,5 +468,21 @@ describe('catalogue endpoints', () => {
   it('fetchTypedTools calls GET /v1/tools with optional filters', async () => {
     await fetchTypedTools({ source_kind: 'mcp', source_id: '1' })
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/tools?source_kind=mcp&source_id=1')
+  })
+
+  it('fetchPluginPacks calls GET /v1/plugin-packs', async () => {
+    await fetchPluginPacks()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/plugin-packs')
+  })
+
+  it('installPluginPack posts consent to /v1/plugin-packs/{name}/install', async () => {
+    await installPluginPack('skills-kit')
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/plugin-packs/skills-kit/install',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ consent: true }),
+      }),
+    )
   })
 })
