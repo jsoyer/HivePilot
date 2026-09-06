@@ -4317,6 +4317,24 @@ class Orchestrator:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("verdict.persist_failed", kind="review", error=str(exc))
+            if verdict.decision and verdict.decision.upper() not in {
+                "PASS",
+                "APPROVE",
+                "APPROVED",
+            }:
+                try:
+                    from hivepilot.services.nudge_engine import observe_review
+
+                    observe_review(
+                        project=project.path.name,
+                        owner_role="developer",
+                        decision=verdict.decision,
+                        text="; ".join(reviewer_summaries),
+                        run_id=run_id,
+                        pipeline_run_id=self._pipeline_run_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("nudge.review_hook_failed", error=str(exc))
         except Exception as exc:
             # Anything unexpected in the aggregation logic itself (not a
             # single reviewer's own resolve/call -- those are already caught

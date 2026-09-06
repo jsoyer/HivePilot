@@ -1,24 +1,24 @@
 ## Summary
 
-HP-20: per-role procedural avatars on the Pollen Agents page.
+HP-50: nudge engine + structured verdict (`decision` + « je bloque si » + `file:line` findings).
 
-- Pin `@bible-strong/avatar-react` + `@bible-strong/avatar-core` at `0.1.0`.
-- One Strobi base rig (`web/src/assets/avatars/base.avatar.json`); each of the 8 roles overrides body colour only.
-- `<RoleAvatar>` maps run state → animation (`idle` / `working` / `thinking` / `happy` / `sad` / `suspicious`).
-- Wired on the Agents roster, attention band, and role drawer. Unmapped roles keep the hashed initial badge.
-- AGPL-3.0-only renderer documented in `web/src/assets/avatars/ATTRIBUTION.md` (compatible with HivePilot GPL-3.0).
+An observer re-injects three signals to the owning role — without changing any gate:
 
-Rebased onto current `main` (includes HP-55 Knowledge panel + HP-53 mem0 retirement). Rebuilt committed `hivepilot/webui/static/`.
+- blocking CI / deterministic checks (`git_service.perform_git_actions`)
+- blocking in-pipeline review (`Orchestrator._run_review`)
+- file-ownership conflicts (`hivepilot ownership check --role`)
 
-Does not author 8 unique Lab exports, and does not yet replace badges on Sweep graph nodes / activity feed / run cards.
+Each nudge persists `verdicts.kind="nudge"` (new `findings_json` / `block_if_json` columns) and posts a system message into the project's Orchestrateur Espace (HP-49) with an HP-47 action trace. Fail-safe: a broken nudge never raises into git/orchestrator.
 
-Linear: [HP-20](https://linear.app/js-workspace/issue/HP-20/role-avatars-in-pollen-animated-bible-strongavatar-react).
+Does not ingest GitHub review webhooks. Does not enforce ownership as a merge gate. Does not change `orchestrator.Verdict`. Disposition still unset. Banks stay `{project}:{task}:{role}` vs `role:{name}`.
+
+Rebased onto current `main` (HP-55 / HP-53 / HP-20).
+
+Linear: [HP-50](https://linear.app/js-workspace/issue/HP-50/nudge-engine-sortie-verdict-structuree-re-route-cireviewechec-je). Parent HP-31.
 
 ## Testing
 
-- [x] `cd web && npm test -- --run src/components/RoleAvatar.test.tsx src/components/views/AgentsView.test.tsx`
-- [x] `cd web && npm run build` (Node 26.5.0)
-- [ ] `pytest` — re-run after push; previous CI failure was against stale `main`
-- [ ] `hivepilot lint` — pre-existing missing example-site/acme-* paths
+- [x] `pytest tests/test_structured_verdict.py tests/test_nudge_engine.py tests/test_file_ownership.py tests/test_delegation.py tests/test_mission_plan.py tests/test_state_service.py -k verdict -q`
+- [x] `ruff check` on new modules
 
-Replay: open Pollen → Agents; the eight first-class roles show coloured procedural avatars; custom roles stay initials.
+Replay: trigger a failing check or `hivepilot ownership check --role developer`; open the project's Orchestrateur Espace — a `Nudge · …` system message with `je bloque si` and file:line findings.
