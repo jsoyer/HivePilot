@@ -1,22 +1,17 @@
 ## Summary
 
-HP-22: Pollen Chat tab that talks to the existing concierge brain (`POST /v1/concierge` → `concierge_service.route()`).
+HP-80: compact **Missions** rail beside the Espaces conversation thread.
 
-- New Operate tab **Chat** (Grok-style bubbles + composer).
-- `route` / `action` / `multi_route` render as proposal cards with HP-20 `RoleAvatar`. Classify-only: does not dispatch runs.
-- Same fail-closed semantics as Telegram. Independent of HP-18 (OSS runner).
+- Right-hand rail of the last 12 runs (`fetchRuns(12)`), stacked under the thread below `lg`.
+- Reuses HP-42 attention zones + HP-44 `StatusGlyph`, heartbeat vs started timestamps.
+- Live refresh on existing SSE `run` events (no second stream hook).
+- Classify-only: no dispatch, no model badge (`RunSummary` has none), never renders `detail`.
 
-Rebased onto current `main` (includes HP-66 Studio + HP-50). Additive: Chat leads Operate; Studio stays under System.
-
-Does not execute proposals. Does not gate on `chatops_concierge_enabled`. Does not touch HP-18.
-
-Linear: [HP-22](https://linear.app/js-workspace/issue/HP-22/pollen-interactive-agent-chat-grok-bot-style-via-the-concierge).
+Linear: [HP-80](https://linear.app/js-workspace/issue/HP-80/rail-missions-dans-lespace-conversation-missions-cote-a-cote).
 
 ## Testing
 
-- [x] `cd web && npm test -- --run src/components/views/ChatView.test.tsx src/components/Pollen.test.tsx`
-- [x] `cd web && npm run build` (Node 26.5.0 → `index-DKVfEyqR.js`)
-- [x] `pytest tests/test_concierge_endpoint.py`
-- [x] `ruff format --check tests/test_concierge_endpoint.py`
+- [x] `cd web && npm test -- --run src/components/espaces/MissionsRail.test.tsx src/components/views/EspacesView.test.tsx src/components/Pollen.test.tsx src/lib/i18n/fr.test.ts src/lib/i18n/en.test.ts`
+- [x] `cd web && npm run build` (Node 26.5.0 → `index-BB4qE0OD.js`)
 
-Replay: Pollen → Chat; send a message; answers render as bubbles, routes as proposal cards.
+Replay: Pollen → Operate → Spaces; open a room; the Missions rail lists recent runs with status glyphs.

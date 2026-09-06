@@ -130,6 +130,9 @@ export const fr: Record<TranslationKey, string> = {
   'spaces.actionCount': '{count} actions',
   'spaces.postForbidden': 'Publier un message nécessite un jeton de rang run.',
   'spaces.readOnly': 'Lecture seule — un jeton de rang run est requis pour publier.',
+  'spaces.railTitle': 'Missions',
+  'spaces.railEmpty': 'Aucune exécution récente.',
+  'spaces.railForbidden': 'Un jeton de rang run est requis pour voir les runs en direct.',
   // ---- Panneau de découpe orchestrateur (HP-49 / HP-69) ----------------
   'nav.orchestrator': 'Orchestrateur',
   'orchestrator.description':
