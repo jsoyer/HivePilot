@@ -5913,6 +5913,12 @@ def ownership_check(
         for conflict in conflicts:
             typer.echo(f"{conflict.path:<50} {conflict.owner_role:<20} {conflict.offending_role}")
         typer.echo(f"\nFound {len(conflicts)} file-ownership conflict(s).", err=True)
+        try:
+            from hivepilot.services.nudge_engine import observe_conflicts
+
+            observe_conflicts(conflicts, project=Path.cwd().name)
+        except Exception:  # noqa: BLE001 — advisory CLI must still exit 1
+            pass
         raise typer.Exit(code=1)
 
     # Advisory mode (no --role): report every changed file matched by ANY

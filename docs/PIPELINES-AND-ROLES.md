@@ -276,6 +276,8 @@ hivepilot ownership check --role backend --diff-from origin/main
 
 **Current scope:** this ships the declaration format (`ownership.yaml`), the pure detection function (`hivepilot.services.file_ownership.detect_conflicts`), and this manual CLI check. Automatic, fail-closed enforcement — blocking a merge or stage progression the moment a conflict is detected — is **planned but not yet wired** into the orchestrator/git flow; today, a conflict is something you check for, not something the engine blocks on.
 
+HP-50 (nudge engine) is the observer on top: a blocking CI check, a blocking in-pipeline review, or a `--role` ownership conflict posts a structured verdict (`decision` + « je bloque si » + `file:line` findings) into the project's Orchestrateur Espace and persists `kind="nudge"`. The nudge never changes the gate.
+
 ## The default company roster
 
 The engine ships a single generic `developer → claude` role by default. The

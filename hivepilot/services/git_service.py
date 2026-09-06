@@ -811,6 +811,21 @@ def perform_git_actions(
             verdict_summary=_verdict_role_summary(verdict, task_result, role),
             verification=verification,
         )
+        if verification.blocking:
+            # HP-50: re-inject the check failure to the owning role. Observer
+            # is fail-SAFE — a nudge must never change this gate's decision.
+            try:
+                from hivepilot.services.nudge_engine import observe_ci
+
+                observe_ci(
+                    list(verification.results),
+                    project=project_name,
+                    owner_role=role or "developer",
+                    run_id=run_id,
+                    summary=verification.summary,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("git.nudge_ci_failed", error=str(exc))
     # The gate's half of the autonomy ladder's only measurable input. Recorded
     # whenever a pull request exists to be judged -- the human's half arrives
     # later, when that pull request is next observed.
