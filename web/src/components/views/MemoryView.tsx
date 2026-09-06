@@ -13,6 +13,7 @@ import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 import { Mem0View } from './Mem0View'
 import { MemoryQualityView } from './MemoryQualityView'
+import { RoleMemoryView } from './RoleMemoryView'
 
 const DAYS = 30
 
@@ -175,8 +176,9 @@ export function MemoryView() {
         <h2 className="font-heading text-base font-medium">{t('nav.memory')}</h2>
         <p className="text-sm text-muted-foreground">{t('memory.description')}</p>
       </div>
-      <TabsList data-testid="memory-tabs" className="w-full max-w-md sm:w-fit">
+      <TabsList data-testid="memory-tabs" className="w-full max-w-xl sm:w-fit">
         <TabsTrigger value="backends">{t('memory.tabBackends')}</TabsTrigger>
+        <TabsTrigger value="knowledge">{t('memory.tabKnowledge')}</TabsTrigger>
         <TabsTrigger value="quality">{t('memory.tabQuality')}</TabsTrigger>
         <TabsTrigger value="growth">{t('memory.tabGrowth')}</TabsTrigger>
         <TabsTrigger value="search">{t('memory.tabSearch')}</TabsTrigger>
@@ -186,6 +188,17 @@ export function MemoryView() {
           tabs below describe the corpus; this one describes the retrieval. */}
       <TabsContent value="backends">
         <MemoryBackendsView />
+      </TabsContent>
+      <TabsContent value="knowledge">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t('memory.knowledgeTitle')}</CardTitle>
+            <CardDescription>{t('memory.knowledgeDescription')}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <RoleMemoryView />
+          </CardContent>
+        </Card>
       </TabsContent>
       <TabsContent value="quality">
         <MemoryQualityView />

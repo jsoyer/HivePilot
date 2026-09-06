@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   fetchMemoryJournal: vi.fn(),
   fetchMemoryGrowth: vi.fn(),
   fetchMemories: vi.fn(),
+  fetchHindsightStatus: vi.fn(),
+  fetchHindsightRolePanel: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
@@ -90,6 +92,19 @@ function mockAllEmpty() {
   mocks.fetchMemoryJournal.mockResolvedValue({ journal: [] } satisfies MemoryJournalResponse)
   mocks.fetchMemoryGrowth.mockResolvedValue(emptyGrowth)
   mocks.fetchMemories.mockResolvedValue({ configured: true, memories: [] } satisfies MemoriesResponse)
+  mocks.fetchHindsightStatus.mockResolvedValue({
+    configured: false,
+    roles: [{ name: 'developer', display_name: 'Gustave', bank_id: 'role:developer' }],
+    detail: 'Hindsight is disabled (HIVEPILOT_HINDSIGHT_ENABLED).',
+  })
+  mocks.fetchHindsightRolePanel.mockResolvedValue({
+    configured: false,
+    role: 'developer',
+    bank_id: 'role:developer',
+    mental_models: [],
+    observations: [],
+    detail: 'Hindsight is disabled (HIVEPILOT_HINDSIGHT_ENABLED).',
+  })
 }
 
 function mount() {
@@ -141,7 +156,7 @@ describe('MemoryView — tabs', () => {
     // Sources leads: Quality and Growth describe the CORPUS, Sources
     // describes the RETRIEVAL — which backend answered, how often it came
     // back with nothing, and whether it sends work off the host.
-    expect(tabs).toEqual(['Sources', 'Quality', 'Growth', 'Search'])
+    expect(tabs).toEqual(['Sources', 'Knowledge', 'Quality', 'Growth', 'Search'])
   })
 
   it('defaults to the Quality tab, rendering MemoryQualityView content', async () => {
@@ -161,6 +176,20 @@ describe('MemoryView — tabs', () => {
     // Growth/Search haven't been fetched yet — only the active tab mounts.
     expect(mocks.fetchMemoryGrowth).not.toHaveBeenCalled()
     expect(mocks.fetchMemories).not.toHaveBeenCalled()
+  })
+
+  it('switching to Knowledge fetches the Hindsight role panel', async () => {
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    await clickTab('Knowledge')
+
+    expect(mocks.fetchHindsightStatus).toHaveBeenCalled()
+    expect(container.textContent).toContain('Knowledge by role')
+    expect(container.textContent).toContain('role:developer')
   })
 
   it('switching to Search shows the existing Mem0View search box', async () => {
