@@ -2,6 +2,7 @@ import { Send } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { EmptyState } from '@/components/dashboard/EmptyState'
 import { MissionsRail } from '@/components/espaces/MissionsRail'
+import { ComposerMic } from '@/components/voice/ComposerMic'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ApiForbiddenError } from '@/lib/api'
@@ -287,6 +288,12 @@ export function EspacesView() {
                         space: spaceLabel(selected, t('spaces.you')),
                       })}
                       className="flex-1 resize-none rounded-md border border-border bg-background px-2.5 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    />
+                    <ComposerMic
+                      disabled={sending}
+                      onTranscript={(chunk) =>
+                        setDraft((prev) => (prev ? `${prev.trim()} ${chunk}` : chunk))
+                      }
                     />
                     <Button
                       data-testid="espaces-send"

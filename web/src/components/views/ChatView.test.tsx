@@ -4,12 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
 import type { ConciergeDecision } from '@/lib/pollen-api'
 
-const { askConcierge } = vi.hoisted(() => ({ askConcierge: vi.fn() }))
+const { askConcierge, speakReply } = vi.hoisted(() => ({
+  askConcierge: vi.fn(),
+  speakReply: vi.fn(),
+}))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
   return { ...actual, askConcierge }
 })
+
+vi.mock('@/lib/voice-reply', () => ({ speakReply }))
 
 import { ChatView } from './ChatView'
 
@@ -18,6 +23,7 @@ let root: Root
 
 beforeEach(() => {
   askConcierge.mockReset()
+  speakReply.mockReset()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -109,6 +115,15 @@ describe('ChatView', () => {
     expect(proposal).not.toBeNull()
     expect(proposal?.textContent).toContain('developer')
     expect(proposal?.textContent).toContain('example-api')
+  })
+
+  it('speaks the concierge answer when a call is in progress', async () => {
+    window.localStorage.setItem('hivepilot.webui.voice-call', 'true')
+    askConcierge.mockResolvedValue(answer('Run 8 succeeded.'))
+    render()
+    type('status?')
+    await send()
+    expect(speakReply).toHaveBeenCalledWith('Run 8 succeeded.', 'en-US')
   })
 
   it('shows an error bubble when the concierge is unreachable', async () => {

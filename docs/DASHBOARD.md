@@ -43,6 +43,12 @@ operator VAPID keys (`HIVEPILOT_WEB_PUSH_VAPID_*`) and the `webpush` notificatio
 channel — add `webpush` to `HIVEPILOT_NOTIFICATION_CHANNELS` after generating keys.
 iOS only delivers Web Push after the app is installed to the home screen.
 
+Chat and Espaces composers include a **mic** (browser Speech Recognition) and Chat
+has an **Call an agent** toggle that speaks concierge answers via
+`speechSynthesis`. Optional cloud TTS (`HIVEPILOT_VOICE_TTS_PROVIDER` +
+`HIVEPILOT_VOICE_TTS_API_KEY`) is proxied at `POST /v1/voice/tts` so the key
+never reaches the browser.
+
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
 
 The deprecated synchronous run-trigger endpoint (`POST /run` / `POST /v1/run`,
