@@ -4081,6 +4081,51 @@ def list_typed_tools_endpoint(
     return {"tools": [TypedToolOut(**tool.to_dict()).model_dump() for tool in tools]}
 
 
+class ComposioSyncRequest(BaseModel):
+    toolkit: str
+
+
+class PipedreamSyncRequest(BaseModel):
+    app: str
+
+
+@v1.get("/tools/managed")
+def managed_catalog_status_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.managed_catalogs import public_status
+
+    return public_status()
+
+
+@v1.post("/tools/composio/sync")
+def composio_sync_endpoint(
+    payload: ComposioSyncRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.managed_catalogs import ManagedCatalogError, sync_composio
+
+    try:
+        tools = sync_composio(toolkit=payload.toolkit)
+    except ManagedCatalogError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"tools": [TypedToolOut(**tool.to_dict()).model_dump() for tool in tools]}
+
+
+@v1.post("/tools/pipedream/sync")
+def pipedream_sync_endpoint(
+    payload: PipedreamSyncRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.managed_catalogs import ManagedCatalogError, sync_pipedream
+
+    try:
+        tools = sync_pipedream(app=payload.app)
+    except ManagedCatalogError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"tools": [TypedToolOut(**tool.to_dict()).model_dump() for tool in tools]}
+
+
 @v1.get("/agents/admin")
 @app.get("/agents/admin")
 def list_agents_admin_endpoint(

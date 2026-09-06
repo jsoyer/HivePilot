@@ -157,6 +157,9 @@ _SECRET_SETTING_FIELDS = frozenset(
         "voice_stt_api_key",
         # HP-58 — wraps MCP/OpenAPI header secrets at rest (Fernet).
         "credentials_key",
+        # HP-59 — managed catalog vendor keys. Never returned by the API.
+        "composio_api_key",
+        "pipedream_client_secret",
     }
 )
 
@@ -342,6 +345,18 @@ class Settings(BaseSettings):
     # HP-58 — optional Fernet passphrase for MCP/OpenAPI credentials at rest.
     # env: HIVEPILOT_CREDENTIALS_KEY
     credentials_key: str | None = None
+    # HP-59 — Composio project API key (x-api-key). Catalog list only.
+    # env: HIVEPILOT_COMPOSIO_API_KEY
+    composio_api_key: str | None = None
+    # HP-59 — Pipedream Connect OAuth client (server-side token + components).
+    # env: HIVEPILOT_PIPEDREAM_CLIENT_ID
+    pipedream_client_id: str | None = None
+    # env: HIVEPILOT_PIPEDREAM_CLIENT_SECRET
+    pipedream_client_secret: str | None = None
+    # env: HIVEPILOT_PIPEDREAM_PROJECT_ID
+    pipedream_project_id: str | None = None
+    # env: HIVEPILOT_PIPEDREAM_ENVIRONMENT  (development | production)
+    pipedream_environment: str = "development"
     # Phase 18 — OpenTelemetry distributed tracing for pipeline/task/step
     # execution (hivepilot/observability/tracing.py). Off by default; mirrors
     # enable_webui/headroom_enabled's opt-in-only gating above. Also requires

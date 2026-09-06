@@ -2432,6 +2432,23 @@ export function fetchTypedTools(params?: {
   return apiFetch(`/v1/tools${suffix}`)
 }
 
+export interface ManagedCatalogStatus {
+  composio: { configured: boolean }
+  pipedream: { configured: boolean }
+}
+
+export function fetchManagedCatalogs(): Promise<ManagedCatalogStatus> {
+  return apiFetch('/v1/tools/managed')
+}
+
+export function syncComposio(toolkit: string): Promise<{ tools: TypedTool[] }> {
+  return postJson('/v1/tools/composio/sync', { toolkit })
+}
+
+export function syncPipedream(app: string): Promise<{ tools: TypedTool[] }> {
+  return postJson('/v1/tools/pipedream/sync', { app })
+}
+
 // ---------------------------------------------------------------------------
 // HP-78 — onboarding: reuse what's already on the machine, verify first.
 // ---------------------------------------------------------------------------

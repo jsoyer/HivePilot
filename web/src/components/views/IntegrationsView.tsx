@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { Cable } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -8,12 +7,15 @@ import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
 import {
+  fetchManagedCatalogs,
   fetchMcpServers,
   fetchPluginPacks,
   fetchTypedTools,
   importOpenApi,
   installPluginPack,
+  syncComposio,
   syncMcpServer,
+  syncPipedream,
   type McpServer,
   type PluginPackPreview,
   type TypedTool,
@@ -35,6 +37,7 @@ export function IntegrationsView() {
   const toolsState = useAsyncData(() => fetchTypedTools(), [tick])
   const serversState = useAsyncData(() => fetchMcpServers(), [tick])
   const packsState = useAsyncData(() => fetchPluginPacks(), [tick])
+  const managedState = useAsyncData(() => fetchManagedCatalogs(), [tick])
 
   return (
     <div className="flex flex-col gap-4" data-testid="integrations-view">
@@ -60,15 +63,31 @@ export function IntegrationsView() {
           state={serversState}
           onSynced={() => setTick((n) => n + 1)}
         />
-        <ComingSoonCard
+        <ManagedCatalogCard
           testId="integrations-composio"
           title={t('integrations.composioTitle')}
-          body={t('integrations.composioBody')}
+          hint={t('integrations.composioHint')}
+          needKey={t('integrations.composioNeedKey')}
+          filterPlaceholder={t('integrations.composioToolkit')}
+          filterTestId="composio-toolkit"
+          syncTestId="composio-sync"
+          configured={managedState.status === 'success' && managedState.data.composio.configured}
+          canAdmin={canAdmin}
+          onSync={(toolkit) => syncComposio(toolkit)}
+          onSynced={() => setTick((n) => n + 1)}
         />
-        <ComingSoonCard
+        <ManagedCatalogCard
           testId="integrations-pipedream"
           title={t('integrations.pipedreamTitle')}
-          body={t('integrations.pipedreamBody')}
+          hint={t('integrations.pipedreamHint')}
+          needKey={t('integrations.pipedreamNeedKey')}
+          filterPlaceholder={t('integrations.pipedreamApp')}
+          filterTestId="pipedream-app"
+          syncTestId="pipedream-sync"
+          configured={managedState.status === 'success' && managedState.data.pipedream.configured}
+          canAdmin={canAdmin}
+          onSync={(app) => syncPipedream(app)}
+          onSynced={() => setTick((n) => n + 1)}
         />
       </div>
 
@@ -114,25 +133,74 @@ export function IntegrationsView() {
   )
 }
 
-function ComingSoonCard({
+function ManagedCatalogCard({
   testId,
   title,
-  body,
+  hint,
+  needKey,
+  filterPlaceholder,
+  filterTestId,
+  syncTestId,
+  configured,
+  canAdmin,
+  onSync,
+  onSynced,
 }: {
   testId: string
   title: string
-  body: string
+  hint: string
+  needKey: string
+  filterPlaceholder: string
+  filterTestId: string
+  syncTestId: string
+  configured: boolean
+  canAdmin: boolean
+  onSync: (filter: string) => Promise<unknown>
+  onSynced: () => void
 }) {
   const t = useT()
+  const [filter, setFilter] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function handleSync() {
+    setError(null)
+    setBusy(true)
+    try {
+      await onSync(filter.trim())
+      setFilter('')
+      onSynced()
+    } catch (err) {
+      setError(err instanceof ApiForbiddenError ? t('integrations.forbidden') : describeApiError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Card data-testid={testId}>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          {title}
-          <Badge variant="secondary">{t('integrations.comingSoon')}</Badge>
-        </CardTitle>
-        <CardDescription>{body}</CardDescription>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>{configured ? hint : needKey}</CardDescription>
       </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        <input
+          className="border-input bg-background rounded-md border px-3 py-2 text-sm"
+          data-testid={filterTestId}
+          disabled={!canAdmin || !configured || busy}
+          placeholder={filterPlaceholder}
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        />
+        <Button
+          data-testid={syncTestId}
+          disabled={!canAdmin || !configured || busy || !filter.trim()}
+          onClick={() => void handleSync()}
+        >
+          {busy ? t('integrations.syncing') : t('integrations.sync')}
+        </Button>
+        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+      </CardContent>
     </Card>
   )
 }

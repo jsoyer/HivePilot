@@ -1,20 +1,20 @@
 ## Summary
 
-HP-60: Pollen **Integrations** page under System — one self-service hub for tool sources. The MCP command center tab (HP-76) stays as-is.
+HP-59: Composio and Pipedream Connect become **catalog sources** in the typed-tool table. Tools are listed, never executed. Missing vendor credentials refuse instead of inventing a connect.
 
-- OpenAPI paste → `POST /v1/tools/openapi/import`
-- MCP HTTPS sync for registry HTTP servers → `POST /v1/mcp/servers/{id}/sync`
-- Typed-tool catalog table → `GET /v1/tools`
-- Plugin packs (HP-77) with admin install consent
-- Composio + Pipedream: honest **Coming soon** cards (HP-59)
+- `GET /v1/tools/managed` — `{configured: bool}` only (no keys)
+- `POST /v1/tools/composio/sync` `{toolkit}` — `GET https://backend.composio.dev/api/v3.1/tools`
+- `POST /v1/tools/pipedream/sync` `{app}` — OAuth client-credentials then Connect components
+- Hosts are hardcoded; foreign hosts are refused
+- Settings: `HIVEPILOT_COMPOSIO_API_KEY`, `HIVEPILOT_PIPEDREAM_CLIENT_ID` / `_SECRET` / `_PROJECT_ID`
+- Pollen Integrations cards replace the Coming-soon placeholders
 
-Writes gate on `useRole().can('admin')`.
+Linear: [HP-59](https://linear.app/js-workspace/issue/HP-59/catalogues-manages-composio-pipedream-connect).
 
-Linear: [HP-60](https://linear.app/js-workspace/issue/HP-60/page-integrations-dans-pollen).
-
-Replay: open Pollen → System → Integrations. Import a tiny OpenAPI doc; confirm the qualified name appears in Typed tools.
+Replay: set the Composio key, open Pollen → System → Integrations, sync toolkit `github`. Confirm `composio__github__…` in Typed tools.
 
 ## Testing
 
-- [x] `cd web && npm test -- --run src/components/views/IntegrationsView.test.tsx src/components/Pollen.test.tsx src/components/nav/nav-config.test.ts` (37 passed)
-- [x] `cd web && npm run build` (Node 26.5.0 → `index-DRtTv1Wg.js`)
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp59_managed_catalogs.py tests/test_settings_secret_repr.py -q`
+- [x] `cd web && npm test -- --run src/components/views/IntegrationsView.test.tsx src/lib/pollen-api.test.ts`
+- [x] `python scripts/export_openapi.py && cd web && npm run generate:api`

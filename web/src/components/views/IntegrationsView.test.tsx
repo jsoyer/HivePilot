@@ -11,6 +11,9 @@ const {
   importOpenApi,
   syncMcpServer,
   installPluginPack,
+  fetchManagedCatalogs,
+  syncComposio,
+  syncPipedream,
   useRoleMock,
 } = vi.hoisted(() => ({
   fetchTypedTools: vi.fn(),
@@ -19,6 +22,9 @@ const {
   importOpenApi: vi.fn(),
   syncMcpServer: vi.fn(),
   installPluginPack: vi.fn(),
+  fetchManagedCatalogs: vi.fn(),
+  syncComposio: vi.fn(),
+  syncPipedream: vi.fn(),
   useRoleMock: vi.fn(),
 }))
 
@@ -32,6 +38,9 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     importOpenApi,
     syncMcpServer,
     installPluginPack,
+    fetchManagedCatalogs,
+    syncComposio,
+    syncPipedream,
   }
 })
 
@@ -102,6 +111,12 @@ describe('IntegrationsView', () => {
     importOpenApi.mockReset().mockResolvedValue({ source: { name: 'demo' }, tools: [] })
     syncMcpServer.mockReset().mockResolvedValue({ tools: [] })
     installPluginPack.mockReset().mockResolvedValue({ pack: 'skills-kit', installed: [], restart_required: true })
+    fetchManagedCatalogs.mockReset().mockResolvedValue({
+      composio: { configured: true },
+      pipedream: { configured: false },
+    })
+    syncComposio.mockReset().mockResolvedValue({ tools: [] })
+    syncPipedream.mockReset().mockResolvedValue({ tools: [] })
   })
 
   afterEach(() => {
@@ -111,7 +126,7 @@ describe('IntegrationsView', () => {
     container.remove()
   })
 
-  it('lists typed tools, HTTP MCP sync, packs, and coming-soon catalogs', async () => {
+  it('lists typed tools, HTTP MCP sync, packs, and managed catalogs', async () => {
     act(() => {
       root.render(
         <LanguageProvider>
@@ -126,8 +141,34 @@ describe('IntegrationsView', () => {
     )
     expect(container.querySelector('[data-testid="mcp-sync-7"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="pack-install-skills-kit"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="integrations-composio"]')?.textContent).toMatch(/Coming soon/)
-    expect(container.querySelector('[data-testid="integrations-pipedream"]')?.textContent).toMatch(/Coming soon/)
+    expect(container.querySelector('[data-testid="composio-sync"]')).not.toBeNull()
+    expect((container.querySelector('[data-testid="composio-sync"]') as HTMLButtonElement).disabled).toBe(true)
+    expect(container.querySelector('[data-testid="integrations-pipedream"]')?.textContent).toMatch(
+      /HIVEPILOT_PIPEDREAM/,
+    )
+    expect((container.querySelector('[data-testid="pipedream-sync"]') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('syncs a configured Composio toolkit as admin', async () => {
+    act(() => {
+      root.render(
+        <LanguageProvider>
+          <IntegrationsView />
+        </LanguageProvider>,
+      )
+    })
+    await flush()
+    const input = container.querySelector('[data-testid="composio-toolkit"]') as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    act(() => {
+      setter.call(input, 'github')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="composio-sync"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(syncComposio).toHaveBeenCalledWith('github')
   })
 
   it('imports OpenAPI as admin', async () => {
@@ -171,5 +212,6 @@ describe('IntegrationsView', () => {
     expect((container.querySelector('[data-testid="pack-install-skills-kit"]') as HTMLButtonElement).disabled).toBe(
       true,
     )
+    expect((container.querySelector('[data-testid="composio-sync"]') as HTMLButtonElement).disabled).toBe(true)
   })
 })

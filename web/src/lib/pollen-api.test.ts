@@ -37,6 +37,9 @@ import {
   installPluginPack,
   importOpenApi,
   syncMcpServer,
+  fetchManagedCatalogs,
+  syncComposio,
+  syncPipedream,
   fetchRole,
   fetchSchedules,
   triggerSchedule,
@@ -468,6 +471,33 @@ describe('catalogue endpoints', () => {
   it('fetchTypedTools calls GET /v1/tools with optional filters', async () => {
     await fetchTypedTools({ source_kind: 'mcp', source_id: '1' })
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/tools?source_kind=mcp&source_id=1')
+  })
+
+  it('fetchManagedCatalogs calls GET /v1/tools/managed', async () => {
+    await fetchManagedCatalogs()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/tools/managed')
+  })
+
+  it('syncComposio posts /v1/tools/composio/sync', async () => {
+    await syncComposio('github')
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/tools/composio/sync',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ toolkit: 'github' }),
+      }),
+    )
+  })
+
+  it('syncPipedream posts /v1/tools/pipedream/sync', async () => {
+    await syncPipedream('slack')
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/tools/pipedream/sync',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ app: 'slack' }),
+      }),
+    )
   })
 
   it('fetchPluginPacks calls GET /v1/plugin-packs', async () => {
