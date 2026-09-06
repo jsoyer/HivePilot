@@ -785,6 +785,89 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** RoutineListResponse */
+        RoutineListResponse: {
+            /** Routines */
+            routines: components["schemas"]["RoutineOut"][];
+        };
+        /** RoutineOut */
+        RoutineOut: {
+            /** Created Ts */
+            created_ts?: string | null;
+            /** Crons */
+            crons?: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Last Run At */
+            last_run_at?: string | null;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Projects */
+            projects?: string[];
+            /** Replace Key */
+            replace_key?: string | null;
+            /** Role */
+            role: string;
+            /** Tenant */
+            tenant: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+            /** Updated Ts */
+            updated_ts?: string | null;
+        };
+        /** RoutinePatch */
+        RoutinePatch: {
+            /** Crons */
+            crons?: string[] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Projects */
+            projects?: string[] | null;
+            /** Replace Key */
+            replace_key?: string | null;
+            /** Role */
+            role?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** RoutineTriggerResponse */
+        RoutineTriggerResponse: {
+            /** Detail */
+            detail: string;
+            /** Routine Id */
+            routine_id: string;
+            /** Status */
+            status: string;
+        };
+        /** RoutineWrite */
+        RoutineWrite: {
+            /** Crons */
+            crons: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Projects */
+            projects?: string[];
+            /** Replace Key */
+            replace_key?: string | null;
+            /** Role */
+            role: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+        };
         /** RunDetailResponse */
         RunDetailResponse: {
             /** Detail */
