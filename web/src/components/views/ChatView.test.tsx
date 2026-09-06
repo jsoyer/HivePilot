@@ -4,14 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
 import type { ConciergeDecision } from '@/lib/pollen-api'
 
-const { askConcierge, speakReply } = vi.hoisted(() => ({
+const { askConcierge, speakReply, postApproval, useRoleMock } = vi.hoisted(() => ({
   askConcierge: vi.fn(),
   speakReply: vi.fn(),
+  postApproval: vi.fn(),
+  useRoleMock: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, askConcierge }
+  return { ...actual, askConcierge, postApproval }
+})
+
+vi.mock('@/lib/role-context', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/role-context')>()
+  return { ...actual, useRole: useRoleMock }
 })
 
 vi.mock('@/lib/voice-reply', () => ({ speakReply }))
@@ -24,6 +31,11 @@ let root: Root
 beforeEach(() => {
   askConcierge.mockReset()
   speakReply.mockReset()
+  postApproval.mockReset().mockResolvedValue({ result: { success: true } })
+  useRoleMock.mockReturnValue({
+    role: 'admin',
+    can: (needed: string) => ['read', 'run', 'approve', 'admin'].includes(needed),
+  })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -133,5 +145,30 @@ describe('ChatView', () => {
     await send()
 
     expect(container.querySelector('[data-testid="chat-message-error"]')).not.toBeNull()
+  })
+
+  it('renders an inline approval card and posts approve for a concierge approve action', async () => {
+    askConcierge.mockResolvedValue({
+      kind: 'action',
+      answer_text: 'Approve run 42?',
+      role_key: null,
+      target: null,
+      order: null,
+      action: 'approve',
+      params: { run_id: 42 },
+      destructive: true,
+      dispatches: [],
+    })
+    render()
+    type('approve run 42')
+    await send()
+    expect(container.querySelector('[data-testid="chat-approval-card"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="chat-proposal"]')).toBeNull()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="chat-approval-approve"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(postApproval).toHaveBeenCalledWith(42, { approve: true, reason: undefined })
+    expect(container.querySelector('[data-testid="chat-approval-done"]')?.textContent).toMatch(/42/)
   })
 })

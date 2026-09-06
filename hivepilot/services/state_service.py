@@ -446,6 +446,19 @@ def init_db() -> None:
             )
             """
         )
+        # HP-61 — per-action auto-approve / auto-deny. Empty match fields are
+        # wildcards. Never stores a Disposition.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_action_rules (
+                id TEXT PRIMARY KEY,
+                project TEXT NOT NULL DEFAULT '',
+                task TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                auto TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

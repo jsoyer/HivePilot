@@ -2829,7 +2829,18 @@ class Orchestrator:
             policy = policy_service.enforce_policy(project.path.name, auto_git=auto_git)
             run_policies[project.path.name] = policy
             severity = policy.block_on_severity
-            if policy.require_approval and not simulate:
+            from hivepilot.services.approval_rules_service import match_auto
+
+            approval_auto = (
+                match_auto(
+                    project=project.path.name,
+                    task=task_name,
+                    metadata={"task": task_name, "project": project.path.name},
+                )
+                if policy.require_approval and not simulate
+                else None
+            )
+            if policy.require_approval and not simulate and approval_auto != "approve":
                 run_id = state_service.record_run_start(
                     project.path.name, task_name, status="pending"
                 )
@@ -2851,14 +2862,29 @@ class Orchestrator:
                 state_service.record_approval_request(
                     run_id, project.path.name, task_name, approval_meta
                 )
-                notification_service.send_approval_keyboard(
-                    run_id=run_id, project=project.path.name, task=task_name
-                )
-                results.append(
-                    RunResult(
-                        project.path.name, task_name, False, f"Pending approval (run {run_id})"
+                if approval_auto == "deny":
+                    state_service.update_approval(run_id, "denied", "rule")
+                    state_service.complete_run(run_id, "denied", "auto-denied by approval rule")
+                    results.append(
+                        RunResult(
+                            project.path.name,
+                            task_name,
+                            False,
+                            f"Auto-denied by approval rule (run {run_id})",
+                        )
                     )
-                )
+                else:
+                    notification_service.send_approval_keyboard(
+                        run_id=run_id, project=project.path.name, task=task_name
+                    )
+                    results.append(
+                        RunResult(
+                            project.path.name,
+                            task_name,
+                            False,
+                            f"Pending approval (run {run_id})",
+                        )
+                    )
             elif (
                 severity
                 and not simulate
@@ -4820,58 +4846,77 @@ class Orchestrator:
                     "components": selected_components,
                     "planning_context": "\n\n".join(prior_chunks) or None,
                 }
-                state_service.record_approval_request(
-                    run_id,
-                    project_names[0] if project_names else pipeline_name,
-                    pipeline_name,
-                    checkpoint_meta,
+                from hivepilot.services.approval_rules_service import (
+                    match_auto as match_checkpoint_auto,
                 )
-                notification_service.send_approval_keyboard(
-                    run_id=run_id,
-                    project=", ".join(project_names) or pipeline_name,
-                    task=f"plan → {stage.name}",
-                    details=_build_checkpoint_details(
-                        prior_chunks=prior_chunks,
-                        completed=completed,
-                        next_stage=stage.name,
-                        components=selected_components,
-                        group_mode=group_mode,
-                        remaining=[s.name for s in pipeline.stages[stage_idx:]],
-                        effects=_checkpoint_effects(
-                            pipeline.stages[stage_idx:],
-                            self.tasks.tasks,
-                            auto_git=auto_git,
-                            dry_run=dry_run,
+
+                checkpoint_auto = match_checkpoint_auto(
+                    project=project_names[0] if project_names else pipeline_name,
+                    task=pipeline_name,
+                    metadata=checkpoint_meta,
+                )
+                if checkpoint_auto == "approve":
+                    pass
+                else:
+                    state_service.record_approval_request(
+                        run_id,
+                        project_names[0] if project_names else pipeline_name,
+                        pipeline_name,
+                        checkpoint_meta,
+                    )
+                    if checkpoint_auto == "deny":
+                        state_service.update_approval(run_id, "denied", "rule")
+                        state_service.complete_run(run_id, "denied", "auto-denied by approval rule")
+                        return results
+                    notification_service.send_approval_keyboard(
+                        run_id=run_id,
+                        project=", ".join(project_names) or pipeline_name,
+                        task=f"plan → {stage.name}",
+                        details=_build_checkpoint_details(
+                            prior_chunks=prior_chunks,
+                            completed=completed,
+                            next_stage=stage.name,
+                            components=selected_components,
+                            group_mode=group_mode,
+                            remaining=[s.name for s in pipeline.stages[stage_idx:]],
+                            effects=_checkpoint_effects(
+                                pipeline.stages[stage_idx:],
+                                self.tasks.tasks,
+                                auto_git=auto_git,
+                                dry_run=dry_run,
+                            ),
                         ),
-                    ),
-                )
-                proposal_excerpt = (prior_chunks[-1] if prior_chunks else "").strip()
-                notification_service.stream_agent_turn(
-                    actor="HivePilot",
-                    stage="checkpoint",
-                    summary=(
-                        f"Plan ready ({', '.join(completed)}). "
-                        + (
-                            f"Target components: {', '.join(selected_components)}. "
-                            if group_mode
-                            else ""
-                        )
-                        + f'Approve (run #{run_id}) to start "{stage.name}". '
-                        + "Full plan in the Obsidian vault."
-                        + (f"\n\n{proposal_excerpt}" if proposal_excerpt else "")
-                    ),
-                    icon="⏸️",
-                )
-                notification_service.emit_event(
-                    "checkpoint",
-                    run_id=run_id,
-                    pipeline=pipeline_name,
-                    next_stage=stage.name,
-                    components=selected_components if group_mode else None,
-                    status="awaiting_approval",
-                )
-                state_service.complete_run(run_id, RunStatus.PAUSED.value)
-                return results
+                    )
+                if checkpoint_auto == "approve":
+                    pass
+                else:
+                    proposal_excerpt = (prior_chunks[-1] if prior_chunks else "").strip()
+                    notification_service.stream_agent_turn(
+                        actor="HivePilot",
+                        stage="checkpoint",
+                        summary=(
+                            f"Plan ready ({', '.join(completed)}). "
+                            + (
+                                f"Target components: {', '.join(selected_components)}. "
+                                if group_mode
+                                else ""
+                            )
+                            + f'Approve (run #{run_id}) to start "{stage.name}". '
+                            + "Full plan in the Obsidian vault."
+                            + (f"\n\n{proposal_excerpt}" if proposal_excerpt else "")
+                        ),
+                        icon="⏸️",
+                    )
+                    notification_service.emit_event(
+                        "checkpoint",
+                        run_id=run_id,
+                        pipeline=pipeline_name,
+                        next_stage=stage.name,
+                        components=selected_components if group_mode else None,
+                        status="awaiting_approval",
+                    )
+                    state_service.complete_run(run_id, RunStatus.PAUSED.value)
+                    return results
 
             if group_mode:
                 if group is not None and group.single_repo:

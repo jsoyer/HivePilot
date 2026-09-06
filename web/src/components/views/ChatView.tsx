@@ -5,7 +5,10 @@ import { RoleAvatar } from '@/components/RoleAvatar'
 import { CallToggle, useVoiceCall } from '@/components/voice/CallToggle'
 import { ComposerMic } from '@/components/voice/ComposerMic'
 import { useLanguage, useT } from '@/lib/i18n'
-import { askConcierge, type ConciergeDecision } from '@/lib/pollen-api'
+import { ApiForbiddenError } from '@/lib/api'
+import { describeApiError } from '@/lib/format-error'
+import { askConcierge, postApproval, type ConciergeDecision } from '@/lib/pollen-api'
+import { useRole } from '@/lib/role-context'
 import { speakReply } from '@/lib/voice-reply'
 
 /**
@@ -53,8 +56,105 @@ function ConciergeBubble({ decision }: { decision: ConciergeDecision }) {
             {decision.answer_text}
           </div>
         )}
-        {decision.kind !== 'answer' && <ProposalCard decision={decision} note={t('chat.proposalNote')} />}
+        {isApprovalAction(decision) ? (
+          <ApprovalActionCard decision={decision} />
+        ) : (
+          decision.kind !== 'answer' && <ProposalCard decision={decision} note={t('chat.proposalNote')} />
+        )}
       </div>
+    </div>
+  )
+}
+
+function isApprovalAction(decision: ConciergeDecision): boolean {
+  const runId = decision.params && typeof decision.params.run_id === 'number' ? decision.params.run_id : null
+  return (
+    decision.kind === 'action' &&
+    (decision.action === 'approve' || decision.action === 'deny') &&
+    runId !== null
+  )
+}
+
+function ApprovalActionCard({ decision }: { decision: ConciergeDecision }) {
+  const t = useT()
+  const { can } = useRole()
+  const runId = Number(decision.params?.run_id)
+  const [denyOpen, setDenyOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  async function submit(approve: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await postApproval(runId, { approve, reason: approve ? undefined : reason.trim() })
+      setDone(t('chat.approvalDone', { id: String(runId), result: approve ? 'approved' : 'denied' }))
+    } catch (err) {
+      setError(err instanceof ApiForbiddenError ? t('approvals.insufficientRoleApprove') : describeApiError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      data-testid="chat-approval-card"
+      className="rounded-2xl rounded-bl-sm border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm"
+    >
+      <p className="mb-1 font-medium">{t('chat.approvalTitle')}</p>
+      <p className="mb-2 font-mono text-xs">#{runId}</p>
+      {done ? (
+        <p data-testid="chat-approval-done">{done}</p>
+      ) : (
+        <>
+          {can('approve') ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                data-testid="chat-approval-approve"
+                disabled={busy}
+                onClick={() => void submit(true)}
+              >
+                {t('approvals.approve')}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                data-testid="chat-approval-deny"
+                disabled={busy}
+                onClick={() => setDenyOpen((open) => !open)}
+              >
+                {t('approvals.deny')}
+              </Button>
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">{t('chat.approvalHint')}</p>
+          )}
+          {denyOpen ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                className="border-input bg-background rounded-md border px-2 py-1 text-sm"
+                data-testid="chat-approval-reason"
+                disabled={busy}
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+              />
+              <Button
+                size="sm"
+                variant="destructive"
+                data-testid="chat-approval-confirm-deny"
+                disabled={busy || !reason.trim()}
+                onClick={() => void submit(false)}
+              >
+                {t('approvals.confirmDeny')}
+              </Button>
+            </div>
+          ) : null}
+          {error ? <p className="text-destructive mt-2">{error}</p> : null}
+        </>
+      )}
     </div>
   )
 }

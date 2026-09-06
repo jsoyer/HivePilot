@@ -40,6 +40,61 @@
         "title": "ApprovalAction",
         "type": "object"
       },
+      "ApprovalRuleIn": {
+        "properties": {
+          "action": {
+            "default": "",
+            "title": "Action",
+            "type": "string"
+          },
+          "auto": {
+            "title": "Auto",
+            "type": "string"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "project": {
+            "default": "",
+            "title": "Project",
+            "type": "string"
+          },
+          "task": {
+            "default": "",
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "required": [
+          "auto"
+        ],
+        "title": "ApprovalRuleIn",
+        "type": "object"
+      },
+      "ApprovalRulesReplace": {
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalRuleIn"
+            },
+            "title": "Rules",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "ApprovalRulesReplace",
+        "type": "object"
+      },
       "AutopilotControlResponse": {
         "properties": {
           "paused": {
