@@ -150,6 +150,8 @@ _SECRET_SETTING_FIELDS = frozenset(
         # masked anyway because some sources admit an inline literal, and a
         # field named `*_secrets` is the wrong place to be optimistic.
         "swarm_secrets",
+        # PWA Web Push (HP-63) — the VAPID private key signs every push.
+        "web_push_vapid_private_key",
     }
 )
 
@@ -172,6 +174,8 @@ _PUBLIC_DESPITE_SECRET_NAME = frozenset(
         "discord_public_key",  # Ed25519 PUBLIC key, published by Discord
         "telegram_webhook_url",  # our own inbound endpoint, publicly reachable by design;
         # the guard is `telegram_webhook_secret`, which IS masked
+        "web_push_vapid_public_key",  # applicationServerKey sent to the browser; the
+        # private key IS masked
     }
 )
 
