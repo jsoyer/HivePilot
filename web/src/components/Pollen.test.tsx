@@ -177,9 +177,10 @@ import { Pollen } from './Pollen'
 // the same shell).
 const GROUPED_TAB_ORDER = [
   'Home',
-  // Espaces (HP-45): conversation rooms lead the Operate group (nav-config.ts).
+  // HP-22: the natural-language agent chat leads the Operate group.
+  'Chat',
+  // Espaces (HP-45) and Orchestrator (HP-49 / HP-69) stay in Operate.
   'Spaces',
-  // Orchestrator decomposition panel (HP-49 / HP-69) sits next to Spaces.
   'Orchestrator',
   'Runs',
   'Approvals',

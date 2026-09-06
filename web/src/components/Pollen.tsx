@@ -19,6 +19,7 @@ import {
   Zap,
   Gauge,
   MessagesSquare,
+  MessageCircle,
   Boxes,
   Waypoints,
   ServerCog,
@@ -37,6 +38,7 @@ import { LanguageToggle } from './nav/LanguageToggle'
 import { SidebarNav } from './nav/SidebarNav'
 import { StatusPills } from './nav/StatusPills'
 import { ThemeToggle } from './nav/ThemeToggle'
+import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
 import { EspacesView } from './views/EspacesView'
 import { AgentStudioView } from './views/AgentStudioView'
@@ -111,6 +113,9 @@ const BUILTIN_TABS = [
   // role key all along, and nothing ever presented it as a thread. Replying
   // addresses the ROLE, not the finished run -- see ConversationsView.
   { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
+  // HP-22: talk to the agents in natural language — the same concierge brain
+  // as the Telegram bot, exposed as a Grok-Bot-style chat (POST /v1/concierge).
+  { value: 'chat', labelKey: 'nav.chat', Panel: ChatView, Icon: MessageCircle },
   // Memory unification: Sources / Knowledge / Quality / Growth under one
   // nav item (`/v1/memory/*` + `/v1/hindsight/*`). The mem0 Search tab is
   // retired (HP-53). Read-only for any token; individual endpoints gate

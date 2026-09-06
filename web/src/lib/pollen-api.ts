@@ -2131,6 +2131,37 @@ export function replyToRole(role: string, text: string): Promise<{ role: string;
 }
 
 // ---------------------------------------------------------------------------
+// POST /v1/concierge — the natural-language chat surface (HP-22). Runs the
+// SAME concierge brain as the Telegram bot and returns its decision: an
+// `answer` to render as a chat bubble, or a `route`/`action`/`multi_route`
+// PROPOSAL to surface (execution stays behind the existing approval/run
+// flows). Fail-closed server-side: any LLM/transport error degrades to an
+// `answer`.
+// ---------------------------------------------------------------------------
+
+export interface ConciergeDispatch {
+  role_key: string
+  target: string | null
+  order: string
+}
+
+export interface ConciergeDecision {
+  kind: 'answer' | 'route' | 'action' | 'multi_route'
+  answer_text: string | null
+  role_key: string | null
+  target: string | null
+  order: string | null
+  action: string | null
+  params: Record<string, unknown> | null
+  destructive: boolean
+  dispatches: ConciergeDispatch[]
+}
+
+export function askConcierge(text: string, conversationId: string): Promise<ConciergeDecision> {
+  return postJson<ConciergeDecision>('/v1/concierge', { text, conversation_id: conversationId })
+}
+
+// ---------------------------------------------------------------------------
 // Espaces — conversation rooms (HP-45). GET /v1/spaces[/{id}[/messages]],
 // POST /v1/spaces, POST /v1/spaces/{id}/messages. Mirrors the shapes in
 // `hivepilot/services/state_service.py` + `api_service.py`.

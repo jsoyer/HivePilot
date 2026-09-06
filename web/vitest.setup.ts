@@ -62,6 +62,13 @@ if (typeof window.matchMedia !== 'function') {
   })
 }
 
+// jsdom does not implement `scrollIntoView`; several views call it in effects
+// (e.g. the chat panel autoscrolls on new messages). Provide a no-op so those
+// effects don't throw under test.
+if (typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = () => {}
+}
+
 // React 19's `act()` requires this flag in non-testing-library environments
 // (see https://react.dev/warnings/react-dom-test-utils) — without it, act()
 // still runs but React emits a spurious "not configured to support act"
