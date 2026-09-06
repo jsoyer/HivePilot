@@ -32,6 +32,9 @@ import {
   fetchModels,
   fetchOnboardingMachine,
   fetchVoiceConfig,
+  fetchTypedTools,
+  importOpenApi,
+  syncMcpServer,
   fetchRole,
   fetchSchedules,
   triggerSchedule,
@@ -439,5 +442,29 @@ describe('catalogue endpoints', () => {
       cloud_stt: false,
     })
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/voice/config', { on403: 'forbidden' })
+  })
+
+  it('syncMcpServer posts /v1/mcp/servers/{id}/sync', async () => {
+    await syncMcpServer(7)
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/mcp/servers/7/sync',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  it('importOpenApi posts /v1/tools/openapi/import', async () => {
+    await importOpenApi({ text: '{"openapi":"3.1.0"}', name: 'demo' })
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/tools/openapi/import',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ text: '{"openapi":"3.1.0"}', name: 'demo' }),
+      }),
+    )
+  })
+
+  it('fetchTypedTools calls GET /v1/tools with optional filters', async () => {
+    await fetchTypedTools({ source_kind: 'mcp', source_id: '1' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/tools?source_kind=mcp&source_id=1')
   })
 })

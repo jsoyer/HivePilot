@@ -369,6 +369,37 @@ def init_db() -> None:
             )
             """
         )
+        _add_column_if_missing(conn, "mcp_servers", "credentials_ciphertext TEXT")
+        # HP-58 typed-tool catalog: MCP HTTPS sync + OpenAPI import.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS openapi_sources (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                url TEXT,
+                credentials_ciphertext TEXT,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS typed_tools (
+                id TEXT PRIMARY KEY,
+                qualified_name TEXT NOT NULL UNIQUE,
+                local_name TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                description TEXT,
+                input_schema TEXT NOT NULL DEFAULT '{}',
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_typed_tools_source "
+            "ON typed_tools (source_kind, source_id)"
+        )
         # Inbound mail watcher dedup + admission bookkeeping (HP-75). One row
         # per (watcher, message-id): `status` is dispatched/skipped/pending,
         # `attempts` bounds retries so a message that keeps failing admission
@@ -1761,6 +1792,13 @@ def _decode_mcp_server(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def public_mcp_server(row: dict[str, Any]) -> dict[str, Any]:
+    """Strip ciphertext before a row leaves the process."""
+    out = dict(row)
+    out["has_credentials"] = bool(out.pop("credentials_ciphertext", None))
+    return out
+
+
 def list_mcp_servers() -> list[dict[str, Any]]:
     init_db()
     with db.connect() as conn:
@@ -1786,6 +1824,7 @@ def upsert_mcp_server(
     url: str | None = None,
     env: dict[str, str] | None = None,
     source: str = "import",
+    credentials_ciphertext: str | None = None,
 ) -> dict[str, Any]:
     init_db()
     args_json = json.dumps(args or [])
@@ -1795,19 +1834,20 @@ def upsert_mcp_server(
             ph(
                 db.ph(
                     """
-            INSERT INTO mcp_servers (name, transport, command, args, url, env, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mcp_servers (name, transport, command, args, url, env, source, credentials_ciphertext)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
                 transport=excluded.transport,
                 command=excluded.command,
                 args=excluded.args,
                 url=excluded.url,
                 env=excluded.env,
-                source=excluded.source
+                source=excluded.source,
+                credentials_ciphertext=COALESCE(excluded.credentials_ciphertext, mcp_servers.credentials_ciphertext)
             """
                 )
             ),
-            (name, transport, command, args_json, url, env_json, source),
+            (name, transport, command, args_json, url, env_json, source, credentials_ciphertext),
         )
         row = conn.execute(ph(db.ph("SELECT * FROM mcp_servers WHERE name=?")), (name,)).fetchone()
     assert row is not None
@@ -1831,11 +1871,67 @@ def update_mcp_probe(server_id: int, *, status: str, detail: str, probed_at: str
         )
 
 
+def set_mcp_server_credentials(server_id: int, ciphertext: str | None) -> dict[str, Any] | None:
+    """Replace encrypted MCP credentials. ``None`` clears them."""
+    init_db()
+    with db.connect() as conn:
+        cur = conn.execute(
+            ph(db.ph("UPDATE mcp_servers SET credentials_ciphertext=? WHERE id=?")),
+            (ciphertext, server_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM mcp_servers WHERE id=?")), (server_id,)
+        ).fetchone()
+    return _decode_mcp_server(dict(row)) if row else None
+
+
 def delete_mcp_server(server_id: int) -> bool:
     init_db()
     with db.connect() as conn:
+        conn.execute(
+            ph(db.ph("DELETE FROM typed_tools WHERE source_kind=? AND source_id=?")),
+            ("mcp", str(server_id)),
+        )
         cur = conn.execute(ph(db.ph("DELETE FROM mcp_servers WHERE id=?")), (server_id,))
         return cur.rowcount > 0
+
+
+def insert_openapi_source(
+    *,
+    source_id: str,
+    name: str,
+    url: str | None,
+    credentials_ciphertext: str | None = None,
+) -> dict[str, Any]:
+    init_db()
+    with db.connect() as conn:
+        conn.execute(
+            ph(
+                db.ph(
+                    """
+            INSERT INTO openapi_sources (id, name, url, credentials_ciphertext)
+            VALUES (?, ?, ?, ?)
+            """
+                )
+            ),
+            (source_id, name, url, credentials_ciphertext),
+        )
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM openapi_sources WHERE id=?")), (source_id,)
+        ).fetchone()
+    assert row is not None
+    return dict(row)
+
+
+def get_openapi_source(source_id: str) -> dict[str, Any] | None:
+    init_db()
+    with db.connect() as conn:
+        row = conn.execute(
+            ph(db.ph("SELECT * FROM openapi_sources WHERE id=?")), (source_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def get_mail_processed(watcher: str, message_id: str) -> dict[str, Any] | None:

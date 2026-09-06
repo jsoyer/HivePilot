@@ -39,9 +39,13 @@ class McpServerDraft:
     env: dict[str, str] = field(default_factory=dict)
     source: str = "import"
     stripped_env_keys: list[str] = field(default_factory=list)
+    # Literals never leave this process via ``to_dict`` / the import API.
+    literal_secrets: dict[str, str] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("literal_secrets", None)
+        return data
 
 
 @dataclass(frozen=True)
@@ -136,12 +140,17 @@ def _safe_name(raw: str, fallback: str = "server") -> str:
     return (cleaned or fallback)[:64]
 
 
-def _safe_env(raw: Any) -> tuple[dict[str, str], list[str]]:
-    """Keep ``${env:NAME}`` refs only. Literal values are dropped, never stored."""
+def _safe_env(raw: Any) -> tuple[dict[str, str], list[str], dict[str, str]]:
+    """Keep ``${env:NAME}`` refs in ``env``. Literals are returned separately.
+
+    Without ``HIVEPILOT_CREDENTIALS_KEY`` the literals stay discarded (HP-76).
+    With the key they are Fernet-wrapped into ``credentials_ciphertext``.
+    """
     kept: dict[str, str] = {}
     stripped: list[str] = []
+    literals: dict[str, str] = {}
     if not isinstance(raw, dict):
-        return kept, stripped
+        return kept, stripped, literals
     for key, value in raw.items():
         if not isinstance(key, str) or not isinstance(value, str):
             continue
@@ -149,11 +158,23 @@ def _safe_env(raw: Any) -> tuple[dict[str, str], list[str]]:
             kept[key] = value
         else:
             stripped.append(key)
-    return kept, stripped
+            literals[key] = value
+    return kept, stripped, literals
+
+
+def _header_literals(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in raw.items()
+        if isinstance(key, str) and isinstance(value, str) and value
+    }
 
 
 def _draft_from_stanza(name: str, stanza: dict[str, Any], *, source: str) -> McpServerDraft:
-    env, stripped = _safe_env(stanza.get("env"))
+    env, stripped, literals = _safe_env(stanza.get("env"))
+    literals.update(_header_literals(stanza.get("headers")))
     url = stanza.get("url") or stanza.get("serverUrl")
     command = stanza.get("command")
     args = stanza.get("args") or []
@@ -168,6 +189,7 @@ def _draft_from_stanza(name: str, stanza: dict[str, Any], *, source: str) -> Mcp
             env=env,
             source=source,
             stripped_env_keys=stripped,
+            literal_secrets=literals,
         )
     if command:
         return McpServerDraft(
@@ -178,6 +200,7 @@ def _draft_from_stanza(name: str, stanza: dict[str, Any], *, source: str) -> Mcp
             env=env,
             source=source,
             stripped_env_keys=stripped,
+            literal_secrets=literals,
         )
     raise McpImportError(f"server '{name}' has neither command nor url")
 
@@ -239,6 +262,8 @@ def _name_from_command(parts: list[str]) -> str:
 
 
 def _parse_json(data: Any) -> list[McpServerDraft]:
+    if isinstance(data, dict) and (data.get("openapi") or data.get("swagger")):
+        raise McpImportError("OpenAPI document — POST /v1/tools/openapi/import instead")
     if isinstance(data, dict) and isinstance(data.get("mcpServers"), dict):
         drafts = [
             _draft_from_stanza(name, stanza, source="import")
@@ -266,28 +291,61 @@ def catalog() -> list[dict[str, Any]]:
     return [{**entry.to_dict(), "installed": entry.name in installed} for entry in CATALOG]
 
 
-def add_draft(draft: McpServerDraft) -> dict[str, Any]:
+def _unique_server_name(desired: str) -> str:
+    taken = {row["name"] for row in state_service.list_mcp_servers()}
+    if desired not in taken:
+        return desired
+    for index in range(2, 100):
+        candidate = f"{desired}-{index}"[:64]
+        if candidate not in taken:
+            return candidate
+    raise McpImportError(f"could not de-collide server name {desired!r}")
+
+
+def _ciphertext_for(secrets: dict[str, str]) -> str | None:
+    if not secrets:
+        return None
+    from hivepilot.services import credential_box
+
+    if not credential_box.can_encrypt():
+        return None
+    return credential_box.encrypt_secret_map(secrets)
+
+
+def add_draft(
+    draft: McpServerDraft, *, credentials: dict[str, str] | None = None
+) -> dict[str, Any]:
+    merged = dict(draft.literal_secrets)
+    if credentials:
+        merged.update(credentials)
     return state_service.upsert_mcp_server(
-        name=draft.name,
+        name=_unique_server_name(draft.name),
         transport=draft.transport,
         command=draft.command,
         args=draft.args,
         url=draft.url,
         env=draft.env,
         source=draft.source,
+        credentials_ciphertext=_ciphertext_for(merged),
     )
 
 
 def add_from_catalog(name: str) -> dict[str, Any]:
     for entry in CATALOG:
         if entry.name == name:
+            existing = next(
+                (row for row in state_service.list_mcp_servers() if row["name"] == entry.name),
+                None,
+            )
+            if existing is not None:
+                return existing
             return add_draft(entry.as_draft())
     raise KeyError(name)
 
 
-def import_and_save(text: str) -> dict[str, Any]:
+def import_and_save(text: str, *, credentials: dict[str, str] | None = None) -> dict[str, Any]:
     drafts = parse_import(text)
-    servers = [add_draft(d) for d in drafts]
+    servers = [add_draft(d, credentials=credentials) for d in drafts]
     stripped = sorted({k for d in drafts for k in d.stripped_env_keys})
     return {
         "drafts": [d.to_dict() for d in drafts],

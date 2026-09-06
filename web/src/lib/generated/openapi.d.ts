@@ -314,8 +314,19 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** McpCredentialsRequest */
+        McpCredentialsRequest: {
+            /** Credentials */
+            credentials: {
+                [key: string]: string;
+            };
+        };
         /** McpImportRequest */
         McpImportRequest: {
+            /** Credentials */
+            credentials?: {
+                [key: string]: string;
+            } | null;
             /** Text */
             text: string;
         };
@@ -381,6 +392,19 @@ export interface components {
             run_id: number;
             /** Status */
             status: string;
+        };
+        /** OpenApiImportRequest */
+        OpenApiImportRequest: {
+            /** Credentials */
+            credentials?: {
+                [key: string]: string;
+            } | null;
+            /** Name */
+            name?: string | null;
+            /** Text */
+            text?: string | null;
+            /** Url */
+            url?: string | null;
         };
         /** PartitionCancelResponse */
         PartitionCancelResponse: {

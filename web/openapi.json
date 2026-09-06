@@ -570,8 +570,38 @@
         "title": "McpCatalogAddRequest",
         "type": "object"
       },
+      "McpCredentialsRequest": {
+        "properties": {
+          "credentials": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Credentials",
+            "type": "object"
+          }
+        },
+        "required": [
+          "credentials"
+        ],
+        "title": "McpCredentialsRequest",
+        "type": "object"
+      },
       "McpImportRequest": {
         "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          },
           "text": {
             "title": "Text",
             "type": "string"
@@ -762,6 +792,59 @@
           "status"
         ],
         "title": "NewRunResponse",
+        "type": "object"
+      },
+      "OpenApiImportRequest": {
+        "properties": {
+          "credentials": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credentials"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "title": "OpenApiImportRequest",
         "type": "object"
       },
       "PartitionCancelResponse": {

@@ -3783,6 +3783,11 @@ def plugins_catalog_endpoint(
 
 class McpImportRequest(BaseModel):
     text: str
+    credentials: dict[str, str] | None = None
+
+
+class McpCredentialsRequest(BaseModel):
+    credentials: dict[str, str]
 
 
 class McpCatalogAddRequest(BaseModel):
@@ -3796,7 +3801,7 @@ def mcp_servers_endpoint() -> dict:
     (60s TTL) so the page stays current without a dedicated scheduler."""
     from hivepilot.services import mcp_probe
 
-    servers = mcp_probe.refresh_stale()
+    servers = [state_service.public_mcp_server(row) for row in mcp_probe.refresh_stale()]
     return {
         "servers": servers,
         "cost_note": (
@@ -3827,9 +3832,11 @@ def mcp_import_endpoint(
     if not payload.text.strip():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty paste")
     try:
-        return mcp_registry.import_and_save(payload.text)
+        result = mcp_registry.import_and_save(payload.text, credentials=payload.credentials)
     except mcp_registry.McpImportError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    result["servers"] = [state_service.public_mcp_server(row) for row in result["servers"]]
+    return result
 
 
 @v1.post("/mcp/catalog/add")
@@ -3846,7 +3853,7 @@ def mcp_catalog_add_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown catalog entry '{payload.name}'"
         ) from None
-    return {"server": server}
+    return {"server": state_service.public_mcp_server(server)}
 
 
 @v1.post("/mcp/servers/{server_id}/probe", dependencies=[Depends(require_role("read"))])
@@ -3857,7 +3864,7 @@ def mcp_probe_endpoint(server_id: int) -> dict:
     row = mcp_probe.probe_and_store(server_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
-    return {"server": row}
+    return {"server": state_service.public_mcp_server(row)}
 
 
 @v1.delete("/mcp/servers/{server_id}")
@@ -3870,6 +3877,91 @@ def mcp_delete_endpoint(
     if not _state.delete_mcp_server(server_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
     return {"deleted": server_id}
+
+
+class OpenApiImportRequest(BaseModel):
+    text: str | None = None
+    url: str | None = None
+    name: str | None = None
+    credentials: dict[str, str] | None = None
+
+
+class TypedToolOut(BaseModel):
+    id: str | None = None
+    qualified_name: str
+    local_name: str
+    source_kind: str
+    source_id: str
+    description: str = ""
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+@v1.post("/mcp/servers/{server_id}/credentials")
+def mcp_credentials_endpoint(
+    server_id: int,
+    payload: McpCredentialsRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services import credential_box
+
+    if not credential_box.can_encrypt():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="literal credentials require HIVEPILOT_CREDENTIALS_KEY; use ${env:} refs instead",
+        )
+    try:
+        ciphertext = credential_box.encrypt_secret_map(payload.credentials)
+    except credential_box.CredentialBoxError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    row = state_service.set_mcp_server_credentials(server_id, ciphertext)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown server")
+    return {"server": state_service.public_mcp_server(row)}
+
+
+@v1.post("/mcp/servers/{server_id}/sync")
+def mcp_sync_endpoint(
+    server_id: int, _caller: token_service.TokenEntry = Depends(require_role("admin"))
+) -> dict[str, Any]:
+    from hivepilot.services.mcp_sync import McpSyncError, sync_mcp_server
+
+    try:
+        tools = sync_mcp_server(server_id)
+    except McpSyncError as exc:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if str(exc).startswith("unknown server")
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"tools": [TypedToolOut(**tool.to_dict()).model_dump() for tool in tools]}
+
+
+@v1.post("/tools/openapi/import")
+def openapi_import_endpoint(
+    payload: OpenApiImportRequest,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict[str, Any]:
+    from hivepilot.services.openapi_tools import OpenApiImportError, import_openapi
+
+    try:
+        return import_openapi(
+            text=payload.text, url=payload.url, name=payload.name, credentials=payload.credentials
+        )
+    except OpenApiImportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+@v1.get("/tools")
+def list_typed_tools_endpoint(
+    source_kind: str | None = None,
+    source_id: str | None = None,
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    from hivepilot.services.typed_tools import list_typed_tools
+
+    tools = list_typed_tools(source_kind=source_kind, source_id=source_id)
+    return {"tools": [TypedToolOut(**tool.to_dict()).model_dump() for tool in tools]}
 
 
 @v1.get("/agents/admin")

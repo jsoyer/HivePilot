@@ -443,12 +443,23 @@ configuration and [CONFIGURATION.md](CONFIGURATION.md) for environment variables
 Pollen's **MCP** tab (System group) is a unified servers + catalog page:
 
 - **Paste-anything import** — Claude/Cursor `{"mcpServers": …}` JSON, a bare `https://…` URL, or a command (`npx -y @modelcontextprotocol/server-filesystem /tmp`). Admin-only (`POST /v1/mcp/import`).
-- **Literal secrets are stripped** — only `${env:NAME}` refs are stored.
-- **URLs are never fetched** on import (SSRF). A non-loopback HTTP server is recorded as `remote` and not probed; loopback GETs are allowed.
+- **Literal secrets are stripped** from `env` — only `${env:NAME}` refs stay in the row.
+- **URLs are never fetched** on import. A non-loopback HTTP server is recorded as `remote` and not probed; loopback GETs are allowed.
 - **Health** — `shutil.which` for stdio commands; refreshed on `GET /v1/mcp/servers` (60s TTL) and via **Probe**.
 - **Cost per server** is not metered yet (HP-73 tracks LLM providers, not MCP tool calls).
 
 Catalog entries are templates (filesystem, github, fetch, memory, token-savior). Adding one writes a registry row; it does not install npm/pip.
+
+## Typed tools — MCP HTTPS + OpenAPI (HP-58)
+
+Paste import still does not fetch. Listing tools is a separate admin action that goes through the SSRF guard:
+
+- `POST /v1/mcp/servers/{id}/sync` — JSON-RPC `tools/list` on an `http` server (HTTPS required off-loopback; redirects refused; private/metadata DNS answers rejected).
+- `POST /v1/tools/openapi/import` — OpenAPI 3 / Swagger 2 from pasted text or an allowlisted URL. MCP paste of an OpenAPI document is rejected and points here.
+- `GET /v1/tools` — catalog of qualified names `{kind}__{source}__{local}` (Claude `mcp__server__tool` shape). Collisions across sources get a `__2` suffix instead of overwriting.
+- Literal header/env secrets require `HIVEPILOT_CREDENTIALS_KEY` (Fernet). GET responses expose `has_credentials` only — never ciphertext or plaintext. Without the key, keep using `${env:NAME}` refs.
+
+This slice catalogs tools. It does not invoke them or inject registry servers into Claude `--mcp-config`.
 
 ## See also
 

@@ -155,6 +155,8 @@ _SECRET_SETTING_FIELDS = frozenset(
         # Pollen voice (HP-62) — BYO provider keys, never returned by the API.
         "voice_tts_api_key",
         "voice_stt_api_key",
+        # HP-58 — wraps MCP/OpenAPI header secrets at rest (Fernet).
+        "credentials_key",
     }
 )
 
@@ -337,6 +339,9 @@ class Settings(BaseSettings):
     voice_stt_provider: str = "browser"
     # env: HIVEPILOT_VOICE_STT_API_KEY
     voice_stt_api_key: str | None = None
+    # HP-58 — optional Fernet passphrase for MCP/OpenAPI credentials at rest.
+    # env: HIVEPILOT_CREDENTIALS_KEY
+    credentials_key: str | None = None
     # Phase 18 — OpenTelemetry distributed tracing for pipeline/task/step
     # execution (hivepilot/observability/tracing.py). Off by default; mirrors
     # enable_webui/headroom_enabled's opt-in-only gating above. Also requires
