@@ -2,9 +2,8 @@
 
 `_run_review` built its own `RunnerPayload` and dispatched it directly, so
 no `before_step` hook ever saw a reviewer's prompt. headroom never
-compressed one, mem0 never recalled for one, token_savior could never wire
-one — on the two opus calls that dominate the bill, and on prompts that
-carry a whole PR diff.
+compressed one, token_savior could never wire one — on the two opus calls
+that dominate the bill, and on prompts that carry a whole PR diff.
 
 Running the hooks there is the fix. Doing it blindly would be a different
 mistake: a reviewer's input is a diff written by someone else, which is the
@@ -17,11 +16,6 @@ operator's rule for itself — *injection is fine from trusted sources*:
   the unambiguous win here.
 - **The operator's own vault** (obsidian) is authored by the operator. It
   qualifies.
-- **mem0 does not**, on this path. `store()` persists the step's real
-  `output` — what an agent wrote *after reading untrusted code*. A PR
-  carrying injected instructions that an agent quoted would be stored and
-  replayed into the CISO through a channel that looks trusted. That is
-  laundering, not recall.
 
 The flag says what the payload *is*; it does not name plugins. A source that
 knows it holds agent-derived content honours it; one that holds
@@ -34,28 +28,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from conftest import BUNDLED_PLUGINS
 
 from hivepilot.runners.base import RunnerPayload
-
-
-def _load_bundled(stem: str):
-    """Load a bundled plugin BY FILE PATH, the way production does.
-
-    `importlib.import_module("plugins.<stem>")` worked only because a repo
-    checkout put the old top-level `plugins/` on `sys.path`. The loader itself
-    has never used that route -- `hivepilot.plugins._load_plugin_module` loads
-    by path precisely because the installed binary has no repo root on
-    `sys.path` -- so the import form tested a mechanism that does not ship.
-    """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location(
-        f"_bundled_{stem}", BUNDLED_PLUGINS / f"{stem}.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class _Recorder:
@@ -146,69 +120,3 @@ class TestTheUntrustedFlag:
         metadata = review_context.prepare({"extra_prompt": "the diff"}, untrusted_input=True)
 
         assert metadata["extra_prompt"] == "the diff"
-
-
-class TestSourcesApplyTheRuleThemselves:
-    def test_mem0_declines_to_recall_into_an_untrusted_payload(self, monkeypatch, tmp_path) -> None:
-        """mem0 stores agent output. On a reviewer prompt that is text an
-        agent wrote after reading untrusted code — replaying it into the
-        CISO is the laundering path, so mem0 sits this one out."""
-
-        from hivepilot.services import review_context
-
-        mem0 = _load_bundled("mem0")
-        # Without this both tests pass for the wrong reason: mem0 is
-        # opt-in, so a disabled plugin never searches and the guard under
-        # test is never reached.
-        monkeypatch.setattr("hivepilot.config.settings.mem0_enabled", True)
-        called: list[str] = []
-
-        def _client():
-            called.append("searched")
-            return None
-
-        monkeypatch.setattr(mem0, "_get_client", _client)
-
-        payload = type(
-            "P",
-            (),
-            {
-                "metadata": review_context.prepare({"extra_prompt": "d"}, untrusted_input=True),
-                "step": None,
-                "task_name": "review",
-                "project_name": "p",
-            },
-        )()
-        mem0.recall(payload=payload)
-
-        assert called == [], "mem0 must not search on an untrusted payload"
-
-    def test_mem0_still_recalls_on_an_ordinary_step(self, monkeypatch) -> None:
-        """The guard has to be narrow, or it silently disables mem0 wholesale."""
-
-        mem0 = _load_bundled("mem0")
-        # Without this both tests pass for the wrong reason: mem0 is
-        # opt-in, so a disabled plugin never searches and the guard under
-        # test is never reached.
-        monkeypatch.setattr("hivepilot.config.settings.mem0_enabled", True)
-        called: list[str] = []
-
-        def _client():
-            called.append("searched")
-            return None
-
-        monkeypatch.setattr(mem0, "_get_client", _client)
-
-        payload = type(
-            "P",
-            (),
-            {
-                "metadata": {"extra_prompt": "d"},
-                "step": None,
-                "task_name": "t",
-                "project_name": "p",
-            },
-        )()
-        mem0.recall(payload=payload)
-
-        assert called == ["searched"]

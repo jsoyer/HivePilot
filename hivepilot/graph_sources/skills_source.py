@@ -10,7 +10,7 @@ already knows about (see `hivepilot/graph_sources/plugins_source.py`).
 D3 (Sprint 2 spec decision): **`min_role="admin"`** -- a local host
 filesystem scan is qualitatively different from every tenant-scoped or
 config-level graph source; it must never be reachable by a read/run/approve
-token, exactly like `GET /v1/memories`'s own admin gate. The S1 framework
+token, admin-gated because a host filesystem scan is not tenant data. The S1 framework
 (`hivepilot/graph.py`'s `_enforce_graph_min_role` caller in
 `hivepilot/services/api_service.py`) enforces this automatically once
 `SKILLS_GRAPH_SOURCE.min_role == "admin"` is registered -- nothing in this
