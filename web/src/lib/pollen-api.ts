@@ -10,7 +10,7 @@
  * aggregation or re-derivation of numbers the API already computed.
  */
 
-import { apiFetch } from './api'
+import { apiFetch, apiFetchBlob } from './api'
 
 // ---------------------------------------------------------------------------
 // Shared shapes
@@ -2501,4 +2501,29 @@ export function subscribePush(body: {
 
 export function unsubscribePush(endpoint: string): Promise<{ ok: boolean }> {
   return postJson<{ ok: boolean }>('/v1/push/unsubscribe', { endpoint })
+}
+
+// ---------------------------------------------------------------------------
+// Voice (HP-62) — browser STT/TTS by default; cloud TTS is proxied so BYO
+// keys never reach the browser.
+// ---------------------------------------------------------------------------
+
+export interface VoiceConfig {
+  stt: string
+  tts: string
+  cloud_tts: boolean
+  cloud_stt: boolean
+}
+
+export function fetchVoiceConfig(): Promise<VoiceConfig> {
+  return apiFetch<VoiceConfig>('/v1/voice/config', { on403: 'forbidden' })
+}
+
+export function synthesizeSpeech(text: string): Promise<Blob> {
+  return apiFetchBlob('/v1/voice/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+    on403: 'forbidden',
+  })
 }

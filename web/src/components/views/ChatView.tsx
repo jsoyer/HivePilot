@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RoleAvatar } from '@/components/RoleAvatar'
-import { useT } from '@/lib/i18n'
+import { CallToggle, useVoiceCall } from '@/components/voice/CallToggle'
+import { ComposerMic } from '@/components/voice/ComposerMic'
+import { useLanguage, useT } from '@/lib/i18n'
 import { askConcierge, type ConciergeDecision } from '@/lib/pollen-api'
+import { speakReply } from '@/lib/voice-reply'
 
 /**
  * Talk to the agents in natural language (HP-22) — a Grok-Bot-style chat panel
@@ -97,6 +100,8 @@ function ProposalCard({ decision, note }: { decision: ConciergeDecision; note: s
 
 export function ChatView() {
   const t = useT()
+  const { language } = useLanguage()
+  const inCall = useVoiceCall()
   const conversationId = useMemo(
     () =>
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -122,12 +127,15 @@ export function ChatView() {
     try {
       const decision = await askConcierge(trimmed, conversationId)
       setEntries((prev) => [...prev, { id: uid(), from: 'concierge', decision }])
+      if (inCall && decision.answer_text) {
+        void speakReply(decision.answer_text, language === 'fr' ? 'fr-FR' : 'en-US')
+      }
     } catch {
       setEntries((prev) => [...prev, { id: uid(), from: 'error', text: t('chat.error') }])
     } finally {
       setPending(false)
     }
-  }, [text, pending, conversationId, t])
+  }, [text, pending, conversationId, t, inCall, language])
 
   return (
     <div className="flex h-[calc(100vh-10rem)] flex-col gap-3">
@@ -186,6 +194,11 @@ export function ChatView() {
           placeholder={t('chat.placeholder')}
           className="min-h-[2.5rem] flex-1 resize-none rounded-md border border-border bg-background p-2 text-sm"
         />
+        <ComposerMic
+          disabled={pending}
+          onTranscript={(chunk) => setText((prev) => (prev ? `${prev.trim()} ${chunk}` : chunk))}
+        />
+        <CallToggle />
         <Button
           data-testid="chat-send"
           onClick={() => void send()}

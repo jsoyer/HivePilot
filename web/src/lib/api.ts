@@ -109,6 +109,18 @@ export interface ApiFetchOptions extends RequestInit {
  * without touching the token.
  */
 export async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Promise<T> {
+  const response = await apiRequest(path, init)
+  return (await response.json()) as T
+}
+
+/** Same auth + status handling as `apiFetch`, but returns the raw body
+ * (HP-62 cloud TTS returns `audio/mpeg`, not JSON). */
+export async function apiFetchBlob(path: string, init: ApiFetchOptions = {}): Promise<Blob> {
+  const response = await apiRequest(path, init)
+  return response.blob()
+}
+
+async function apiRequest(path: string, init: ApiFetchOptions = {}): Promise<Response> {
   const { on403 = 'clear', ...requestInit } = init
   const token = getToken()
   const headers = new Headers(requestInit.headers)
@@ -136,5 +148,5 @@ export async function apiFetch<T>(path: string, init: ApiFetchOptions = {}): Pro
     throw new ApiError(response.status, detail)
   }
 
-  return (await response.json()) as T
+  return response
 }

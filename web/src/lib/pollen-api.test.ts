@@ -31,6 +31,7 @@ import {
   fetchMemoryReality,
   fetchModels,
   fetchOnboardingMachine,
+  fetchVoiceConfig,
   connectModel,
   fetchRun,
   fetchVerdicts,
@@ -398,5 +399,21 @@ describe('catalogue endpoints', () => {
     apiFetchMock.mockResolvedValue(['deploy'])
     await expect(fetchTaskNames()).resolves.toEqual(['deploy'])
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/tasks', { on403: 'forbidden' })
+  })
+
+  it('fetchVoiceConfig calls GET /v1/voice/config', async () => {
+    apiFetchMock.mockResolvedValue({
+      stt: 'browser',
+      tts: 'browser',
+      cloud_tts: false,
+      cloud_stt: false,
+    })
+    await expect(fetchVoiceConfig()).resolves.toEqual({
+      stt: 'browser',
+      tts: 'browser',
+      cloud_tts: false,
+      cloud_stt: false,
+    })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/voice/config', { on403: 'forbidden' })
   })
 })

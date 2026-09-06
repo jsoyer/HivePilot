@@ -3,6 +3,7 @@ import {
   ApiAuthError,
   ApiForbiddenError,
   apiFetch,
+  apiFetchBlob,
   clearToken,
   getToken,
   setToken,
@@ -152,5 +153,22 @@ describe('apiFetch', () => {
     // this specific endpoint. Other endpoints the token IS allowed to call
     // must keep working, so the token must not be cleared.
     expect(getToken()).toBe('read-role-token')
+  })
+
+  it('apiFetchBlob returns the raw body without parsing JSON', async () => {
+    setToken('secret-token')
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-type': 'audio/mpeg' },
+      }),
+    ) as unknown as typeof fetch
+
+    const blob = await apiFetchBlob('/v1/voice/tts', {
+      method: 'POST',
+      on403: 'forbidden',
+    })
+    expect(blob.size).toBe(3)
+    expect(getToken()).toBe('secret-token')
   })
 })

@@ -152,6 +152,9 @@ _SECRET_SETTING_FIELDS = frozenset(
         "swarm_secrets",
         # PWA Web Push (HP-63) — the VAPID private key signs every push.
         "web_push_vapid_private_key",
+        # Pollen voice (HP-62) — BYO provider keys, never returned by the API.
+        "voice_tts_api_key",
+        "voice_stt_api_key",
     }
 )
 
@@ -324,6 +327,16 @@ class Settings(BaseSettings):
     # RFC 8292 contact (`mailto:` or `https:`) sent with every VAPID claim.
     # env: HIVEPILOT_WEB_PUSH_VAPID_SUBJECT
     web_push_vapid_subject: str = "mailto:pollen@localhost"
+    # Pollen voice (HP-62). `browser` is the default (Web Speech, no key).
+    # openai / elevenlabs / cartesia require the matching API key.
+    # env: HIVEPILOT_VOICE_TTS_PROVIDER
+    voice_tts_provider: str = "browser"
+    # env: HIVEPILOT_VOICE_TTS_API_KEY
+    voice_tts_api_key: str | None = None
+    # env: HIVEPILOT_VOICE_STT_PROVIDER
+    voice_stt_provider: str = "browser"
+    # env: HIVEPILOT_VOICE_STT_API_KEY
+    voice_stt_api_key: str | None = None
     # Phase 18 — OpenTelemetry distributed tracing for pipeline/task/step
     # execution (hivepilot/observability/tracing.py). Off by default; mirrors
     # enable_webui/headroom_enabled's opt-in-only gating above. Also requires

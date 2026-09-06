@@ -617,6 +617,40 @@ def whoami(caller: token_service.TokenEntry = Depends(require_role("read"))) -> 
     return {"role": caller.role, "tenant": caller.tenant}
 
 
+class VoiceSpeakBody(BaseModel):
+    text: str
+
+
+@v1.get("/voice/config")
+def voice_config(_caller: token_service.TokenEntry = Depends(require_role("read"))) -> dict:
+    """Which STT/TTS engines are available. Never returns API keys."""
+    from hivepilot.services import voice_service
+
+    return voice_service.public_config()
+
+
+@v1.post("/voice/tts")
+def voice_tts(
+    body: VoiceSpeakBody,
+    _caller: token_service.TokenEntry = Depends(require_role("run")),
+) -> Response:
+    """Cloud TTS proxy (HP-62). 404 when only the browser engine is configured."""
+    from hivepilot.services import voice_service
+
+    cfg = voice_service.public_config()
+    if not cfg["cloud_tts"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    try:
+        audio = voice_service.synthesize(body.text)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="tts failed") from exc
+    return Response(content=audio, media_type="audio/mpeg")
+
+
 class PushSubscribeBody(BaseModel):
     """Browser PushSubscription JSON (HP-63) — endpoint + p256dh/auth keys."""
 
