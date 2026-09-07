@@ -216,13 +216,40 @@ describe('ProvidersView', () => {
 
     const proxy = container.querySelector('[data-testid="local-proxy-opencodex"]')
     expect(proxy?.textContent).toMatch(/127\.0\.0\.1:10100/)
-    expect(proxy?.textContent).toMatch(/provider proxy|proxy de providers/i)
+    expect(proxy?.textContent).toMatch(/OpenAI-compat proxy|proxy OpenAI-compat/i)
     expect(container.querySelector('[data-testid="cli-session-codex"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="cli-session-opencodex"]')).toBeNull()
     expect(container.querySelector('[data-testid="local-backend-opencodex"]')).toBeNull()
     expect(container.querySelector('[data-testid="local-proxy-codex"]')).toBeNull()
     expect(container.querySelector('[data-testid="cli-login-opencodex"]')).toBeNull()
     expect(container.textContent).not.toMatch(/codex via opencodex|via OpenCodex/i)
+
+    verifyModel.mockResolvedValue({
+      ok: true,
+      target: 'opencodex',
+      detail: 'HTTP 200 · 1 models',
+      models: ['proxy-model'],
+      error: null,
+    })
+    const verifyBtn = container
+      .querySelector('[data-testid="local-proxy-opencodex"]')
+      ?.querySelector('button') as HTMLButtonElement
+    expect(verifyBtn).not.toBeNull()
+    await act(async () => {
+      verifyBtn.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(verifyModel).toHaveBeenCalledWith({
+      provider: 'opencodex',
+      base_url: 'http://127.0.0.1:10100/v1',
+    })
+    expect(verifyModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agent_kind: 'codex' }),
+    )
+    expect(verifyModel).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agent_kind: 'opencodex' }),
+    )
   })
 
   it('lists a reachable local model and a CLI session already on the machine', async () => {

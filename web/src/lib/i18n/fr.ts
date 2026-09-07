@@ -243,7 +243,7 @@ export const fr: Record<TranslationKey, string> = {
   'providers.cliTitle': 'Sessions CLI',
   'providers.proxiesTitle': 'Proxies locaux',
   'providers.opencodexNote':
-    'OpenCodex (ocx) est un proxy de providers, pas le CLI Codex. HivePilot ne le traite pas comme un runner.',
+    'OpenCodex (ocx) est un proxy OpenAI-compat local. HivePilot y envoie les chat completions — ce n’est pas le runner CLI Codex.',
   'providers.proxyBinaryPresent': 'ocx sur le PATH',
   'providers.proxyBinaryAbsent': 'ocx absent du PATH',
   'providers.verify': 'Vérifier',

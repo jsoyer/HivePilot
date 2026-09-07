@@ -2490,6 +2490,7 @@ export interface LocalProxy {
   binary_present: boolean
   base_url: string
   reachable: boolean
+  models?: string[]
   error: string | null
 }
 

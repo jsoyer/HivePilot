@@ -50,6 +50,7 @@ def test_machine_snapshot_keeps_codex_cli_and_opencodex_proxy_apart(monkeypatch)
             "binary_present": True,
             "base_url": "http://127.0.0.1:10100",
             "reachable": True,
+            "models": ["proxy-model"],
             "error": None,
         },
     )

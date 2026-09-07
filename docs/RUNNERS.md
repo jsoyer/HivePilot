@@ -118,10 +118,17 @@ PATH-gated plugins (not compiled-in built-ins):
 
 `codex`, `opencode`, and **OpenCodex** (`ocx`) are three different things.
 `codex` is the OpenAI Codex CLI runner. `opencode` is the OpenCode CLI runner.
-OpenCodex is a local provider *proxy* (HP-82). HivePilot never registers
+OpenCodex is a local provider *proxy* (HP-82 / HP-83). HivePilot never registers
 `kind: opencodex` as a runner, never writes `~/.codex/config.toml` for it,
 and never treats a Codex CLI sign-in as OpenCodex. It appears on
 `GET /v1/onboarding/machine` under `proxies`, not under `cli` or `local`.
+
+**What HivePilot does with it:** `ocx start` exposes an OpenAI-compatible
+HTTP API (default `http://127.0.0.1:10100/v1`). A prompt-CLI step in
+`mode: api` with `api_provider: opencodex` POSTs `/v1/chat/completions`
+there — the same shape as Ollama's local endpoint. The models behind the
+proxy are whatever the operator configured in OpenCodex. Codex CLI
+(`kind: codex`) is unchanged and is never pointed at this URL.
 
 An inactive kind raises an actionable `RunnerPluginUnavailableError` naming the flag
 and the missing binary — never a bare `KeyError`.

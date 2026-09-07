@@ -53,6 +53,7 @@ class TestDispatch:
         assert mv.verify("openai", api_key="k").ok is True
         assert mv.verify("openrouter", api_key="k").target == "openrouter"
         assert mv.verify("nous", api_key="k").target == "nous"
+        assert mv.verify("opencodex").target == "opencodex"
 
     def test_ollama_defaults_to_local_endpoint(self, monkeypatch):
         seen = {}
@@ -65,6 +66,21 @@ class TestDispatch:
         res = mv.verify("ollama")
         assert res.ok is True
         assert seen["url"].startswith("http://localhost:11434/v1")
+
+    def test_opencodex_defaults_to_loopback_proxy(self, monkeypatch):
+        seen = {}
+
+        def _capture(url, headers, timeout):  # noqa: ANN001
+            seen["url"] = url
+            return 200, {"data": [{"id": "proxy-model"}]}
+
+        monkeypatch.setattr(mv, "_get_json", _capture)
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        res = mv.verify("opencodex")
+        assert res.ok is True
+        assert res.target == "opencodex"
+        assert seen["url"] == "http://127.0.0.1:10100/v1/models"
+        assert res.models == ["proxy-model"]
 
     def test_base_url_override_wins(self, monkeypatch):
         seen = {}
