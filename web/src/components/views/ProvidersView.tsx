@@ -18,6 +18,7 @@ import {
   verifyModel,
   type CliSession,
   type LocalBackend,
+  type LocalProxy,
   type ModelConnectResult,
   type ModelVerifyResult,
   type ProviderFallback,
@@ -109,7 +110,8 @@ export function ProvidersView() {
           emptyMessage={t('providers.machineEmpty')}
           isEmpty={(data) =>
             data.local.every((b) => !b.reachable && b.models.length === 0) &&
-            data.cli.every((s) => s.state !== 'present')
+            data.cli.every((s) => s.state !== 'present') &&
+            (data.proxies ?? []).every((p) => !p.reachable && !p.binary_present)
           }
         >
           {(data) => (
@@ -133,6 +135,16 @@ export function ProvidersView() {
                   ))}
                 </ul>
               </div>
+              {(data.proxies ?? []).some((p) => p.reachable || p.binary_present) ? (
+                <div>
+                  <h3 className="mb-2 text-sm font-medium">{t('providers.proxiesTitle')}</h3>
+                  <ul className="flex flex-col gap-2">
+                    {(data.proxies ?? []).map((proxy) => (
+                      <LocalProxyRow key={proxy.kind} proxy={proxy} />
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               <div>
                 <h3 className="mb-2 text-sm font-medium">{t('providers.cliTitle')}</h3>
                 <ul className="flex flex-col gap-2">
@@ -381,6 +393,29 @@ function ConnectModelCard({ canAdmin }: { canAdmin: boolean }) {
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function LocalProxyRow({ proxy }: { proxy: LocalProxy }) {
+  const t = useT()
+  return (
+    <li
+      data-testid={`local-proxy-${proxy.kind}`}
+      className="flex flex-wrap items-start justify-between gap-2 text-sm"
+    >
+      <div>
+        <span className="font-medium">{proxy.kind}</span>{' '}
+        <span className="text-xs text-muted-foreground">{proxy.base_url}</span>
+        <div className="text-xs text-muted-foreground">
+          {proxy.reachable ? t('providers.reachable') : t('providers.unreachable')}
+          {' · '}
+          {proxy.binary_present
+            ? t('providers.proxyBinaryPresent')
+            : t('providers.proxyBinaryAbsent')}
+        </div>
+        <p className="text-xs text-muted-foreground">{t('providers.opencodexNote')}</p>
+      </div>
+    </li>
   )
 }
 

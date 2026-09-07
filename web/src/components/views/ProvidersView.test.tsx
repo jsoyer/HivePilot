@@ -121,6 +121,7 @@ beforeEach(() => {
       { kind: 'claude', state: 'present', login_available: true },
       { kind: 'grok', state: 'absent', login_available: true },
     ],
+    proxies: [],
   })
   container = document.createElement('div')
   document.body.appendChild(container)
@@ -193,6 +194,35 @@ describe('ProvidersView', () => {
 
     expect(container.querySelector('[data-testid="providers-table"]')).toBeNull()
     expect(container.textContent).toMatch(/No provider activity|Aucune activité/i)
+  })
+
+  it('renders OpenCodex as its own proxy, never as a Codex CLI session', async () => {
+    fetchAnalyticsCost.mockResolvedValue(cost([]))
+    fetchOnboardingMachine.mockResolvedValue({
+      local: [],
+      cli: [{ kind: 'codex', state: 'present', login_available: true }],
+      proxies: [
+        {
+          kind: 'opencodex',
+          binary: 'ocx',
+          binary_present: true,
+          base_url: 'http://127.0.0.1:10100',
+          reachable: true,
+          error: null,
+        },
+      ],
+    })
+    await mountResolved()
+
+    const proxy = container.querySelector('[data-testid="local-proxy-opencodex"]')
+    expect(proxy?.textContent).toMatch(/127\.0\.0\.1:10100/)
+    expect(proxy?.textContent).toMatch(/provider proxy|proxy de providers/i)
+    expect(container.querySelector('[data-testid="cli-session-codex"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="cli-session-opencodex"]')).toBeNull()
+    expect(container.querySelector('[data-testid="local-backend-opencodex"]')).toBeNull()
+    expect(container.querySelector('[data-testid="local-proxy-codex"]')).toBeNull()
+    expect(container.querySelector('[data-testid="cli-login-opencodex"]')).toBeNull()
+    expect(container.textContent).not.toMatch(/codex via opencodex|via OpenCodex/i)
   })
 
   it('lists a reachable local model and a CLI session already on the machine', async () => {

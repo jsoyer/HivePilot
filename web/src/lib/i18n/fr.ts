@@ -236,10 +236,16 @@ export const fr: Record<TranslationKey, string> = {
     'Chiffres = enveloppes tokens/coût enregistrées, pas des factures provider. Le quota %/runway nécessite une API provider et n’est volontairement pas affiché.',
   'providers.machineTitle': 'Sur cette machine',
   'providers.machineDescription':
-    'Réutilise les sign-ins CLI et les modèles locaux déjà là. Vérifie un démon, connecte un agent CLI, ou enregistre une clé cloud vérifiée ci-dessous.',
-  'providers.machineEmpty': 'Aucun démon local n’a répondu et aucune session CLI n’est stockée.',
+    'Réutilise les modèles locaux, les proxies locaux, et les sign-ins CLI déjà là. OpenCodex n’est pas le CLI Codex.',
+  'providers.machineEmpty':
+    'Aucun démon local n’a répondu, aucun proxy local n’est joignable, et aucune session CLI n’est stockée.',
   'providers.localTitle': 'Modèles locaux',
   'providers.cliTitle': 'Sessions CLI',
+  'providers.proxiesTitle': 'Proxies locaux',
+  'providers.opencodexNote':
+    'OpenCodex (ocx) est un proxy de providers, pas le CLI Codex. HivePilot ne le traite pas comme un runner.',
+  'providers.proxyBinaryPresent': 'ocx sur le PATH',
+  'providers.proxyBinaryAbsent': 'ocx absent du PATH',
   'providers.verify': 'Vérifier',
   'providers.verifying': 'Vérification…',
   'providers.reachable': 'joignable',

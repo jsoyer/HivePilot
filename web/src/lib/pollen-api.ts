@@ -2483,9 +2483,21 @@ export interface CliSession {
   login_available: boolean
 }
 
+/** OpenCodex (`ocx`) — a local provider proxy, not the Codex CLI runner. */
+export interface LocalProxy {
+  kind: string
+  binary: string
+  binary_present: boolean
+  base_url: string
+  reachable: boolean
+  error: string | null
+}
+
 export interface OnboardingMachine {
   local: LocalBackend[]
   cli: CliSession[]
+  /** HP-82: OpenCodex lives here, never under `cli` (that's `codex`). */
+  proxies?: LocalProxy[]
 }
 
 export interface ModelVerifyResult {

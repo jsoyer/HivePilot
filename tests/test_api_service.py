@@ -812,6 +812,10 @@ class TestOnboardingMachine:
         assert body["local"][0]["kind"] == "ollama"
         assert body["local"][0]["models"] == ["llama3.2"]
         assert any(row["kind"] == "claude" for row in body["cli"])
+        assert "proxies" in body
+        assert all(row["kind"] != "opencodex" for row in body["cli"])
+        assert any(row["kind"] == "opencodex" for row in body["proxies"])
+        assert all(row["kind"] != "codex" for row in body["proxies"])
 
 
 class TestModelsVerify:

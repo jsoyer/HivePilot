@@ -239,10 +239,16 @@ export const en = {
     'Figures are recorded token/cost envelopes, not provider invoices. Quota %/runway needs a provider API and is intentionally not shown.',
   'providers.machineTitle': 'On this machine',
   'providers.machineDescription':
-    'Reuse CLI sign-ins and local models already running. Verify a daemon, sign in a CLI agent, or save a verified cloud key below.',
-  'providers.machineEmpty': 'No local daemon answered and no CLI session is stored.',
+    'Reuse local models, local provider proxies, and CLI sign-ins already on this machine. OpenCodex is a proxy, not the Codex CLI.',
+  'providers.machineEmpty':
+    'No local daemon answered, no local proxy is up, and no CLI session is stored.',
   'providers.localTitle': 'Local models',
   'providers.cliTitle': 'CLI sign-ins',
+  'providers.proxiesTitle': 'Local proxies',
+  'providers.opencodexNote':
+    'OpenCodex (ocx) is a provider proxy, not the Codex CLI. HivePilot does not treat it as a runner.',
+  'providers.proxyBinaryPresent': 'ocx on PATH',
+  'providers.proxyBinaryAbsent': 'ocx not on PATH',
   'providers.verify': 'Verify',
   'providers.verifying': 'Checking…',
   'providers.reachable': 'reachable',

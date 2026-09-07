@@ -125,8 +125,15 @@ def cli_sessions() -> list[dict[str, str | bool]]:
 
 
 def machine_snapshot() -> dict[str, object]:
-    """What is already working on this box — the OpenClaw setup surface."""
+    """What is already working on this box — the OpenClaw setup surface.
+
+    ``proxies`` is a separate list on purpose (HP-82): OpenCodex is not a
+    local model daemon and not a Codex CLI session.
+    """
+    from hivepilot.services import opencodex_probe
+
     return {
         "local": [asdict(b) for b in discover()],
         "cli": cli_sessions(),
+        "proxies": [opencodex_probe.snapshot()],
     }
