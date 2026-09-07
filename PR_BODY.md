@@ -16,5 +16,5 @@ Replay: `GET /v1/onboarding/machine` — `proxies[].kind` is `opencodex`, `cli` 
 
 ## Testing
 
-- [ ] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp82_opencodex_probe.py tests/test_api_service.py::TestOnboardingMachine -q`
-- [ ] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx`
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp82_opencodex_probe.py tests/test_api_service.py::TestOnboardingMachine -q`
+- [x] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx`
