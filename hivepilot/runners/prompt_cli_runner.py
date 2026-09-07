@@ -541,6 +541,18 @@ class PromptCliRunner(BaseRunner):
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
                 timeout=timeout,
             )
+        elif provider == "opencodex":
+            # Local OpenCodex proxy (HP-83). Not the Codex CLI runner.
+            from hivepilot.services.opencodex_probe import openai_compat_base
+
+            endpoint = openai_compat_base(env.get("HIVEPILOT_OPENCODEX_BASE_URL"))
+            api_key = env.get("OPENCODEX_API_AUTH_TOKEN") or env.get("OPENAI_API_KEY") or "ocx"
+            return self._post_json(
+                url=f"{endpoint}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
+                timeout=timeout,
+            )
         else:
             raise ValueError(f"Unsupported API provider: {provider}")
 

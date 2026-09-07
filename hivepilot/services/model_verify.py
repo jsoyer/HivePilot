@@ -37,6 +37,7 @@ _OPENAI_COMPATIBLE = {
     "ollama",
     "lmstudio",
     "local",
+    "opencodex",
 }
 
 _DEFAULT_BASE_URL = {
@@ -47,6 +48,7 @@ _DEFAULT_BASE_URL = {
     "perplexity": "https://api.perplexity.ai",
     "ollama": "http://localhost:11434/v1",
     "lmstudio": "http://127.0.0.1:1234/v1",
+    "opencodex": "http://127.0.0.1:10100/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta",
 }
@@ -179,6 +181,11 @@ def verify(
     shape; an unknown provider returns an honest `ok=False`."""
     provider = provider.strip().lower()
     key = _resolve_key(provider, api_key)
+    if provider == "opencodex":
+        from hivepilot.services.opencodex_probe import openai_compat_base
+
+        base = openai_compat_base(base_url)
+        return verify_openai_compatible(base, key, target=provider, timeout=timeout)
     if provider in _OPENAI_COMPATIBLE:
         base = base_url or os.environ.get("OPENAI_BASE_URL") or _DEFAULT_BASE_URL.get(provider)
         if not base:

@@ -431,6 +431,35 @@ class TestApiModeCaptureUsage:
         assert seen["json"]["model"] == "Hermes-4-70B"
         assert seen["headers"]["Authorization"] == "Bearer sk-nous-test"
 
+    def test_opencodex_posts_to_loopback_proxy(self, tmp_path: Path, monkeypatch) -> None:
+        """HP-83: api_provider=opencodex hits ocx, never api.openai.com or Codex CLI."""
+        from unittest.mock import patch
+
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        payload = _api_payload(tmp_path)
+        runner = _api_runner("opencodex", model="whatever-ocx-serves")
+        seen = {}
+
+        def _capture(url, json, headers, timeout):  # noqa: ANN001
+            seen["url"] = url
+            seen["json"] = json
+            seen["headers"] = headers
+            return _fake_response(
+                {
+                    "choices": [{"message": {"content": "VIA-OCX"}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+                }
+            )
+
+        with patch("hivepilot.runners.prompt_cli_runner.requests.post", side_effect=_capture):
+            out = runner.capture(payload)
+
+        assert out == "VIA-OCX"
+        assert seen["url"] == "http://127.0.0.1:10100/v1/chat/completions"
+        assert seen["json"]["model"] == "whatever-ocx-serves"
+        assert seen["headers"]["Authorization"] == "Bearer ocx"
+        assert "api.openai.com" not in seen["url"]
+
     def test_nous_missing_key_fails_closed(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.delenv("NOUS_API_KEY", raising=False)
         monkeypatch.delenv("NOUS_PORTAL_API_KEY", raising=False)

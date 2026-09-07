@@ -140,7 +140,20 @@ export function ProvidersView() {
                   <h3 className="mb-2 text-sm font-medium">{t('providers.proxiesTitle')}</h3>
                   <ul className="flex flex-col gap-2">
                     {(data.proxies ?? []).map((proxy) => (
-                      <LocalProxyRow key={proxy.kind} proxy={proxy} />
+                      <LocalProxyRow
+                        key={proxy.kind}
+                        proxy={proxy}
+                        verifying={verifyKey === `proxy:${proxy.kind}`}
+                        result={verifyByKey[`proxy:${proxy.kind}`]}
+                        onVerify={() => {
+                          const root = proxy.base_url.replace(/\/$/, '')
+                          const base = root.endsWith('/v1') ? root : `${root}/v1`
+                          void runVerify(`proxy:${proxy.kind}`, {
+                            provider: proxy.kind,
+                            base_url: base,
+                          })
+                        }}
+                      />
                     ))}
                   </ul>
                 </div>
@@ -396,8 +409,19 @@ function ConnectModelCard({ canAdmin }: { canAdmin: boolean }) {
   )
 }
 
-function LocalProxyRow({ proxy }: { proxy: LocalProxy }) {
+function LocalProxyRow({
+  proxy,
+  verifying,
+  result,
+  onVerify,
+}: {
+  proxy: LocalProxy
+  verifying: boolean
+  result?: ModelVerifyResult
+  onVerify: () => void
+}) {
   const t = useT()
+  const models = result?.models.length ? result.models : (proxy.models ?? [])
   return (
     <li
       data-testid={`local-proxy-${proxy.kind}`}
@@ -412,9 +436,18 @@ function LocalProxyRow({ proxy }: { proxy: LocalProxy }) {
           {proxy.binary_present
             ? t('providers.proxyBinaryPresent')
             : t('providers.proxyBinaryAbsent')}
+          {models.length ? ` · ${models.join(', ')}` : ''}
         </div>
         <p className="text-xs text-muted-foreground">{t('providers.opencodexNote')}</p>
+        {result && (
+          <div className="text-xs" data-testid={`proxy-verify-${proxy.kind}`}>
+            {result.ok ? result.detail : result.error ?? result.detail}
+          </div>
+        )}
       </div>
+      <Button type="button" size="sm" variant="outline" disabled={verifying} onClick={onVerify}>
+        {verifying ? t('providers.verifying') : t('providers.verify')}
+      </Button>
     </li>
   )
 }

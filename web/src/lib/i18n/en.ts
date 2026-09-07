@@ -246,7 +246,7 @@ export const en = {
   'providers.cliTitle': 'CLI sign-ins',
   'providers.proxiesTitle': 'Local proxies',
   'providers.opencodexNote':
-    'OpenCodex (ocx) is a provider proxy, not the Codex CLI. HivePilot does not treat it as a runner.',
+    'OpenCodex (ocx) is a local OpenAI-compat proxy. HivePilot posts chat completions here — it is not the Codex CLI runner.',
   'providers.proxyBinaryPresent': 'ocx on PATH',
   'providers.proxyBinaryAbsent': 'ocx not on PATH',
   'providers.verify': 'Verify',

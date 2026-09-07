@@ -1,20 +1,17 @@
 ## Summary
 
-HP-82: treat OpenCodex (`ocx`) as its own local **provider proxy**, not as Codex and not as OpenCode.
+HP-83: **use** OpenCodex as a local OpenAI-compat backend. HP-82 only discovered it.
 
-Three different things stay three different things:
+- Probe lists models from loopback `GET /v1/models`
+- `POST /v1/models/verify` accepts `provider: opencodex` (never `agent_kind: codex`)
+- A prompt-CLI step with `mode: api` + `api_provider: opencodex` POSTs `/v1/chat/completions` to `http://127.0.0.1:10100/v1`
+- Still no `kind: opencodex` runner, no `~/.codex/config.toml`, no Codex→OpenCodex fallback
 
-- `codex` — OpenAI Codex CLI runner / CLI sign-in (`cli` on `/v1/onboarding/machine`)
-- `opencode` — OpenCode CLI runner
-- **OpenCodex** — loopback proxy (`ocx`, default `http://127.0.0.1:10100`) under a new `proxies` list
+Linear: [HP-83](https://linear.app/js-workspace/issue/HP-83/utiliser-opencodex-comme-backend-openai-compat-local).
 
-HivePilot does **not** register `kind: opencodex` as a runner, does **not** write `~/.codex/config.toml`, and does **not** offer a “Codex via OpenCodex” toggle. Providers → On this machine shows OpenCodex in **Local proxies**, with no CLI login and no Verify-as-Codex.
-
-Linear: [HP-82](https://linear.app/js-workspace/issue/HP-82/opencodex-ocx-comme-proxy-local-distinct-de-codex).
-
-Replay: `GET /v1/onboarding/machine` — `proxies[].kind` is `opencodex`, `cli` still has `codex`. Open Providers and confirm the proxy row is not a CLI session.
+Replay: `hivepilot run …` with a step `options.mode: api` / `api_provider: opencodex`, or Providers → Local proxies → Verify.
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp82_opencodex_probe.py tests/test_api_service.py::TestOnboardingMachine -q`
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp83_opencodex_use.py tests/test_hp82_opencodex_probe.py tests/test_model_verify.py tests/test_prompt_cli_runner.py::TestApiModeCaptureUsage -q`
 - [x] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx`
