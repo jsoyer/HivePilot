@@ -55,6 +55,7 @@ def test_list_models_stays_loopback(monkeypatch):
 
 def test_list_models_401_is_empty_not_crash(monkeypatch):
     monkeypatch.setattr(opencodex_probe, "is_loopback_url", lambda _url: True)
+
     def _raise(url, timeout=1.5):  # noqa: ANN001
         raise HTTPError(url, 401, "auth", hdrs={}, fp=BytesIO())
 
