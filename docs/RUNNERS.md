@@ -116,6 +116,13 @@ PATH-gated plugins (not compiled-in built-ins):
 | `codex`      | codex  | `codex_enabled`          |
 | `cursor`     | cursor-agent | `cursor_enabled`   |
 
+`codex`, `opencode`, and **OpenCodex** (`ocx`) are three different things.
+`codex` is the OpenAI Codex CLI runner. `opencode` is the OpenCode CLI runner.
+OpenCodex is a local provider *proxy* (HP-82). HivePilot never registers
+`kind: opencodex` as a runner, never writes `~/.codex/config.toml` for it,
+and never treats a Codex CLI sign-in as OpenCodex. It appears on
+`GET /v1/onboarding/machine` under `proxies`, not under `cli` or `local`.
+
 An inactive kind raises an actionable `RunnerPluginUnavailableError` naming the flag
 and the missing binary — never a bare `KeyError`.
 

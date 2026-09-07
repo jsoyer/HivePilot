@@ -1,17 +1,20 @@
 ## Summary
 
-HP-61: inline approval cards in Operate Chat plus persistable per-action auto-approve / auto-deny rules. No Disposition field. The existing `POST /v1/approvals/{id}` path stays the resolver.
+HP-82: treat OpenCodex (`ocx`) as its own local **provider proxy**, not as Codex and not as OpenCode.
 
-- Chat: concierge `approve`/`deny` with `run_id` renders `ApprovalActionCard` (not a proposal-only card)
-- `GET/PUT /v1/approval-rules` — admin writes; empty match fields are wildcards; more specific wins
-- Policy hook after `require_approval` / pipeline checkpoint: matching `approve` skips the pause; `deny` records denied
-- CORS allows `PUT`
+Three different things stay three different things:
 
-Linear: [HP-61](https://linear.app/js-workspace/issue/HP-61/cartes-dapprobation-regles-par-action-inline-dans-le-chat).
+- `codex` — OpenAI Codex CLI runner / CLI sign-in (`cli` on `/v1/onboarding/machine`)
+- `opencode` — OpenCode CLI runner
+- **OpenCodex** — loopback proxy (`ocx`, default `http://127.0.0.1:10100`) under a new `proxies` list
 
-Replay: send a concierge “approve run N” in Chat; or `PUT /v1/approval-rules` then run a `require_approval` task.
+HivePilot does **not** register `kind: opencodex` as a runner, does **not** write `~/.codex/config.toml`, and does **not** offer a “Codex via OpenCodex” toggle. Providers → On this machine shows OpenCodex in **Local proxies**, with no CLI login and no Verify-as-Codex.
+
+Linear: [HP-82](https://linear.app/js-workspace/issue/HP-82/opencodex-ocx-comme-proxy-local-distinct-de-codex).
+
+Replay: `GET /v1/onboarding/machine` — `proxies[].kind` is `opencodex`, `cli` still has `codex`. Open Providers and confirm the proxy row is not a CLI session.
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp61_approval_rules.py -q`
-- [x] `cd web && npm test -- --run src/components/views/ChatView.test.tsx src/lib/pollen-api.test.ts`
+- [ ] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp82_opencodex_probe.py tests/test_api_service.py::TestOnboardingMachine -q`
+- [ ] `cd web && npm test -- --run src/components/views/ProvidersView.test.tsx`
