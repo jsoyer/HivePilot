@@ -6,6 +6,9 @@ import type {
   AnalyticsCost,
   Approval,
   EfficiencySummary,
+  HostBrowser,
+  HostProcesses,
+  HostResources,
   MemoryReality,
   RunSummary,
 } from '@/lib/pollen-api'
@@ -16,6 +19,9 @@ const {
   fetchAnalyticsSummary,
   fetchApprovals,
   fetchEfficiency,
+  fetchHostResources,
+  fetchHostProcesses,
+  fetchHostBrowser,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
@@ -25,6 +31,9 @@ const {
   fetchAnalyticsSummary: vi.fn(),
   fetchApprovals: vi.fn(),
   fetchEfficiency: vi.fn(),
+  fetchHostResources: vi.fn(),
+  fetchHostProcesses: vi.fn(),
+  fetchHostBrowser: vi.fn(),
   fetchMemoryReality: vi.fn(),
   fetchRuns: vi.fn(),
   postApproval: vi.fn(),
@@ -39,6 +48,9 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     fetchAnalyticsSummary,
     fetchApprovals,
     fetchEfficiency,
+    fetchHostResources,
+    fetchHostProcesses,
+    fetchHostBrowser,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -97,11 +109,46 @@ const ZERO_MEMORY: MemoryReality = {
   total_evaluations: 0,
 }
 
+const ZERO_HOST: HostResources = {
+  available: false,
+  source: null,
+  ram: null,
+  cpu: null,
+  disk: null,
+  note: 'unavailable',
+}
+
+const SAMPLE_HOST: HostResources = {
+  available: true,
+  source: 'procfs',
+  ram: { used_bytes: 11 * 1024 ** 3, total_bytes: 16 * 1024 ** 3, used_pct: 68.8 },
+  cpu: { used_pct: 46.2, nproc: 8 },
+  disk: { used_bytes: 50, total_bytes: 1000, used_pct: 5, path: '/' },
+  note: 'this host',
+}
+
+const ZERO_PROCESSES: HostProcesses = {
+  host: 'testhost',
+  processes: [],
+  note: 'none',
+}
+
+const ZERO_BROWSER: HostBrowser = {
+  attached: false,
+  base_url: 'http://127.0.0.1:9222',
+  tabs: [],
+  note: 'empty',
+  error: null,
+}
+
 function mockAllZero() {
   fetchAnalyticsCost.mockResolvedValue(ZERO_COST)
   fetchAnalyticsSummary.mockResolvedValue(ZERO_SUMMARY)
   fetchApprovals.mockResolvedValue([])
   fetchEfficiency.mockResolvedValue(ZERO_EFFICIENCY)
+  fetchHostResources.mockResolvedValue(ZERO_HOST)
+  fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
+  fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
   fetchMemoryReality.mockResolvedValue(ZERO_MEMORY)
   fetchRuns.mockResolvedValue([])
 }
@@ -139,6 +186,9 @@ beforeEach(() => {
     fetchAnalyticsSummary,
     fetchApprovals,
     fetchEfficiency,
+    fetchHostResources,
+    fetchHostProcesses,
+    fetchHostBrowser,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -146,6 +196,9 @@ beforeEach(() => {
   ]) {
     mock.mockReset()
   }
+  fetchHostResources.mockResolvedValue(ZERO_HOST)
+  fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
+  fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
   onNavigate = vi.fn<(view: string) => void>()
   mockRole('approve')
   container = document.createElement('div')
@@ -572,5 +625,118 @@ describe('HomeView — 403 handling', () => {
 
     expect(container.querySelector('[data-testid="home-attention-forbidden"]')).not.toBeNull()
     expect(container.querySelector('[role="alert"]')).toBeNull()
+  })
+})
+
+describe('HomeView — last 24h by provider + this host', () => {
+  it('renders a compact provider spend list from the rolling 24h cost window', async () => {
+    mockAllZero()
+    fetchAnalyticsCost.mockResolvedValue({
+      ...ZERO_COST,
+      overall: { total_steps: 3, input_tokens: 2_400_000_000, output_tokens: 0, cost_usd: 2236.66, unpriced_steps: 0 },
+      by_provider: [
+        {
+          provider: 'anthropic',
+          total_steps: 2,
+          input_tokens: 2_400_000_000,
+          output_tokens: 0,
+          cost_usd: 1586.54,
+          unpriced_steps: 0,
+        },
+        {
+          provider: 'openai',
+          total_steps: 1,
+          input_tokens: 188_000_000,
+          output_tokens: 0,
+          cost_usd: 650.04,
+          unpriced_steps: 0,
+        },
+      ],
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-last24h-list-row-anthropic"]')?.textContent).toContain('2.4B')
+    expect(container.querySelector('[data-testid="home-last24h-list-row-openai"]')?.textContent).toContain('188M')
+    expect(container.textContent).not.toMatch(/quota %|runway/i)
+  })
+
+  it('renders this-host RAM/CPU/disk and never invents a server count', async () => {
+    mockAllZero()
+    fetchHostResources.mockResolvedValue(SAMPLE_HOST)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-host-ram"]')?.textContent).toContain('11/16 GB')
+    expect(container.querySelector('[data-testid="home-host-cpu"]')?.textContent).toContain('46%')
+    expect(container.querySelector('[data-testid="home-host-disk"]')?.textContent).toContain('5%')
+    expect(container.textContent).not.toMatch(/servers/i)
+  })
+
+  it('shows an honest empty last-24h row when no provider spend is recorded', async () => {
+    mockAllZero()
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-last24h-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-unavailable"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-processes-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-browser-empty"]')).not.toBeNull()
+  })
+
+  it('renders allowlisted processes and never a full process table', async () => {
+    mockAllZero()
+    fetchHostProcesses.mockResolvedValue({
+      host: 'box',
+      processes: [{ pid: 42, name: 'hivepilot', rss_bytes: 128 * 1024 * 1024 }],
+      note: 'allowlist',
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const row = container.querySelector('[data-testid="home-host-process-42"]')
+    expect(row?.textContent).toContain('hivepilot')
+    expect(row?.textContent).toContain('pid 42')
+    expect(row?.textContent).toContain('128')
+    expect(container.textContent).not.toMatch(/ps aux|cmdline/i)
+  })
+
+  it('renders real loopback tabs and never invents a browser', async () => {
+    mockAllZero()
+    fetchHostBrowser.mockResolvedValue({
+      attached: true,
+      base_url: 'http://127.0.0.1:9222',
+      tabs: [{ id: 'tab-1', title: 'Docs', url: 'https://example.com/docs', type: 'page' }],
+      note: 'attached',
+      error: null,
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const tab = container.querySelector('[data-testid="home-host-tab-tab-1"]')
+    expect(tab?.textContent).toContain('Docs')
+    expect(tab?.textContent).toContain('https://example.com/docs')
+    expect(container.textContent).not.toMatch(/webSocketDebuggerUrl/i)
+    expect(container.querySelector('[data-testid="home-host-browser-empty"]')).toBeNull()
   })
 })

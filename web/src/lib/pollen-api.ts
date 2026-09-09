@@ -374,6 +374,77 @@ export function fetchModels(days = 30, project?: string, task?: string): Promise
 }
 
 // ---------------------------------------------------------------------------
+// GET /v1/host/resources — HP-68 slice 1. This HivePilot host only.
+// No fleet / server count: the API omits that key rather than inventing it.
+// ---------------------------------------------------------------------------
+
+export interface HostRam {
+  used_bytes: number
+  total_bytes: number
+  used_pct: number | null
+}
+
+export interface HostCpu {
+  used_pct: number | null
+  nproc: number | null
+}
+
+export interface HostDisk {
+  used_bytes: number
+  total_bytes: number
+  used_pct: number
+  path: string
+}
+
+export interface HostResources {
+  available: boolean
+  source: string | null
+  ram: HostRam | null
+  cpu: HostCpu | null
+  disk: HostDisk | null
+  note: string
+}
+
+export function fetchHostResources(): Promise<HostResources> {
+  return apiFetch<HostResources>('/v1/host/resources')
+}
+
+export interface HostProcess {
+  pid: number
+  name: string
+  rss_bytes: number | null
+}
+
+export interface HostProcesses {
+  host: string
+  processes: HostProcess[]
+  note: string
+}
+
+export function fetchHostProcesses(): Promise<HostProcesses> {
+  return apiFetch<HostProcesses>('/v1/host/processes')
+}
+
+export interface HostBrowserTab {
+  id: string
+  title: string
+  url: string
+  type: string
+}
+
+export interface HostBrowser {
+  attached: boolean
+  base_url: string
+  tabs: HostBrowserTab[]
+  note: string
+  error: string | null
+}
+
+export function fetchHostBrowser(): Promise<HostBrowser> {
+  return apiFetch<HostBrowser>('/v1/host/browser')
+}
+
+// ---------------------------------------------------------------------------
 // GET /v1/efficiency — Mirador Home command-center sprint. Shape transcribed
 // from `hivepilot/services/efficiency_service.py`'s `efficiency_summary` —
 // read that (and `headroom_metrics.efficiency_summary`) before changing

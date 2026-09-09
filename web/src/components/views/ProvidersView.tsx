@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { MetricReadout } from '@/components/dashboard/MetricReadout'
 import { describeApiError } from '@/lib/format-error'
 import { formatAge, formatTimestamp } from '@/lib/format-time'
-import { useT } from '@/lib/i18n'
+import { formatCompactCount } from '@/lib/format-usage'
+import { useLanguage, useT } from '@/lib/i18n'
 import {
   agentLogin,
   connectModel,
@@ -44,10 +45,6 @@ const FALLBACK_HOURS = 24
 
 const NO_FALLBACKS: ProviderFallback[] = []
 
-function formatTokens(n: number): string {
-  return n.toLocaleString('en-US')
-}
-
 function formatCost(n: number): string {
   return `$${n.toFixed(3)}`
 }
@@ -71,6 +68,7 @@ interface ProviderRow {
  */
 export function ProvidersView() {
   const t = useT()
+  const { language } = useLanguage()
   const { can } = useRole()
   const canAdmin = can('admin')
   const costState = useAsyncData(() => fetchAnalyticsCost(SPEND_DAYS), [])
@@ -258,7 +256,7 @@ export function ProvidersView() {
                           {formatCost(row.cost_usd)}
                         </TableCell>
                         <TableCell className="metric-mono text-right text-muted-foreground">
-                          {formatTokens(row.input_tokens + row.output_tokens)}
+                          {formatCompactCount(row.input_tokens + row.output_tokens, language)}
                         </TableCell>
                         <TableCell>
                           {row.fallback ? (

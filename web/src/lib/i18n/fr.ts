@@ -825,9 +825,28 @@ export const fr: Record<TranslationKey, string> = {
   'home.activityFeedEmpty': "Aucune activité pour l'instant.",
   'home.activityRunLabel': 'Run',
   'home.activityApprovalLabel': 'Approbation',
+  'home.last24hTitle': 'Dernières 24 h',
+  'home.last24hDescription': 'Dépense enregistrée par provider — fenêtre glissante de 24 h, pas un jour calendaire.',
+  'home.last24hEmpty': 'Aucune dépense provider sur les dernières 24 h.',
+  'home.hostTitle': 'Cet hôte',
+  'home.hostDescription':
+    'RAM, CPU, disque, process allowlistés et onglets navigateur loopback sur cet hôte HivePilot — pas une flotte.',
+  'home.hostRam': 'RAM',
+  'home.hostCpu': 'CPU',
+  'home.hostDisk': 'Disque',
+  'home.hostUnavailable': 'Les métriques hôte ne sont pas disponibles sur cette machine.',
+  'home.hostProcessesTitle': 'Processus sur cet hôte',
+  'home.hostProcessesEmpty': 'Aucun process agent/runtime allowlisté n’est visible.',
+  'home.hostBrowserTitle': 'Onglets navigateur',
+  'home.hostBrowserEmpty':
+    'Aucun navigateur loopback n’est attaché. Les onglets n’apparaissent que si Chrome DevTools répond sur cet hôte.',
+  'home.hostBrowserNote':
+    'Vrais onglets via un CDP loopback — HivePilot n’invente pas de navigateur.',
 
   // ---- Models view (section Dépenses de Pollen) ------------------------
   'models.title': 'Modèles',
+  'models.byModelTitle': 'Par modèle',
+  'models.modelCount': '{count} modèles',
   'models.tableScrollLabel': 'Tableau des modèles, faites défiler horizontalement pour voir les autres colonnes',
   'models.description': 'Coût, volume de tokens et taux de réussite par modèle',
   'models.noModels': "Aucune donnée de modèle pour l'instant.",

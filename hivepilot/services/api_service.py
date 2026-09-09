@@ -36,6 +36,9 @@ from hivepilot.services import (
     autopilot_queue,
     chatops_service,
     efficiency_service,
+    host_browser,
+    host_processes,
+    host_resources,
     memory_service,
     notification_service,
     plugin_activity,
@@ -2684,6 +2687,44 @@ def models_endpoint(
     return analytics_service.models_summary(
         tenant=_analytics_tenant(caller), days=days, project=project, task=task
     )
+
+
+@v1.get("/host/resources")
+@app.get("/host/resources")
+def host_resources_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-68 slice 1 — this-host RAM / CPU / disk.
+
+    Readings come from Linux ``/proc`` plus ``shutil.disk_usage``. There is
+    no fleet or "servers" count: inventing one would be a lie. Quota % /
+    runway is also omitted — that needs a provider API (see Providers).
+    """
+    return host_resources.snapshot()
+
+
+@v1.get("/host/processes")
+@app.get("/host/processes")
+def host_processes_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-68 slice 2 — allowlisted agent/runtime processes on this host.
+
+    Not a full ``ps`` dump and not a fleet. Command lines are omitted.
+    """
+    return host_processes.snapshot()
+
+
+@v1.get("/host/browser")
+@app.get("/host/browser")
+def host_browser_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-68 slice 2 — real Chrome tabs via loopback DevTools only.
+
+    Absent CDP is an honest empty list. Remote CDP is refused.
+    """
+    return host_browser.snapshot()
 
 
 @v1.get("/models/local")
