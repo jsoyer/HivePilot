@@ -28,6 +28,8 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/analytics/cost
     GET /v1/analytics/whales
     GET /v1/host/resources
+    GET /v1/host/processes
+    GET /v1/host/browser
     GET /v1/plugins/health
     GET /v1/hindsight/status
     GET /v1/hindsight/roles/{role}
@@ -348,6 +350,41 @@ class TestHostResourcesContract:
             assert set(data["cpu"].keys()) == {"used_pct", "nproc"}
         if data["disk"] is not None:
             assert set(data["disk"].keys()) == {"used_bytes", "total_bytes", "used_pct", "path"}
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/host/processes + /v1/host/browser (HP-68 slice 2)
+# ---------------------------------------------------------------------------
+
+
+class TestHostProcessesContract:
+    def test_top_level_keys(self, api_client, read_token):
+        resp = api_client.get("/v1/host/processes", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"host", "processes", "note"}
+        assert isinstance(data["host"], str)
+        assert isinstance(data["note"], str) and data["note"]
+        assert isinstance(data["processes"], list)
+        for row in data["processes"]:
+            assert set(row.keys()) == {"pid", "name", "rss_bytes"}
+            assert "cmdline" not in row
+
+
+class TestHostBrowserContract:
+    def test_top_level_keys(self, api_client, read_token):
+        resp = api_client.get("/v1/host/browser", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"attached", "base_url", "tabs", "note", "error"}
+        assert isinstance(data["attached"], bool)
+        assert isinstance(data["base_url"], str)
+        assert isinstance(data["note"], str) and data["note"]
+        assert data["error"] is None or isinstance(data["error"], str)
+        assert isinstance(data["tabs"], list)
+        for tab in data["tabs"]:
+            assert set(tab.keys()) == {"id", "title", "url", "type"}
+            assert "webSocketDebuggerUrl" not in tab
 
 
 # ---------------------------------------------------------------------------

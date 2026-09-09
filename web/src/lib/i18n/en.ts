@@ -831,11 +831,19 @@ export const en = {
   'home.last24hDescription': 'Recorded spend by provider — rolling 24h, not a calendar day.',
   'home.last24hEmpty': 'No provider spend in the last 24h.',
   'home.hostTitle': 'This host',
-  'home.hostDescription': 'RAM, CPU, and disk on the HivePilot process host — not a fleet.',
+  'home.hostDescription':
+    'RAM, CPU, disk, allowlisted processes, and loopback browser tabs on this HivePilot host — not a fleet.',
   'home.hostRam': 'RAM',
   'home.hostCpu': 'CPU',
   'home.hostDisk': 'Disk',
   'home.hostUnavailable': 'Host metrics are not available on this machine.',
+  'home.hostProcessesTitle': 'Processes on this host',
+  'home.hostProcessesEmpty': 'No allowlisted agent or runtime process is visible.',
+  'home.hostBrowserTitle': 'Browser tabs',
+  'home.hostBrowserEmpty':
+    'No loopback browser is attached. Tabs appear only when Chrome DevTools answers on this host.',
+  'home.hostBrowserNote':
+    'Real tabs from a loopback CDP endpoint — HivePilot does not invent a browser.',
 
   // ---- Models view (Mirador Spend section) ------------------------------
   'models.title': 'Models',

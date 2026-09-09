@@ -30,10 +30,14 @@ import {
   fetchAnalyticsSummary,
   fetchApprovals,
   fetchEfficiency,
+  fetchHostBrowser,
+  fetchHostProcesses,
   fetchHostResources,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
+  type HostBrowser,
+  type HostProcesses,
   type HostResources,
   type RunSummary,
 } from '@/lib/pollen-api'
@@ -619,6 +623,96 @@ function ActivityFeedSection({ runsState, approvalsState }: ActivityFeedSectionP
   )
 }
 
+function formatRss(bytes: number | null, locale: string): string {
+  if (bytes == null) return '—'
+  const mib = bytes / (1024 * 1024)
+  return `${mib.toLocaleString(locale === 'fr' ? 'fr-FR' : 'en-US', { maximumFractionDigits: 0 })} MiB`
+}
+
+function HostProcessList({ state }: { state: AsyncState<HostProcesses> }) {
+  const t = useT()
+  const { language } = useLanguage()
+  if (state.status === 'loading') {
+    return <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+  }
+  if (state.status === 'error') {
+    return (
+      <p data-testid="home-host-processes-error" className="text-sm text-muted-foreground">
+        {describeApiError(state.error)}
+      </p>
+    )
+  }
+  const rows = state.data.processes
+  return (
+    <div data-testid="home-host-processes">
+      <p className="mb-2 text-xs tracking-wide text-muted-foreground uppercase">
+        {t('home.hostProcessesTitle')}
+        {state.data.host ? ` · ${state.data.host}` : ''}
+      </p>
+      {rows.length === 0 ? (
+        <p data-testid="home-host-processes-empty" className="text-sm text-muted-foreground">
+          {t('home.hostProcessesEmpty')}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm">
+          {rows.map((row) => (
+            <li
+              key={`${row.name}-${row.pid}`}
+              data-testid={`home-host-process-${row.pid}`}
+              className="flex justify-between gap-2"
+            >
+              <span>
+                <span className="font-medium">{row.name}</span>{' '}
+                <span className="text-xs text-muted-foreground">pid {row.pid}</span>
+              </span>
+              <span className="metric-mono text-xs text-muted-foreground">
+                {formatRss(row.rss_bytes, language)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+function HostBrowserTabs({ state }: { state: AsyncState<HostBrowser> }) {
+  const t = useT()
+  if (state.status === 'loading') {
+    return <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+  }
+  if (state.status === 'error') {
+    return (
+      <p data-testid="home-host-browser-error" className="text-sm text-muted-foreground">
+        {describeApiError(state.error)}
+      </p>
+    )
+  }
+  const tabs = state.data.tabs
+  return (
+    <div data-testid="home-host-browser">
+      <p className="mb-2 text-xs tracking-wide text-muted-foreground uppercase">
+        {t('home.hostBrowserTitle')}
+      </p>
+      {tabs.length === 0 ? (
+        <p data-testid="home-host-browser-empty" className="text-sm text-muted-foreground">
+          {t('home.hostBrowserEmpty')}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm">
+          {tabs.map((tab) => (
+            <li key={tab.id} data-testid={`home-host-tab-${tab.id}`} className="min-w-0">
+              <span className="font-medium">{tab.title || tab.type}</span>
+              <div className="truncate text-xs text-muted-foreground">{tab.url}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-xs text-muted-foreground">{t('home.hostBrowserNote')}</p>
+    </div>
+  )
+}
+
 function HostStrip({ state }: { state: AsyncState<HostResources> }) {
   const t = useT()
   const { language } = useLanguage()
@@ -708,6 +802,8 @@ export function HomeView({ onNavigate }: HomeViewProps) {
 
   const cost = useAsyncData(() => fetchAnalyticsCost(TODAY_DAYS), [refreshKey])
   const host = useAsyncData(() => fetchHostResources(), [refreshKey])
+  const processes = useAsyncData(() => fetchHostProcesses(), [refreshKey])
+  const browser = useAsyncData(() => fetchHostBrowser(), [refreshKey])
   const approvalsState = useAsyncData(() => fetchApprovals(), [refreshKey])
   const runsState = useAsyncData(() => fetchRuns(), [refreshKey])
   const summary = useAsyncData(() => fetchAnalyticsSummary(TODAY_DAYS), [])
@@ -880,8 +976,10 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           <SectionHeader index="01c" title={t('home.hostTitle')} />
           <CardDescription>{t('home.hostDescription')}</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           <HostStrip state={host} />
+          <HostProcessList state={processes} />
+          <HostBrowserTabs state={browser} />
         </CardContent>
       </Card>
 

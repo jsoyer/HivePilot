@@ -30,6 +30,8 @@ import {
   fetchMemoryJournal,
   fetchMemoryReality,
   fetchHostResources,
+  fetchHostProcesses,
+  fetchHostBrowser,
   fetchModels,
   fetchOnboardingMachine,
   fetchVoiceConfig,
@@ -266,6 +268,16 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchHostResources calls GET /v1/host/resources', async () => {
     await fetchHostResources()
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/host/resources')
+  })
+
+  it('fetchHostProcesses calls GET /v1/host/processes', async () => {
+    await fetchHostProcesses()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/host/processes')
+  })
+
+  it('fetchHostBrowser calls GET /v1/host/browser', async () => {
+    await fetchHostBrowser()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/host/browser')
   })
 
   it('fetchModels calls GET /v1/models with a days window', async () => {

@@ -6,6 +6,8 @@ import type {
   AnalyticsCost,
   Approval,
   EfficiencySummary,
+  HostBrowser,
+  HostProcesses,
   HostResources,
   MemoryReality,
   RunSummary,
@@ -18,6 +20,8 @@ const {
   fetchApprovals,
   fetchEfficiency,
   fetchHostResources,
+  fetchHostProcesses,
+  fetchHostBrowser,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
@@ -28,6 +32,8 @@ const {
   fetchApprovals: vi.fn(),
   fetchEfficiency: vi.fn(),
   fetchHostResources: vi.fn(),
+  fetchHostProcesses: vi.fn(),
+  fetchHostBrowser: vi.fn(),
   fetchMemoryReality: vi.fn(),
   fetchRuns: vi.fn(),
   postApproval: vi.fn(),
@@ -43,6 +49,8 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     fetchApprovals,
     fetchEfficiency,
     fetchHostResources,
+    fetchHostProcesses,
+    fetchHostBrowser,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -119,12 +127,28 @@ const SAMPLE_HOST: HostResources = {
   note: 'this host',
 }
 
+const ZERO_PROCESSES: HostProcesses = {
+  host: 'testhost',
+  processes: [],
+  note: 'none',
+}
+
+const ZERO_BROWSER: HostBrowser = {
+  attached: false,
+  base_url: 'http://127.0.0.1:9222',
+  tabs: [],
+  note: 'empty',
+  error: null,
+}
+
 function mockAllZero() {
   fetchAnalyticsCost.mockResolvedValue(ZERO_COST)
   fetchAnalyticsSummary.mockResolvedValue(ZERO_SUMMARY)
   fetchApprovals.mockResolvedValue([])
   fetchEfficiency.mockResolvedValue(ZERO_EFFICIENCY)
   fetchHostResources.mockResolvedValue(ZERO_HOST)
+  fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
+  fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
   fetchMemoryReality.mockResolvedValue(ZERO_MEMORY)
   fetchRuns.mockResolvedValue([])
 }
@@ -163,6 +187,8 @@ beforeEach(() => {
     fetchApprovals,
     fetchEfficiency,
     fetchHostResources,
+    fetchHostProcesses,
+    fetchHostBrowser,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -171,6 +197,8 @@ beforeEach(() => {
     mock.mockReset()
   }
   fetchHostResources.mockResolvedValue(ZERO_HOST)
+  fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
+  fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
   onNavigate = vi.fn<(view: string) => void>()
   mockRole('approve')
   container = document.createElement('div')
@@ -664,5 +692,51 @@ describe('HomeView — last 24h by provider + this host', () => {
 
     expect(container.querySelector('[data-testid="home-last24h-empty"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="home-host-unavailable"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-processes-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-browser-empty"]')).not.toBeNull()
+  })
+
+  it('renders allowlisted processes and never a full process table', async () => {
+    mockAllZero()
+    fetchHostProcesses.mockResolvedValue({
+      host: 'box',
+      processes: [{ pid: 42, name: 'hivepilot', rss_bytes: 128 * 1024 * 1024 }],
+      note: 'allowlist',
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const row = container.querySelector('[data-testid="home-host-process-42"]')
+    expect(row?.textContent).toContain('hivepilot')
+    expect(row?.textContent).toContain('pid 42')
+    expect(row?.textContent).toContain('128')
+    expect(container.textContent).not.toMatch(/ps aux|cmdline/i)
+  })
+
+  it('renders real loopback tabs and never invents a browser', async () => {
+    mockAllZero()
+    fetchHostBrowser.mockResolvedValue({
+      attached: true,
+      base_url: 'http://127.0.0.1:9222',
+      tabs: [{ id: 'tab-1', title: 'Docs', url: 'https://example.com/docs', type: 'page' }],
+      note: 'attached',
+      error: null,
+    })
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const tab = container.querySelector('[data-testid="home-host-tab-tab-1"]')
+    expect(tab?.textContent).toContain('Docs')
+    expect(tab?.textContent).toContain('https://example.com/docs')
+    expect(container.textContent).not.toMatch(/webSocketDebuggerUrl/i)
+    expect(container.querySelector('[data-testid="home-host-browser-empty"]')).toBeNull()
   })
 })

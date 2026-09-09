@@ -18,5 +18,5 @@ Replay: Home → This host. Processes come from `/proc`. Tabs appear only if `HI
 
 ## Testing
 
-- [ ] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp68_host_resources.py tests/test_pollen_contract.py -q`
-- [ ] `cd web && npm test -- --run src/components/views/HomeView.test.tsx`
+- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_hp68_host_resources.py tests/test_hp68_host_processes.py tests/test_pollen_contract.py -q`
+- [x] `cd web && npm test -- --run src/components/views/HomeView.test.tsx src/lib/pollen-api.test.ts src/components/Pollen.test.tsx`

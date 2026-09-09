@@ -829,11 +829,19 @@ export const fr: Record<TranslationKey, string> = {
   'home.last24hDescription': 'Dépense enregistrée par provider — fenêtre glissante de 24 h, pas un jour calendaire.',
   'home.last24hEmpty': 'Aucune dépense provider sur les dernières 24 h.',
   'home.hostTitle': 'Cet hôte',
-  'home.hostDescription': 'RAM, CPU et disque de l’hôte du processus HivePilot — pas une flotte.',
+  'home.hostDescription':
+    'RAM, CPU, disque, process allowlistés et onglets navigateur loopback sur cet hôte HivePilot — pas une flotte.',
   'home.hostRam': 'RAM',
   'home.hostCpu': 'CPU',
   'home.hostDisk': 'Disque',
   'home.hostUnavailable': 'Les métriques hôte ne sont pas disponibles sur cette machine.',
+  'home.hostProcessesTitle': 'Processus sur cet hôte',
+  'home.hostProcessesEmpty': 'Aucun process agent/runtime allowlisté n’est visible.',
+  'home.hostBrowserTitle': 'Onglets navigateur',
+  'home.hostBrowserEmpty':
+    'Aucun navigateur loopback n’est attaché. Les onglets n’apparaissent que si Chrome DevTools répond sur cet hôte.',
+  'home.hostBrowserNote':
+    'Vrais onglets via un CDP loopback — HivePilot n’invente pas de navigateur.',
 
   // ---- Models view (section Dépenses de Pollen) ------------------------
   'models.title': 'Modèles',

@@ -51,6 +51,18 @@ const mocks = vi.hoisted(() => ({
     disk: null,
     note: 'unavailable',
   }),
+  fetchHostProcesses: vi.fn().mockResolvedValue({
+    host: 'testhost',
+    processes: [],
+    note: 'none',
+  }),
+  fetchHostBrowser: vi.fn().mockResolvedValue({
+    attached: false,
+    base_url: 'http://127.0.0.1:9222',
+    tabs: [],
+    note: 'empty',
+    error: null,
+  }),
   fetchModels: vi.fn().mockResolvedValue({
     models: [],
     overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0, succeeded_runs: 0, cost_per_successful_run: null },
