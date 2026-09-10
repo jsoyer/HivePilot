@@ -43,6 +43,7 @@ from hivepilot.services import (
     notification_service,
     plugin_activity,
     policy_service,
+    sandbox_computers,
     state_service,
     telemetry_service,
     token_service,
@@ -2725,6 +2726,55 @@ def host_browser_endpoint(
     Absent CDP is an honest empty list. Remote CDP is refused.
     """
     return host_browser.snapshot()
+
+
+@v1.get("/sandbox/provider")
+@app.get("/sandbox/provider")
+def sandbox_provider_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-67 — sandbox-computer provider contract.
+
+    This spike decided **no-go**. The payload is the honest default (no
+    provider), not an invented fleet of sandboxes.
+    """
+    return sandbox_computers.provider_snapshot()
+
+
+@v1.get("/computer/session")
+@app.get("/computer/session")
+def computer_session_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> dict[str, Any]:
+    """HP-72 — sandbox desktop session. Absent desktop is not invented."""
+    return sandbox_computers.session_snapshot()
+
+
+@v1.post("/computer/takeover")
+@app.post("/computer/takeover")
+def computer_takeover_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> dict[str, Any]:
+    """HP-72 — human take-over. Refused without an attached desktop."""
+    return sandbox_computers.control("takeover")
+
+
+@v1.post("/computer/handback")
+@app.post("/computer/handback")
+def computer_handback_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> dict[str, Any]:
+    """HP-72 — return control to the agent. Refused without a session."""
+    return sandbox_computers.control("handback")
+
+
+@v1.post("/computer/skip")
+@app.post("/computer/skip")
+def computer_skip_endpoint(
+    _caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> dict[str, Any]:
+    """HP-72 — skip take-over. Refused without a session."""
+    return sandbox_computers.control("skip")
 
 
 @v1.get("/models/local")

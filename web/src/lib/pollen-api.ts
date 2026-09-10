@@ -444,6 +444,29 @@ export function fetchHostBrowser(): Promise<HostBrowser> {
   return apiFetch<HostBrowser>('/v1/host/browser')
 }
 
+export interface SandboxProvider {
+  configured: boolean
+  provider: string | null
+  decision: string
+  evaluated: string[]
+  note: string
+}
+
+export function fetchSandboxProvider(): Promise<SandboxProvider> {
+  return apiFetch<SandboxProvider>('/v1/sandbox/provider')
+}
+
+export interface ComputerSession {
+  attached: boolean
+  can_takeover: boolean
+  controller: string | null
+  note: string
+}
+
+export function fetchComputerSession(): Promise<ComputerSession> {
+  return apiFetch<ComputerSession>('/v1/computer/session')
+}
+
 // ---------------------------------------------------------------------------
 // GET /v1/efficiency — Mirador Home command-center sprint. Shape transcribed
 // from `hivepilot/services/efficiency_service.py`'s `efficiency_summary` —

@@ -6,9 +6,11 @@ import type {
   AnalyticsCost,
   Approval,
   EfficiencySummary,
+  ComputerSession,
   HostBrowser,
   HostProcesses,
   HostResources,
+  SandboxProvider,
   MemoryReality,
   RunSummary,
 } from '@/lib/pollen-api'
@@ -22,6 +24,8 @@ const {
   fetchHostResources,
   fetchHostProcesses,
   fetchHostBrowser,
+  fetchSandboxProvider,
+  fetchComputerSession,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
@@ -34,6 +38,8 @@ const {
   fetchHostResources: vi.fn(),
   fetchHostProcesses: vi.fn(),
   fetchHostBrowser: vi.fn(),
+  fetchSandboxProvider: vi.fn(),
+  fetchComputerSession: vi.fn(),
   fetchMemoryReality: vi.fn(),
   fetchRuns: vi.fn(),
   postApproval: vi.fn(),
@@ -51,6 +57,8 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
     fetchHostResources,
     fetchHostProcesses,
     fetchHostBrowser,
+    fetchSandboxProvider,
+    fetchComputerSession,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -141,6 +149,21 @@ const ZERO_BROWSER: HostBrowser = {
   error: null,
 }
 
+const ZERO_SANDBOX: SandboxProvider = {
+  configured: false,
+  provider: null,
+  decision: 'no-go',
+  evaluated: ['docker', 'e2b', 'daytona', 'box'],
+  note: 'none',
+}
+
+const ZERO_COMPUTER: ComputerSession = {
+  attached: false,
+  can_takeover: false,
+  controller: null,
+  note: 'none',
+}
+
 function mockAllZero() {
   fetchAnalyticsCost.mockResolvedValue(ZERO_COST)
   fetchAnalyticsSummary.mockResolvedValue(ZERO_SUMMARY)
@@ -149,6 +172,8 @@ function mockAllZero() {
   fetchHostResources.mockResolvedValue(ZERO_HOST)
   fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
   fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
+  fetchSandboxProvider.mockResolvedValue(ZERO_SANDBOX)
+  fetchComputerSession.mockResolvedValue(ZERO_COMPUTER)
   fetchMemoryReality.mockResolvedValue(ZERO_MEMORY)
   fetchRuns.mockResolvedValue([])
 }
@@ -189,6 +214,8 @@ beforeEach(() => {
     fetchHostResources,
     fetchHostProcesses,
     fetchHostBrowser,
+    fetchSandboxProvider,
+    fetchComputerSession,
     fetchMemoryReality,
     fetchRuns,
     postApproval,
@@ -199,6 +226,8 @@ beforeEach(() => {
   fetchHostResources.mockResolvedValue(ZERO_HOST)
   fetchHostProcesses.mockResolvedValue(ZERO_PROCESSES)
   fetchHostBrowser.mockResolvedValue(ZERO_BROWSER)
+  fetchSandboxProvider.mockResolvedValue(ZERO_SANDBOX)
+  fetchComputerSession.mockResolvedValue(ZERO_COMPUTER)
   onNavigate = vi.fn<(view: string) => void>()
   mockRole('approve')
   container = document.createElement('div')
@@ -694,6 +723,7 @@ describe('HomeView — last 24h by provider + this host', () => {
     expect(container.querySelector('[data-testid="home-host-unavailable"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="home-host-processes-empty"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="home-host-browser-empty"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="home-host-computer-empty"]')).not.toBeNull()
   })
 
   it('renders allowlisted processes and never a full process table', async () => {
@@ -738,5 +768,21 @@ describe('HomeView — last 24h by provider + this host', () => {
     expect(tab?.textContent).toContain('https://example.com/docs')
     expect(container.textContent).not.toMatch(/webSocketDebuggerUrl/i)
     expect(container.querySelector('[data-testid="home-host-browser-empty"]')).toBeNull()
+  })
+
+  it('refuses take-over when no sandbox desktop is attached', async () => {
+    mockAllZero()
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="home-host-computer-empty"]')?.textContent).toMatch(
+      /take-over is refused/i,
+    )
+    expect(container.textContent).toMatch(/no-go/i)
+    expect(container.textContent).not.toMatch(/Take over|I'm done|give me the control/i)
   })
 })

@@ -844,6 +844,10 @@ export const en = {
     'No loopback browser is attached. Tabs appear only when Chrome DevTools answers on this host.',
   'home.hostBrowserNote':
     'Real tabs from a loopback CDP endpoint — HivePilot does not invent a browser.',
+  'home.computerTitle': 'Sandbox computer',
+  'home.computerEmpty':
+    'No sandbox desktop is attached. Take-over is refused — HivePilot does not hand over this host.',
+  'home.computerDecision': 'Provider spike: no-go (Docker / E2B / Daytona / Box).',
 
   // ---- Models view (Mirador Spend section) ------------------------------
   'models.title': 'Models',
