@@ -915,6 +915,28 @@ Run once with `hivepilot mail poll` (invoke on a cadence). The IMAP mailbox is s
 `readonly=True` (never sets `\Seen`); dedup is by message-id in `mail_processed` and
 survives restart, so a message is never processed twice.
 
+## telegram_avatars.yaml — custom emoji IDs (HP-16)
+
+Optional. Maps `roles.yaml` keys to Telegram `custom_emoji_id` values so live
+hand-offs can show the Avatar Lab artwork instead of (or rather, *as*) the
+Unicode fallback. A missing file is not an error.
+
+```yaml
+# Optional ops note — not read at send time.
+sticker_set: hivepilot_roles_by_yourbot
+avatars:
+  ceo: "5368324170671202286"          # digits only; paste from @Stickers
+  chief_of_staff: ""                  # empty = Unicode fallback (📋)
+  cto:
+    custom_emoji_id: "5368324170671202287"
+```
+
+A flat `role: id` map (no `avatars:` wrapper) is also accepted. `hivepilot
+validate` flags unknown role keys and non-digit IDs. Gate:
+`HIVEPILOT_TELEGRAM_CUSTOM_EMOJI` (default `true`). See
+[INTEGRATIONS.md](INTEGRATIONS.md#role-avatars-on-hand-offs-hp-16) for the
+sticker-set upload steps.
+
 ## model_profiles.yaml
 
 A plain dict, not a list-of-models schema. Two top-level keys:

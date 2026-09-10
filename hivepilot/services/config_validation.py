@@ -772,6 +772,18 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
                         f"{resolved_role!r} does not satisfy it"
                     )
 
+    # Optional HP-16 mapping — missing file is fine; a present file must
+    # name known roles and digit-only custom_emoji_id values.
+    from hivepilot.services.telegram_avatars import validate_telegram_avatars_file
+
+    avatars_name = Path(settings.telegram_avatars_file).name
+    avatars_path = (
+        base_dir / avatars_name
+        if explicit_base_dir
+        else settings.resolve_config_path(settings.telegram_avatars_file)
+    )
+    problems.extend(validate_telegram_avatars_file(avatars_path))
+
     return ValidationReport(
         problems=problems,
         config_dir=config_dir,

@@ -593,6 +593,15 @@ class Settings(BaseSettings):
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
     telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — route each agent's turns to its own forum topic
     telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — render HTML cards with status badge, bullets, links
+    # HP-16: prefix a per-role avatar on Telegram hand-offs. The eight
+    # first-class roles always get a Unicode fallback. When this flag is
+    # True AND telegram_avatars.yaml maps a role to a custom_emoji_id, HTML
+    # cards wrap it in <tg-emoji> and the plain path attaches a
+    # custom_emoji MessageEntity (Bot API 9.4; bot owner needs Premium).
+    # Missing IDs / a rejected send degrade to the Unicode glyph.
+    # env: HIVEPILOT_TELEGRAM_CUSTOM_EMOJI
+    telegram_custom_emoji: bool = True
+    telegram_avatars_file: Path = Path("telegram_avatars.yaml")
     # env: HIVEPILOT_STREAM_TOPICS_REGISTRY_PATH — override for the agent_key
     # -> message_thread_id registry (see notification_service._topics_registry_path).
     # None (default) resolves to `xdg_data_home/stream_topics.json` — a stable,
