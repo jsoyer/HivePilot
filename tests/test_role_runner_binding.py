@@ -110,6 +110,12 @@ class TestRoleModelsField:
         assert ceo.models == ["opencode-go/qwen3.7-max", "opencode-go/kimi-k2.6"], (
             f"CEO dual models mismatch: got {ceo.models}"
         )
+        assert ceo.debate is False, "CEO dual-model debate is opt-in (HP-21)"
+
+    def test_qa_uses_automation_profile(self):
+        from hivepilot.roles import get_role
+
+        assert get_role("qa").model_profile == "automation"
 
     def test_models_bindings_match_spec(self):
         from hivepilot.roles import get_role

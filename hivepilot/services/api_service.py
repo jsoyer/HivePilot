@@ -4553,6 +4553,7 @@ class RoleWrite(BaseModel):
     command_task: str | None = None
     host: str | None = None
     effort: str | None = None
+    debate: bool | None = None
 
 
 def _apply_role_write(payload: RoleWrite) -> dict:

@@ -1895,6 +1895,17 @@
             ],
             "title": "Command Task"
           },
+          "debate": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Debate"
+          },
           "display_name": {
             "anyOf": [
               {

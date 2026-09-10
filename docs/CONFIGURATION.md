@@ -204,7 +204,10 @@ Defines reusable runner definitions and the tasks (sequences of steps) that use 
 ### `TaskConfig`
 
 - `description`
-- `role`
+- `role` — when set, `roles.yaml` is authoritative for runner kind and
+  model. An agent-kind `runner` / named `runner_ref` on the step must match
+  that role's `runner` (`hivepilot validate` reports drift). Non-agent
+  steps (`shell`, `container`, …) may still declare a different runner.
 - `engine` — `"native"` | `"langgraph"` | `"crewai"` (default `"native"`)
 - `graph` — engine-specific graph definition (langgraph)
 - `crew` — engine-specific crew definition (crewai)
@@ -293,6 +296,9 @@ dict.
 - `runner`
 - `model`
 - `models: list | None`
+- `debate: bool` — default `false`. Dual-model auto-debate on a role-bound
+  task is opt-in. `hivepilot debate --role <name>` still requires `models`
+  with two or more entries and ignores this flag.
 - `display_name`
 - `host`
 - `permission_mode`

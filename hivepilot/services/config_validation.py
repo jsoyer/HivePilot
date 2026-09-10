@@ -16,6 +16,7 @@ import yaml
 
 from hivepilot.config import settings
 from hivepilot.services import scan_service
+from hivepilot.services.roster_preset import AGENT_KINDS
 
 
 def _load(path: Path) -> Any:
@@ -257,12 +258,71 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
     # -----------------------------------------------------------------------
     # Check: every task's `role` exists in roles.yaml
     # -----------------------------------------------------------------------
+    role_runner_by_name: dict[str, str] = {
+        r["name"]: r["runner"]
+        for r in (roles_data.get("roles") or [])
+        if isinstance(r, dict)
+        and isinstance(r.get("name"), str)
+        and isinstance(r.get("runner"), str)
+    }
+    named_runner_kinds: dict[str, str] = {
+        name: defn["kind"]
+        for name, defn in (tasks_data.get("runners") or {}).items()
+        if isinstance(name, str) and isinstance(defn, dict) and isinstance(defn.get("kind"), str)
+    }
+
     for task_name, task_def in (tasks_data.get("tasks") or {}).items():
         if not isinstance(task_def, dict):
             continue
         role_ref = task_def.get("role")
         if role_ref and role_ref not in role_names:
             problems.append(f"Task '{task_name}' references unknown role '{role_ref}'")
+            continue
+        # HP-17: a role-bound task's agent-kind `runner` / named `runner_ref`
+        # must match `roles.yaml`. Runtime still treats roles.yaml as
+        # authoritative, but a stale Claude `runner_ref` overlays that
+        # runner's profile options onto the role's step and misleads
+        # operators about which CLI actually runs.
+        if not role_ref:
+            continue
+        role_runner = role_runner_by_name.get(role_ref)
+        if not role_runner:
+            continue
+        steps = task_def.get("steps")
+        if not isinstance(steps, list):
+            continue
+
+        for step_index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            step_label = f"Task '{task_name}' step '{step.get('name', step_index)}'"
+            step_runner = step.get("runner")
+            if (
+                isinstance(step_runner, str)
+                and step_runner in AGENT_KINDS
+                and role_runner in AGENT_KINDS
+                and step_runner != role_runner
+            ):
+                problems.append(
+                    f"{step_label} runner '{step_runner}' does not match "
+                    f"role '{role_ref}' runner '{role_runner}' "
+                    "(roles.yaml is authoritative for role-bound tasks)"
+                )
+            runner_ref = step.get("runner_ref")
+            if not isinstance(runner_ref, str) or not runner_ref:
+                continue
+            ref_kind = named_runner_kinds.get(runner_ref)
+            if (
+                ref_kind
+                and ref_kind in AGENT_KINDS
+                and role_runner in AGENT_KINDS
+                and ref_kind != role_runner
+            ):
+                problems.append(
+                    f"{step_label} runner_ref '{runner_ref}' (kind '{ref_kind}') "
+                    f"does not match role '{role_ref}' runner '{role_runner}' "
+                    "(roles.yaml is authoritative for role-bound tasks)"
+                )
 
     # -----------------------------------------------------------------------
     # Check: every group's `hub` and `components` exist in projects.yaml

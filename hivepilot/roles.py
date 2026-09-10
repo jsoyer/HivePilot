@@ -65,6 +65,10 @@ class Role(BaseModel):
     runner: str | None = None
     model: str | None = None
     models: list[str] | None = None
+    # Opt-in dual-model debate on a role-bound task (HP-21). Keeping two
+    # entries in `models` is not enough — `hivepilot debate` still works,
+    # but a pipeline task only auto-triggers when this is True.
+    debate: bool = False
     display_name: str | None = None  # human-facing agent name (FR theme)
     host: str | None = None  # SSH host/alias to run this agent on (None = local)
     # Headless permission mode for claude-backed roles (the developer needs to
@@ -341,6 +345,7 @@ def export_store_to_yaml(
         "runner",
         "model",
         "models",
+        "debate",
         "inputs",
         "outputs",
         "optional_inputs",
@@ -361,7 +366,11 @@ def export_store_to_yaml(
             (prompts_dir / prompt_file).write_text(str(prompt_text), encoding="utf-8")
         entry = dict(row)
         entry["prompt_file"] = prompt_file
-        ordered = {k: entry[k] for k in _ORDER if entry.get(k) not in (None, [], "")}
+        ordered = {
+            k: entry[k]
+            for k in _ORDER
+            if entry.get(k) not in (None, [], "") and not (k == "debate" and not entry.get(k))
+        }
         ordered.setdefault("name", row["name"])
         ordered["can_block"] = bool(row.get("can_block"))
         ordered["order"] = row.get("order")

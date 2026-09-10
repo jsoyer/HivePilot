@@ -6690,7 +6690,7 @@ class Orchestrator:
             from hivepilot.roles import get_role as _get_role
 
             _role = _get_role(task.role)
-            if _role.models and len(_role.models) > 1:
+            if _role.debate and _role.models and len(_role.models) > 1:
                 topic = extra_prompt or task.description or task_name
                 adr = self.run_debate(
                     project_name=project.path.name,

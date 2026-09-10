@@ -24,6 +24,8 @@ roles:
     can_block: false
     order: 1
     runner: "opencode"
+    # Dual models stay available for `hivepilot debate`. Auto-trigger on
+    # ceo-intake / ceo-approval is opt-in (`debate: true`) — HP-21.
     models:
       - "opencode-go/qwen3.7-max"
       - "opencode-go/kimi-k2.6"
@@ -127,7 +129,7 @@ roles:
     title: "QA"
     command_task: "qa"
     prompt_file: "qa.md"
-    model_profile: "coding"
+    model_profile: "automation"
     inputs:
       - implementation
       - technical_spec
