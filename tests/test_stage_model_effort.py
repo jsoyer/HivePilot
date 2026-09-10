@@ -798,7 +798,12 @@ class TestOrchestratorStageDispatchByteIdentical:
 
 
 class TestDebatePathPreservedWithStageParams:
-    def test_dual_model_role_still_triggers_debate_with_stage_params(self, tmp_path: Path) -> None:
+    def test_dual_model_role_still_triggers_debate_with_stage_params(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        from hivepilot.roles import get_role
+
+        monkeypatch.setattr(get_role("ceo"), "debate", True)
         orch = _bare_orchestrator()
         orch.registry = MagicMock()
         task = TaskConfig(

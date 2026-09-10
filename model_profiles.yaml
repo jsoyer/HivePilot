@@ -47,6 +47,6 @@ role_profiles:
   ciso: architecture
   developer: coding
   reviewer: coding
-  qa: coding
+  qa: automation
   chief_of_staff: automation
   documentation: automation

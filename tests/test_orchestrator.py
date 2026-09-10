@@ -482,7 +482,7 @@ class TestDocumentationVaultWrite:
 
 
 class TestTasksYamlDocumentationBinding:
-    """documentation task step must use gemini runner and gemini-cli runner_ref."""
+    """documentation task step must use the documentation role's gemini runner."""
 
     def test_company_documentation_runner_is_gemini(self) -> None:
         """documentation step.runner == 'gemini'."""
@@ -496,8 +496,8 @@ class TestTasksYamlDocumentationBinding:
         step = task.steps[0]
         assert step.runner == "gemini", f"Expected runner='gemini', got: {step.runner!r}"
 
-    def test_company_documentation_runner_ref_is_gemini_cli(self) -> None:
-        """documentation step.runner_ref == 'gemini-cli'."""
+    def test_company_documentation_has_no_named_runner_ref(self) -> None:
+        """Role-bound company tasks do not pin a named runner_ref (HP-17)."""
         from hivepilot.services.project_service import load_tasks
 
         tasks_config = load_tasks()
@@ -505,8 +505,8 @@ class TestTasksYamlDocumentationBinding:
         assert task is not None, "documentation task not found in tasks.yaml"
         step = task.steps[0]
 
-        assert step.runner_ref == "gemini-cli", (
-            f"Expected runner_ref='gemini-cli', got: {step.runner_ref!r}"
+        assert not step.runner_ref, (
+            f"Expected no runner_ref on role-bound documentation, got: {step.runner_ref!r}"
         )
 
     def test_company_documentation_other_fields_unchanged(self) -> None:
@@ -1181,8 +1181,12 @@ class TestDebate:
 
 
 class TestDebateAutoTrigger:
-    def test_dual_model_role_task_triggers_debate(self) -> None:
+    def test_dual_model_role_task_triggers_debate_when_opted_in(self, monkeypatch) -> None:
         from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.roles import get_role
+
+        ceo = get_role("ceo")
+        monkeypatch.setattr(ceo, "debate", True)
 
         orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
         orch.registry = MagicMock()
@@ -1210,6 +1214,38 @@ class TestDebateAutoTrigger:
         mock_debate.assert_called_once()
         assert mock_debate.call_args.kwargs["role_name"] == "ceo"
         orch.registry.execute_definition.assert_not_called()  # debate path returns early
+
+    def test_dual_model_role_task_does_not_trigger_debate_by_default(self) -> None:
+        from hivepilot.models import ProjectConfig, TaskConfig, TaskStep
+        from hivepilot.roles import get_role
+
+        assert get_role("ceo").debate is False
+
+        orch = _make_orchestrator_with_pipeline(_make_pipeline_by_name("x"))
+        orch.registry = MagicMock()
+        task = TaskConfig(
+            description="intake",
+            role="ceo",
+            engine="native",
+            steps=[TaskStep(name="s", runner="opencode", prompt_file="p.md")],
+        )
+        project = ProjectConfig(path=Path("/tmp/p"))
+        with (
+            patch("hivepilot.orchestrator.state_service.record_step"),
+            patch.object(orch, "run_debate") as mock_debate,
+            patch.object(orch, "_resolve_secrets", return_value={}),
+        ):
+            orch._execute_task(
+                project=project,
+                task_name="ceo-intake",
+                task=task,
+                extra_prompt=None,
+                auto_git=False,
+                run_id=1,
+                simulate=True,
+                dry_run=True,
+            )
+        mock_debate.assert_not_called()
 
     def test_single_model_role_task_does_not_trigger_debate(self) -> None:
         from hivepilot.models import ProjectConfig, TaskConfig, TaskStep

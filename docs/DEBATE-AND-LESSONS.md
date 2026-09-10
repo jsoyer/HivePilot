@@ -1,7 +1,10 @@
 # Debate, judge & the fail-closed PR gate
 
-This is an opt-in adjudication layer. A CEO-style dual-model debate produces
-positions that are synthesized into an Architecture Decision Record (ADR).
+This is an opt-in adjudication layer. A dual-model debate (`Role.models` with
+two or more entries, plus `Role.debate: true` to auto-trigger on a role-bound
+task — HP-21) produces positions that are synthesized into an Architecture
+Decision Record (ADR). `hivepilot debate` still runs whenever the role has
+two models, even if `debate` is false.
 An optional independent LLM **judge** scores the debate's confidence, and a
 **challenge arbiter** adjudicates any challenges raised against the ADR. The
 resulting **verdict** can fail-closed gate PR promotion.

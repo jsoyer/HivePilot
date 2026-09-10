@@ -508,11 +508,13 @@ def init_db() -> None:
                 permission_mode TEXT,
                 command_task TEXT,
                 effort TEXT,
+                debate INTEGER DEFAULT 0,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (name, tenant)
             )
             """
         )
+        _add_column_if_missing(conn, "roles", "debate INTEGER DEFAULT 0")
         conn.execute(
             f"""
             CREATE TABLE IF NOT EXISTS retry_queue (
@@ -2110,6 +2112,7 @@ def _decode_role_row(row: dict[str, Any]) -> dict[str, Any]:
             except (TypeError, ValueError):
                 row[field] = None
     row["can_block"] = bool(row.get("can_block"))
+    row["debate"] = bool(row.get("debate"))
     if "role_order" in row:
         row["order"] = row.pop("role_order")
     return row
@@ -2135,7 +2138,7 @@ def upsert_role(role: dict[str, Any]) -> None:
                     "INSERT INTO roles (name, tenant, title, display_name, model_profile, runner, "
                     "model, models, prompt_file, prompt_text, inputs, outputs, optional_inputs, "
                     "allowed_tools, can_block, role_order, host, permission_mode, command_task, "
-                    "effort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    "effort, debate) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 )
             ),
             (
@@ -2159,6 +2162,7 @@ def upsert_role(role: dict[str, Any]) -> None:
                 role.get("permission_mode"),
                 role.get("command_task"),
                 role.get("effort"),
+                1 if role.get("debate") else 0,
             ),
         )
 

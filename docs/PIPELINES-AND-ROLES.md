@@ -30,6 +30,7 @@ Key `Role` fields:
 - `order` — default position in a company-style pipeline
 - `runner` — which runner plugin executes this role (see [RUNNERS.md](./RUNNERS.md))
 - `model` / `models` — model id(s) the role uses
+- `debate` — opt-in dual-model auto-debate on a role-bound task (default off; `hivepilot debate` still uses `models`)
 - `effort` — reasoning/thinking effort level
 - `host` — optional host/environment constraint
 - `command_task` — optional fixed command/task binding for non-conversational roles

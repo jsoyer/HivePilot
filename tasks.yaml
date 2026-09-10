@@ -259,12 +259,9 @@ tasks:
     description: CEO reviews roadmap, metrics, and customer feedback; sets objectives and priorities.
     steps:
       - name: ceo intake
-        runner: claude
-        runner_ref: claude-architect
+        runner: opencode
         prompt_file: prompts/agents/ceo.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: architecture
     git:
       commit: false
       push: false
@@ -275,12 +272,9 @@ tasks:
     description: Chief of Staff translates CEO objectives into an execution plan.
     steps:
       - name: chief of staff plan
-        runner: claude
-        runner_ref: claude-docs
+        runner: cursor
         prompt_file: prompts/agents/chief_of_staff.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: automation
     git:
       commit: false
       push: false
@@ -291,12 +285,9 @@ tasks:
     description: CTO reviews the execution plan and produces a technical spec or ADR.
     steps:
       - name: cto review
-        runner: claude
-        runner_ref: claude-architect
+        runner: opencode
         prompt_file: prompts/agents/cto.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: architecture
         knowledge_files:
           - CLAUDE.md
           - AGENTS.md
@@ -312,11 +303,8 @@ tasks:
     steps:
       - name: implementation
         runner: claude
-        runner_ref: claude-refactor
         prompt_file: prompts/agents/developer.md
         timeout_seconds: 5400
-        metadata:
-          claude_profile: coding
     git:
       commit: true
       push: true
@@ -329,12 +317,9 @@ tasks:
     description: Reviewer inspects the implementation against the spec and issues a review report.
     steps:
       - name: code review
-        runner: claude
-        runner_ref: claude-refactor
+        runner: codex
         prompt_file: prompts/agents/reviewer.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: coding
     git:
       commit: false
       push: false
@@ -347,12 +332,9 @@ tasks:
     description: CISO performs a security review and grants or withholds clearance.
     steps:
       - name: security review
-        runner: claude
-        runner_ref: claude-security
+        runner: opencode
         prompt_file: prompts/agents/ciso.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: architecture
         knowledge_files:
           - CLAUDE.md
           - AGENTS.md
@@ -367,12 +349,9 @@ tasks:
     description: QA builds the test suite, runs edge-case analysis, and produces a test report.
     steps:
       - name: qa validation
-        runner: claude
-        runner_ref: claude-refactor
+        runner: cursor
         prompt_file: prompts/agents/qa.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: coding
     git:
       commit: false
       push: false
@@ -384,7 +363,6 @@ tasks:
     steps:
       - name: documentation update
         runner: gemini
-        runner_ref: gemini-cli
         prompt_file: prompts/agents/documentation.md
         timeout_seconds: 3600
     git:
@@ -399,12 +377,9 @@ tasks:
     description: Chief of Staff compiles the cycle report for CEO review.
     steps:
       - name: cos cycle report
-        runner: claude
-        runner_ref: claude-docs
+        runner: cursor
         prompt_file: prompts/agents/chief_of_staff.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: automation
     git:
       commit: false
       push: false
@@ -415,12 +390,9 @@ tasks:
     description: Chief of Staff (CSO) concatenates the CEO direction, CTO architecture, and CISO security review, adjusts, and produces the consolidated proposal for human approval.
     steps:
       - name: plan synthesis
-        runner: claude
-        runner_ref: claude-docs
+        runner: cursor
         prompt_file: prompts/agents/chief_of_staff.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: automation
     git:
       commit: false
       push: false
@@ -431,12 +403,9 @@ tasks:
     description: Chief of Staff performs the final check after QA and documentation and approves or rejects the pull request.
     steps:
       - name: pr approval
-        runner: claude
-        runner_ref: claude-docs
+        runner: cursor
         prompt_file: prompts/agents/chief_of_staff.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: automation
     git:
       commit: false
       push: false
@@ -450,12 +419,9 @@ tasks:
     description: CEO reviews the cycle report and grants final approval or sends back for revision.
     steps:
       - name: ceo approval
-        runner: claude
-        runner_ref: claude-architect
+        runner: opencode
         prompt_file: prompts/agents/ceo.md
         timeout_seconds: 3600
-        metadata:
-          claude_profile: architecture
     git:
       commit: false
       push: false

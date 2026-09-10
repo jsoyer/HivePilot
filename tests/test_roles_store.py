@@ -36,6 +36,7 @@ def _ciso(**over) -> dict:
         "permission_mode": None,
         "command_task": "ciso",
         "effort": None,
+        "debate": False,
     }
     row.update(over)
     return row
@@ -51,7 +52,14 @@ class TestRolesCrud:
         assert row["models"] == ["opencode-go/glm-5.2"]  # JSON round-trip
         assert row["inputs"] == ["implementation", "review_report"]
         assert row["can_block"] is True  # 0/1 -> bool
+        assert row["debate"] is False
         assert row["order"] == 6  # role_order -> order
+
+    def test_upsert_round_trips_debate_opt_in(self) -> None:
+        state_service.upsert_role(_ciso(debate=True))
+        row = state_service.get_role_row("ciso")
+        assert row is not None
+        assert row["debate"] is True
         assert row["prompt_text"].startswith("You are the CISO")
 
     def test_get_unknown_role_is_none(self) -> None:
