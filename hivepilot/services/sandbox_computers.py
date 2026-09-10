@@ -57,8 +57,13 @@ def session_snapshot() -> dict[str, Any]:
     }
 
 
-def control(action: Literal["takeover", "handback", "skip"]) -> dict[str, Any]:
+_ACTIONS = frozenset({"takeover", "handback", "skip"})
+
+
+def control(action: str) -> dict[str, Any]:
     """Fail-closed human control. Never invents a session."""
+    if action not in _ACTIONS:
+        raise ValueError(f"unknown computer action: {action}")
     return {
         "ok": False,
         "action": action,
