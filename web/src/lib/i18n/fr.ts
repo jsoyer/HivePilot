@@ -842,6 +842,10 @@ export const fr: Record<TranslationKey, string> = {
     'Aucun navigateur loopback n’est attaché. Les onglets n’apparaissent que si Chrome DevTools répond sur cet hôte.',
   'home.hostBrowserNote':
     'Vrais onglets via un CDP loopback — HivePilot n’invente pas de navigateur.',
+  'home.computerTitle': 'Ordinateur sandbox',
+  'home.computerEmpty':
+    'Aucun desktop sandbox n’est attaché. Le take-over est refusé — HivePilot ne cède pas cet hôte.',
+  'home.computerDecision': 'Spike provider : no-go (Docker / E2B / Daytona / Box).',
 
   // ---- Models view (section Dépenses de Pollen) ------------------------
   'models.title': 'Modèles',

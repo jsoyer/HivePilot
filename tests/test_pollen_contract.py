@@ -30,6 +30,8 @@ Endpoints covered (every one `web/src/lib/pollen-api.ts` calls):
     GET /v1/host/resources
     GET /v1/host/processes
     GET /v1/host/browser
+    GET /v1/sandbox/provider
+    GET /v1/computer/session
     GET /v1/plugins/health
     GET /v1/hindsight/status
     GET /v1/hindsight/roles/{role}
@@ -385,6 +387,29 @@ class TestHostBrowserContract:
         for tab in data["tabs"]:
             assert set(tab.keys()) == {"id", "title", "url", "type"}
             assert "webSocketDebuggerUrl" not in tab
+
+
+class TestSandboxProviderContract:
+    def test_top_level_keys(self, api_client, read_token):
+        resp = api_client.get("/v1/sandbox/provider", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"configured", "provider", "decision", "evaluated", "note"}
+        assert data["configured"] is False
+        assert data["provider"] is None
+        assert data["decision"] == "no-go"
+        assert data["evaluated"] == ["docker", "e2b", "daytona", "box"]
+
+
+class TestComputerSessionContract:
+    def test_top_level_keys(self, api_client, read_token):
+        resp = api_client.get("/v1/computer/session", headers=_auth(read_token))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data.keys()) == {"attached", "can_takeover", "controller", "note"}
+        assert data["attached"] is False
+        assert data["can_takeover"] is False
+        assert data["controller"] is None
 
 
 # ---------------------------------------------------------------------------

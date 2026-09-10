@@ -32,6 +32,8 @@ import {
   fetchHostResources,
   fetchHostProcesses,
   fetchHostBrowser,
+  fetchSandboxProvider,
+  fetchComputerSession,
   fetchModels,
   fetchOnboardingMachine,
   fetchVoiceConfig,
@@ -278,6 +280,16 @@ describe('pollen-api fetch wrappers', () => {
   it('fetchHostBrowser calls GET /v1/host/browser', async () => {
     await fetchHostBrowser()
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/host/browser')
+  })
+
+  it('fetchSandboxProvider calls GET /v1/sandbox/provider', async () => {
+    await fetchSandboxProvider()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/sandbox/provider')
+  })
+
+  it('fetchComputerSession calls GET /v1/computer/session', async () => {
+    await fetchComputerSession()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/computer/session')
   })
 
   it('fetchModels calls GET /v1/models with a days window', async () => {

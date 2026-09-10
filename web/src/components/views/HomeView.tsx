@@ -30,15 +30,19 @@ import {
   fetchAnalyticsSummary,
   fetchApprovals,
   fetchEfficiency,
+  fetchComputerSession,
   fetchHostBrowser,
   fetchHostProcesses,
   fetchHostResources,
+  fetchSandboxProvider,
   fetchMemoryReality,
   fetchRuns,
   postApproval,
+  type ComputerSession,
   type HostBrowser,
   type HostProcesses,
   type HostResources,
+  type SandboxProvider,
   type RunSummary,
 } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
@@ -713,6 +717,43 @@ function HostBrowserTabs({ state }: { state: AsyncState<HostBrowser> }) {
   )
 }
 
+function HostComputerSession({
+  session,
+  provider,
+}: {
+  session: AsyncState<ComputerSession>
+  provider: AsyncState<SandboxProvider>
+}) {
+  const t = useT()
+  if (session.status === 'loading' || provider.status === 'loading') {
+    return <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+  }
+  if (session.status === 'error') {
+    return (
+      <p data-testid="home-host-computer-error" className="text-sm text-muted-foreground">
+        {describeApiError(session.error)}
+      </p>
+    )
+  }
+  return (
+    <div data-testid="home-host-computer">
+      <p className="mb-2 text-xs tracking-wide text-muted-foreground uppercase">
+        {t('home.computerTitle')}
+      </p>
+      {session.data.attached && session.data.can_takeover ? (
+        <p className="text-sm">{session.data.note}</p>
+      ) : (
+        <p data-testid="home-host-computer-empty" className="text-sm text-muted-foreground">
+          {t('home.computerEmpty')}
+        </p>
+      )}
+      {provider.status === 'success' && (
+        <p className="mt-2 text-xs text-muted-foreground">{t('home.computerDecision')}</p>
+      )}
+    </div>
+  )
+}
+
 function HostStrip({ state }: { state: AsyncState<HostResources> }) {
   const t = useT()
   const { language } = useLanguage()
@@ -804,6 +845,8 @@ export function HomeView({ onNavigate }: HomeViewProps) {
   const host = useAsyncData(() => fetchHostResources(), [refreshKey])
   const processes = useAsyncData(() => fetchHostProcesses(), [refreshKey])
   const browser = useAsyncData(() => fetchHostBrowser(), [refreshKey])
+  const sandbox = useAsyncData(() => fetchSandboxProvider(), [refreshKey])
+  const computer = useAsyncData(() => fetchComputerSession(), [refreshKey])
   const approvalsState = useAsyncData(() => fetchApprovals(), [refreshKey])
   const runsState = useAsyncData(() => fetchRuns(), [refreshKey])
   const summary = useAsyncData(() => fetchAnalyticsSummary(TODAY_DAYS), [])
@@ -980,6 +1023,7 @@ export function HomeView({ onNavigate }: HomeViewProps) {
           <HostStrip state={host} />
           <HostProcessList state={processes} />
           <HostBrowserTabs state={browser} />
+          <HostComputerSession session={computer} provider={sandbox} />
         </CardContent>
       </Card>
 

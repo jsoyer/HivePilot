@@ -63,6 +63,19 @@ const mocks = vi.hoisted(() => ({
     note: 'empty',
     error: null,
   }),
+  fetchSandboxProvider: vi.fn().mockResolvedValue({
+    configured: false,
+    provider: null,
+    decision: 'no-go',
+    evaluated: ['docker', 'e2b', 'daytona', 'box'],
+    note: 'none',
+  }),
+  fetchComputerSession: vi.fn().mockResolvedValue({
+    attached: false,
+    can_takeover: false,
+    controller: null,
+    note: 'none',
+  }),
   fetchModels: vi.fn().mockResolvedValue({
     models: [],
     overall: { total_steps: 0, input_tokens: 0, output_tokens: 0, cost_usd: 0, unpriced_steps: 0, succeeded_runs: 0, cost_per_successful_run: null },

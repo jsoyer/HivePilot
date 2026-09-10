@@ -95,7 +95,7 @@ See [PIPELINES-AND-ROLES.md](./PIPELINES-AND-ROLES.md) and [RUNNERS.md](./RUNNER
 - **Prompt-injection validation** — inputs assembled into agent prompts are validated before dispatch.
 - **Secrets masking** — secret values are masked at every output sink (CLI, API, DB, notifications), not only at the point of use.
 - **Fail-closed debate and lessons gates** — if a debate verdict or lesson-validation step errors or is inconclusive, the gate denies rather than defaulting to allow.
-- **Optional container isolation** — execution can be sandboxed in a container for additional isolation.
+- **Optional container isolation** — CLI runners can be confined with bwrap. A per-agent desktop `SandboxProvider` (Docker/E2B/Daytona/Box) was evaluated (HP-67) and is **no-go** for this spike; take-over (HP-72) is fail-closed until one exists.
 - **Lightweight core** — heavy dependencies (`langchain`, `torch`, `boto3`, etc.) are optional extras, not core requirements.
 
 See [SECURITY.md](./SECURITY.md) for the full threat model and gate configuration.
