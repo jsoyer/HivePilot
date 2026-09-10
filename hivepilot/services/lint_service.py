@@ -57,16 +57,26 @@ def _lint_task(name: str, task: TaskConfig) -> List[str]:
     (``RunnerRegistry.known_kinds()``, backed by ``RUNNER_MAP``) rather than
     a hardcoded set — this catches advertised-but-unregistered kinds (e.g.
     the historical ``"api"`` orphan; see roadmap Phase 26a) and correctly
-    accepts plugin-contributed kinds registered at runtime.
+    accepts plugin-contributed kinds registered at runtime. A role-bound
+    step may also declare an ``AGENT_KINDS`` runner without ``runner_ref``
+    (HP-17): PATH-gated plugins are often absent from ``RUNNER_MAP`` here.
     """
     errors: List[str] = []
     known_runners = RunnerRegistry.known_kinds()
+    from hivepilot.services.roster_preset import AGENT_KINDS
+
     for step in task.steps:
         if step.prompt_file:
             path = Path(step.prompt_file)
             if not path.exists():
                 errors.append(f"Task '{name}' step '{step.name}' missing prompt file {path}")
         if step.runner not in known_runners and not step.runner_ref:
+            # HP-17: a role-bound step may declare the role's agent kind
+            # without a named runner_ref. PATH-gated plugins (opencode,
+            # cursor, gemini, …) are absent from RUNNER_MAP when the binary
+            # is not installed; that must not force a stale claude-* ref.
+            if task.role and step.runner in AGENT_KINDS:
+                continue
             errors.append(
                 f"Task '{name}' step '{step.name}' references unknown runner '{step.runner}' (missing runner_ref?)"
             )

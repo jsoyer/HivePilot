@@ -95,6 +95,28 @@ def register():
     assert "lint-fixture-kind" in RUNNER_MAP
 
 
+def test_lint_task_accepts_role_bound_agent_kind_without_runner_ref() -> None:
+    """HP-17: company tasks declare the role's agent kind and drop runner_ref.
+    The kind is real even when the PATH-gated plugin is not in RUNNER_MAP."""
+    task = TaskConfig(
+        description="d",
+        role="ceo",
+        steps=[TaskStep(name="s1", runner="opencode")],
+    )
+    assert _lint_task("ceo-intake", task) == []
+
+
+def test_lint_task_still_flags_unknown_kind_on_role_bound_task() -> None:
+    task = TaskConfig(
+        description="d",
+        role="ceo",
+        steps=[TaskStep(name="s1", runner="not-a-real-kind")],
+    )
+    errors = _lint_task("ceo-intake", task)
+    assert len(errors) == 1
+    assert "unknown runner" in errors[0].lower()
+
+
 def test_lint_task_still_allows_runner_ref_without_direct_kind_match() -> None:
     """A step whose `runner` isn't a registered kind is still NOT flagged when
     `runner_ref` is set (points at a named runner definition instead of a
