@@ -64,7 +64,9 @@ def test_bundled_company_tasks_match_role_runners() -> None:
 
 
 def test_validate_config_flags_role_runner_drift(tmp_path: Path) -> None:
-    (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"demo": {"path": "~/dev/demo"}}}))
+    (tmp_path / "projects.yaml").write_text(
+        yaml.dump({"projects": {"demo": {"path": "~/dev/demo"}}})
+    )
     (tmp_path / "roles.yaml").write_text(
         yaml.dump(
             {
@@ -114,7 +116,9 @@ def test_validate_config_flags_role_runner_drift(tmp_path: Path) -> None:
 
 
 def test_validate_config_accepts_matching_role_runner(tmp_path: Path) -> None:
-    (tmp_path / "projects.yaml").write_text(yaml.dump({"projects": {"demo": {"path": "~/dev/demo"}}}))
+    (tmp_path / "projects.yaml").write_text(
+        yaml.dump({"projects": {"demo": {"path": "~/dev/demo"}}})
+    )
     (tmp_path / "roles.yaml").write_text(
         yaml.dump({"roles": [{"name": "planner", "runner": "cursor", "prompt_file": "planner.md"}]})
     )

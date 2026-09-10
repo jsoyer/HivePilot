@@ -261,7 +261,9 @@ def validate_config_report(base_dir: Path | None = None) -> ValidationReport:
     role_runner_by_name: dict[str, str] = {
         r["name"]: r["runner"]
         for r in (roles_data.get("roles") or [])
-        if isinstance(r, dict) and isinstance(r.get("name"), str) and isinstance(r.get("runner"), str)
+        if isinstance(r, dict)
+        and isinstance(r.get("name"), str)
+        and isinstance(r.get("runner"), str)
     }
     named_runner_kinds: dict[str, str] = {
         name: defn["kind"]

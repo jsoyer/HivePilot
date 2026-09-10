@@ -836,6 +836,8 @@ export interface components {
             can_block: boolean;
             /** Command Task */
             command_task?: string | null;
+            /** Debate */
+            debate?: boolean | null;
             /** Display Name */
             display_name?: string | null;
             /** Effort */
