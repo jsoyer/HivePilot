@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
+from hivepilot.config import Settings
 from hivepilot.services import notification_service as ns
 from hivepilot.services import telegram_avatars as tgav
+from hivepilot.services.notification_service import _send_telegram
 
 CANONICAL = (
     "ceo",
@@ -96,12 +99,9 @@ def test_role_key_from_actor_matches_display_and_title() -> None:
 def test_load_from_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "telegram_avatars.yaml"
     path.write_text(yaml.dump({"avatars": {"reviewer": "777"}}), encoding="utf-8")
-    monkeypatch.setattr(tgav.settings, "telegram_avatars_file", Path("telegram_avatars.yaml"))
-    monkeypatch.setattr(tgav.settings, "resolve_config_path", lambda p: path)
+    monkeypatch.setattr(Settings, "resolve_config_path", lambda self, p: path)
     assert tgav.load_custom_emoji_ids() == {"reviewer": "777"}
-    # cache hit
     path.write_text(yaml.dump({"avatars": {"reviewer": "888"}}), encoding="utf-8")
-    # mtime usually changes; if it does not, still acceptable — force reset
     tgav.reset_cache()
     assert tgav.load_custom_emoji_ids() == {"reviewer": "888"}
 
@@ -209,48 +209,54 @@ def test_unknown_actor_keeps_stream_icon_only(
         assert glyph not in msg
 
 
-def test_send_telegram_entities_omitted_when_html(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _telegram_settings(**kw: object) -> MagicMock:
+    s = MagicMock()
+    s.telegram_bot_token = "tok"
+    s.telegram_notification_chat_id = 123
+    s.telegram_allowed_chat_ids = []
+    for key, value in kw.items():
+        setattr(s, key, value)
+    return s
+
+
+def test_send_telegram_entities_omitted_when_html() -> None:
     captured: dict = {}
 
     def fake_post(url, json=None, timeout=None):
         captured["payload"] = json
-        r = type("R", (), {"ok": True})()
+        r = MagicMock()
+        r.ok = True
         return r
 
-    monkeypatch.setattr(ns.requests, "post", fake_post)
-    monkeypatch.setattr(ns.settings, "telegram_bot_token", "tok", raising=False)
-    monkeypatch.setattr(ns.settings, "telegram_notification_chat_id", 1, raising=False)
-    monkeypatch.setattr(ns.settings, "telegram_allowed_chat_ids", [], raising=False)
-
-    ns._send_telegram(
-        "hi",
-        chat_id=1,
-        parse_mode="HTML",
-        entities=[{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"}],
-    )
+    with (
+        patch("hivepilot.services.notification_service.requests.post", fake_post),
+        patch("hivepilot.services.notification_service.settings", _telegram_settings()),
+    ):
+        _send_telegram(
+            "hi",
+            chat_id=1,
+            parse_mode="HTML",
+            entities=[{"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"}],
+        )
     assert captured["payload"]["parse_mode"] == "HTML"
     assert "entities" not in captured["payload"]
 
 
-def test_send_telegram_entities_in_payload_when_plain(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_send_telegram_entities_in_payload_when_plain() -> None:
     captured: dict = {}
 
     def fake_post(url, json=None, timeout=None):
         captured["payload"] = json
-        r = type("R", (), {"ok": True})()
+        r = MagicMock()
+        r.ok = True
         return r
 
-    monkeypatch.setattr(ns.requests, "post", fake_post)
-    monkeypatch.setattr(ns.settings, "telegram_bot_token", "tok", raising=False)
-    monkeypatch.setattr(ns.settings, "telegram_notification_chat_id", 1, raising=False)
-    monkeypatch.setattr(ns.settings, "telegram_allowed_chat_ids", [], raising=False)
-
     entity = {"type": "custom_emoji", "offset": 0, "length": 2, "custom_emoji_id": "1"}
-    ns._send_telegram("👑 hi", chat_id=1, parse_mode=None, entities=[entity])
+    with (
+        patch("hivepilot.services.notification_service.requests.post", fake_post),
+        patch("hivepilot.services.notification_service.settings", _telegram_settings()),
+    ):
+        _send_telegram("👑 hi", chat_id=1, parse_mode=None, entities=[entity])
     assert "parse_mode" not in captured["payload"]
     assert captured["payload"]["entities"] == [entity]
 
