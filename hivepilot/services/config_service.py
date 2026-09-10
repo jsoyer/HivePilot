@@ -36,6 +36,10 @@ CONFIG_FILES = {
     # file where a deployment's config dir expects it, and a file absent from
     # this set is never copied, never reported as updated, and never noticed.
     "vault.yaml",
+    # HP-16: optional role → custom_emoji_id map. Missing is fine (Unicode
+    # fallback); when the operator pastes IDs, sync must copy them or the
+    # live host silently stays on glyphs — same class of miss as vault.yaml.
+    "telegram_avatars.yaml",
 }
 CONFIG_DIRS = {"prompts", "roster-presets"}
 

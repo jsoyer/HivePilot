@@ -17,3 +17,4 @@ Replay: `hivepilot run example-api docs --dry-run` (stream path is unit-tested; 
 - [x] `hivepilot validate` — OK (pre-existing pipeline input warnings only)
 - [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
 - [x] `ruff format --check` on touched Python — clean
+- [x] CI follow-up: `telegram_avatars.yaml` added to `config_service.CONFIG_FILES` (sync roster); fixture typed as `Iterator[None]` for mypy

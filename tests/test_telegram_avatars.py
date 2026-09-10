@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -26,7 +27,7 @@ CANONICAL = (
 
 
 @pytest.fixture(autouse=True)
-def _reset_avatar_cache() -> None:
+def _reset_avatar_cache() -> Iterator[None]:
     tgav.reset_cache()
     yield
     tgav.reset_cache()
