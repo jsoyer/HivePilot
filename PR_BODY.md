@@ -1,20 +1,40 @@
 ## Summary
 
-**HP-16** — Telegram hand-offs prefix a per-role avatar.
+Completes **HP-18** (pluggable concierge classifier over an OpenAI-compatible API) and **HP-19** (selectable OSS model-profile columns + roster overlay). Continues stale #596 onto current `main`.
 
-- Unicode fallback for the eight first-class roles (same keys as Pollen HP-20): CEO 👑, CoS 📋, CTO 🧭, Developer 🛠️, Reviewer 🔍, CISO 🛡️, QA 🧪, Documentation 📝.
-- Optional `telegram_avatars.yaml` maps `role → custom_emoji_id`. HTML cards emit `<tg-emoji>`; the plain path attaches a `custom_emoji` MessageEntity (UTF-16 offset). `parse_mode` and `entities` stay mutually exclusive.
-- Gate: `HIVEPILOT_TELEGRAM_CUSTOM_EMOJI` (default on). Missing IDs, unknown actors, a disabled flag, or a rejected send (no Premium / stale id) degrade to the Unicode glyph.
-- This environment does **not** upload a sticker set — ops via `@Stickers` (see `docs/INTEGRATIONS.md`).
+### HP-18 — concierge runner is configurable
 
-Linear: [HP-16](https://linear.app/js-workspace/issue/HP-16/role-avatars-in-telegram-via-custom-emoji-premium).
+The classifier was hardwired to `RunnerDefinition(kind="claude")`. It is now selected by settings:
 
-Replay: `hivepilot run example-api docs --dry-run` (stream path is unit-tested; no live Telegram).
+- `HIVEPILOT_CHATOPS_CONCIERGE_RUNNER` — `claude` (default), `openai`, or `openrouter`
+- `HIVEPILOT_CHATOPS_CONCIERGE_MODEL` — endpoint model id (unchanged)
+- `HIVEPILOT_CHATOPS_CONCIERGE_API_BASE` — threaded as `OPENAI_BASE_URL` so only the key is a secret
+
+New built-in **`openai` runner** (`OpenAiCompatRunner`): API-only, mirrors `OpenRouterRunner`, fail-closed on a missing `OPENAI_API_KEY`, masks the key at the runner. The Claude path (including the hard CLI no-tools invariant on untrusted chat text) is unchanged. `HIVEPILOT_CHATOPS_CONCIERGE_MODE` / Anthropic key fallback apply only when the runner is `claude`.
+
+```bash
+HIVEPILOT_CHATOPS_CONCIERGE_RUNNER=openai
+HIVEPILOT_CHATOPS_CONCIERGE_MODEL=glm-5.3-flash
+HIVEPILOT_CHATOPS_CONCIERGE_API_BASE=https://opencode.ai/zen/go/v1
+OPENAI_API_KEY=<Zen key>
+```
+
+### HP-19 — OSS preset is selectable, not the new default
+
+`model_profiles.yaml` grows `opencode:` / `openai:` columns beside `grok` / `cursor` for `coding` / `architecture` / `automation`. Shipped `roles.yaml` vendors are untouched. Select the overlay with `HIVEPILOT_ROSTER_PRESET=oss` (`roster-presets/oss.yaml`).
+
+| Profile | OpenCode Go / `openai:` | Ollama Cloud (comment) |
+| -- | -- | -- |
+| automation | `glm-5.3-flash` | `gpt-oss:20b`, `nemotron-3-nano:30b` |
+| coding | `kimi-k2.7-code` | `qwen3.5:397b`, `kimi-k2.7-code` |
+| architecture | `deepseek-v4-pro` | `deepseek-v4-flash`, `deepseek-v4-pro` |
+
+Linear: [HP-18](https://linear.app/js-workspace/issue/HP-18/concierge-pluggable-runner-oss-model-ollamaopenrouter-also-fixes), [HP-19](https://linear.app/js-workspace/issue/HP-19/model-profiles-add-an-oss-preset-ollamaopenrouter). Supersedes #596.
+
+Replay: `hivepilot run example-api docs --dry-run`
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_telegram_avatars.py tests/test_telegram_formatting.py tests/test_notification_service.py tests/test_stream_topics.py tests/test_config_validation.py tests/test_telegram_channel.py tests/test_telegram_chunking.py tests/test_stream_send_is_recorded.py tests/test_stream_fanout.py -q` — 167 passed
-- [x] `hivepilot validate` — OK (pre-existing pipeline input warnings only)
-- [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
-- [x] `ruff format --check` on touched Python — clean
-- [x] CI follow-up: `telegram_avatars.yaml` added to `config_service.CONFIG_FILES` (sync roster); fixture typed as `Iterator[None]` for mypy
+- [ ] `pytest` on touched suites (recorded after the run)
+- [ ] `hivepilot lint`
+- [ ] `hivepilot run example-api docs --dry-run`
