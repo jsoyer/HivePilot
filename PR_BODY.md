@@ -1,26 +1,27 @@
 ## Summary
 
-**HP-86** — bind a change-class taxonomy to existing HP-61 approval rules (spike).
+**HP-85** — Spike: zero-token actionable-event consumer on the HP-40 bus (no LLM poll).
 
-- No second control plane. Optional `change_class` on the same `approve` / `deny` rule + pending cards.
-- `mechanical` (lint, lockfile, changelog typo) may auto-approve when the rule says so.
-- `product_fork` / `security` / `destructive` / `unknown` (default) never auto-approve.
-- Watcher wake (`source` / `woke` / bus kind) is not a class and cannot unlock auto-approve.
-- A metadata claim can only tighten. Class veto on approve does not fall through to a less-specific rule.
-- `auto=deny` unchanged. `INVARIANTS.md` destructive / outward / `merge_pr` untouched.
+Idle sleeper that tails `events.subscribe()` / `change_log` and classifies each row as wake or sleep with a **static allowlist**. A model is never consulted — not to classify, not to decide whether to wake.
 
-ADR: `docs/adr/2026-09-11-hp61-change-classes.md` (amends HP-84). Thin hook: `approval_rules_service.match_auto`.
+- `hivepilot/services/actionable_events.py` — `classify()` (pure) + `consume()` (yields wakes only).
+- Allowlist from in-repo kinds: `nudge.posted`; `approval.requested` (now emitted by `record_approval_request`); `run.completed` only when `payload.status` is in the analytics failure bucket. There is no `run.failed` kind.
+- Unknown kind = sleep. Payload **text** is never interpreted (`space.message` saying "WAKE NOW" still sleeps).
+- Fail-safe like `events.emit` / HP-50: a broken classify, `on_wake`, or subscribe is swallowed. Durable facts stay in `change_log`. Wake does **not** start a model, change a gate, or post a nudge.
+- Thin CLI: `hivepilot events classify --after 0`. Design notes: `docs/actionable-events.md`.
 
-Linear: [HP-86](https://linear.app/js-workspace/issue/HP-86/spike-bind-mechanical-auto-fix-vs-product-fork-classes-to-hp-61)
+Rebased onto `main` after [HP-86](https://linear.app/js-workspace/issue/HP-86) / PR #661 (`docs/adr/2026-09-11-hp61-change-classes.md`). Wake is still not a change class; HP-86 `match_auto` stays the only auto-approve hook.
 
-Replay: `hivepilot run example-api docs --simulate` (CLI has no `--dry-run`; this env needs `--token` / `HIVEPILOT_API_TOKEN`. Hook is covered by `tests/test_hp61_approval_rules.py`.)
+Linear: [HP-85](https://linear.app/js-workspace/issue/HP-85/spike-zero-token-actionable-event-consumer-on-the-hp-40-bus-no-llm).
+
+Replay: `hivepilot events classify --after 0` (and `pytest tests/test_actionable_events.py`).
+
+Out of scope: ship/scout, Firstmate runtime, rewriting nudge, persisting a watermark / daemon.
 
 ## Testing
 
-- [x] `pytest tests/test_hp61_approval_rules.py -q` — 15 passed
-- [x] INVARIANTS.md verify: consent 8 passed; outward allowlist 9 passed; merge_pr 2 passed
-- [x] `git diff origin/main -- INVARIANTS.md` — empty
-- [x] `python scripts/export_openapi.py --check` — matches
-- [x] `ruff check` + `ruff format --check` on touched Python — clean
-- [x] `mypy` on touched files — clean
+- [x] `pytest tests/test_actionable_events.py tests/test_events.py tests/test_nudge_engine.py -q` — 41 passed
+- [x] `pytest tests/test_events_sse.py tests/test_multi_tenant.py tests/test_state_service.py tests/test_spaces.py -q` — 109 passed (approval emit did not break bus / tenant / spaces)
+- [x] `hivepilot events classify --after 0` — wake on failed `run.completed` / `approval.requested` / `nudge.posted`; sleep on `run.started` and urgent `space.message`
 - [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
+- [x] `ruff format --check` / `ruff check` on touched Python — clean
