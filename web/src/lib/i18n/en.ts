@@ -310,6 +310,13 @@ export const en = {
   'studio.needPrompt': 'A role needs prompt text or a prompt file.',
   'studio.missingRequired': 'Name, title, and model profile are required.',
   'studio.readOnly': 'This token can read the roster, not change it.',
+  'studio.describeLabel': 'Describe your agent',
+  'studio.describePlaceholder': 'A security auditor that reviews Terraform and can block a release',
+  'studio.describeHint': 'Generates a draft only. Review the form, then save — nothing is created until you do.',
+  'studio.generate': 'Generate draft',
+  'studio.draftReady': 'Draft pre-filled. Review and save to create the role.',
+  'studio.draftLint': 'Linter notes (fix before saving):',
+  'studio.needSpec': 'Describe the agent before generating a draft.',
   'nav.graph': 'Graph',
 
   // ---- health status words (shared: header pills + Health tab badges) --

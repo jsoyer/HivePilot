@@ -31,7 +31,7 @@ def filter_openapi(schema: dict[str, Any]) -> dict[str, Any]:
     info = dict(out.get("info") or {})
     info["title"] = "HivePilot Pollen contract"
     info["description"] = (
-        "Curated OpenAPI for roles, concierge, and schedules (HP-64). "
+        "Curated OpenAPI for roles (including NL draft), concierge, and schedules (HP-64). "
         "Regenerate with `python scripts/export_openapi.py`."
     )
     out["info"] = info

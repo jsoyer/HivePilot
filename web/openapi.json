@@ -1798,6 +1798,52 @@
         "title": "RoleDeleted",
         "type": "object"
       },
+      "RoleDraftAsk": {
+        "description": "Natural-language spec for `POST /v1/roles/draft` (HP-27).",
+        "properties": {
+          "spec": {
+            "title": "Spec",
+            "type": "string"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "title": "RoleDraftAsk",
+        "type": "object"
+      },
+      "RoleDraftResponse": {
+        "description": "A proposed RoleWrite. `saved` is always false \u2014 the human admin\npersists via POST /v1/roles after reviewing the builder form.",
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/RoleWrite"
+          },
+          "lint": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Lint",
+            "type": "array"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Notes",
+            "type": "array"
+          },
+          "saved": {
+            "default": false,
+            "title": "Saved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "title": "RoleDraftResponse",
+        "type": "object"
+      },
       "RoleListResponse": {
         "properties": {
           "roles": {
@@ -3030,7 +3076,7 @@
     }
   },
   "info": {
-    "description": "Curated OpenAPI for roles, concierge, and schedules (HP-64). Regenerate with `python scripts/export_openapi.py`.",
+    "description": "Curated OpenAPI for roles (including NL draft), concierge, and schedules (HP-64). Regenerate with `python scripts/export_openapi.py`.",
     "title": "HivePilot Pollen contract",
     "version": "0.2.0"
   },
@@ -3170,6 +3216,56 @@
           }
         },
         "summary": "Create Role Endpoint"
+      }
+    },
+    "/v1/roles/draft": {
+      "post": {
+        "description": "Propose a store role from a natural-language spec (HP-27).\n\nFail-closed: the concierge/OSS model runs with no tools and the result\nis a proposal only. Nothing is written to the roles store \u2014 a human\nadmin reviews the draft (and its lint) in Agent Studio, then saves via\n`POST /v1/roles`.",
+        "operationId": "draft_role_endpoint_v1_roles_draft_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "title": "Authorization",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleDraftAsk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDraftResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Draft Role Endpoint"
       }
     },
     "/v1/roles/{name}": {

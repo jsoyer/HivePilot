@@ -46,6 +46,7 @@ import {
   syncComposio,
   syncPipedream,
   fetchRole,
+  draftRole,
   fetchSchedules,
   triggerSchedule,
   connectModel,
@@ -466,6 +467,18 @@ describe('catalogue endpoints', () => {
     apiFetchMock.mockResolvedValue({ name: 'developer', title: 'Dev' })
     await expect(fetchRole('developer')).resolves.toEqual({ name: 'developer', title: 'Dev' })
     expect(apiFetchMock).toHaveBeenCalledWith('/v1/roles/developer')
+  })
+
+  it('draftRole posts a spec to /v1/roles/draft', async () => {
+    apiFetchMock.mockResolvedValue({ draft: { name: 'tf_auditor' }, lint: [], notes: [], saved: false })
+    await draftRole('a security auditor that reviews Terraform')
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      '/v1/roles/draft',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ spec: 'a security auditor that reviews Terraform' }),
+      }),
+    )
   })
 
   it('fetchSchedules calls GET /v1/schedules', async () => {

@@ -1,20 +1,17 @@
 ## Summary
 
-**HP-16** — Telegram hand-offs prefix a per-role avatar.
+**HP-27** — Agent Studio Phase 3: natural-language agent authoring.
 
-- Unicode fallback for the eight first-class roles (same keys as Pollen HP-20): CEO 👑, CoS 📋, CTO 🧭, Developer 🛠️, Reviewer 🔍, CISO 🛡️, QA 🧪, Documentation 📝.
-- Optional `telegram_avatars.yaml` maps `role → custom_emoji_id`. HTML cards emit `<tg-emoji>`; the plain path attaches a `custom_emoji` MessageEntity (UTF-16 offset). `parse_mode` and `entities` stay mutually exclusive.
-- Gate: `HIVEPILOT_TELEGRAM_CUSTOM_EMOJI` (default on). Missing IDs, unknown actors, a disabled flag, or a rejected send (no Premium / stale id) degrade to the Unicode glyph.
-- This environment does **not** upload a sticker set — ops via `@Stickers` (see `docs/INTEGRATIONS.md`).
+- `POST /v1/roles/draft` (admin-gated) turns a free-text spec into a **RoleWrite proposal** (runner, model/profile, prompt, `can_block`, inputs/outputs). Nothing is written to the store.
+- Fail-closed no-tools LLM path: same concierge/OSS model and `--tools ""` invariant as HP-18/HP-22. `allowed_tools` / `bypassPermissions` in model JSON are stripped. Human admin saves via existing CRUD; `lint_role_draft` validates the skeleton.
+- Pollen Agent Studio: **Describe your agent** box → pre-fills the create form → Save still calls `POST /v1/roles`.
 
-Linear: [HP-16](https://linear.app/js-workspace/issue/HP-16/role-avatars-in-telegram-via-custom-emoji-premium).
+Linear: [HP-27](https://linear.app/js-workspace/issue/HP-27/agent-studio-phase-3-natural-language-agent-authoring).
 
-Replay: `hivepilot run example-api docs --dry-run` (stream path is unit-tested; no live Telegram).
+Replay: `hivepilot run example-api docs --dry-run` (draft path is unit-tested with a mocked LLM; no live model required).
 
 ## Testing
 
-- [x] `env -u FORCE_COLOR -u EXEC_DAEMON_STARTUP_TRACEPARENT COLUMNS=200 pytest tests/test_telegram_avatars.py tests/test_telegram_formatting.py tests/test_notification_service.py tests/test_stream_topics.py tests/test_config_validation.py tests/test_telegram_channel.py tests/test_telegram_chunking.py tests/test_stream_send_is_recorded.py tests/test_stream_fanout.py -q` — 167 passed
-- [x] `hivepilot validate` — OK (pre-existing pipeline input warnings only)
-- [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
-- [x] `ruff format --check` on touched Python — clean
-- [x] CI follow-up: `telegram_avatars.yaml` added to `config_service.CONFIG_FILES` (sync roster); fixture typed as `Iterator[None]` for mypy
+- [ ] `pytest tests/test_role_draft_service.py tests/test_roles_draft_api.py tests/test_roles_api.py tests/test_openapi_contract.py -q`
+- [ ] `npm test --prefix web -- --run src/components/views/AgentStudioView.test.tsx src/lib/pollen-api.test.ts src/lib/generated/contract.test.ts src/lib/i18n/en.test.ts src/lib/i18n/fr.test.ts`
+- [ ] `hivepilot lint`

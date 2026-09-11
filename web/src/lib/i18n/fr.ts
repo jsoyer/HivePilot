@@ -307,6 +307,13 @@ export const fr: Record<TranslationKey, string> = {
   'studio.needPrompt': 'Un rôle a besoin d’un prompt texte ou d’un fichier prompt.',
   'studio.missingRequired': 'Nom, titre et profil modèle sont requis.',
   'studio.readOnly': 'Ce jeton peut lire le roster, pas le modifier.',
+  'studio.describeLabel': 'Décrivez votre agent',
+  'studio.describePlaceholder': 'Un auditeur sécurité qui relit le Terraform et peut bloquer une release',
+  'studio.describeHint': 'Génère un brouillon seulement. Relisez le formulaire, puis enregistrez — rien n’est créé avant.',
+  'studio.generate': 'Générer le brouillon',
+  'studio.draftReady': 'Brouillon prérempli. Relisez et enregistrez pour créer le rôle.',
+  'studio.draftLint': 'Notes du linter (à corriger avant d’enregistrer) :',
+  'studio.needSpec': 'Décrivez l’agent avant de générer un brouillon.',
   'nav.graph': 'Graphe',
 
   // ---- health status words (shared: header pills + Health tab badges) --

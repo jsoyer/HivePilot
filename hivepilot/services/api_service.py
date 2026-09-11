@@ -43,6 +43,7 @@ from hivepilot.services import (
     notification_service,
     plugin_activity,
     policy_service,
+    role_draft_service,
     sandbox_computers,
     state_service,
     telemetry_service,
@@ -4556,6 +4557,22 @@ class RoleWrite(BaseModel):
     debate: bool | None = None
 
 
+class RoleDraftAsk(BaseModel):
+    """Natural-language spec for `POST /v1/roles/draft` (HP-27)."""
+
+    spec: str
+
+
+class RoleDraftResponse(BaseModel):
+    """A proposed RoleWrite. `saved` is always false — the human admin
+    persists via POST /v1/roles after reviewing the builder form."""
+
+    draft: RoleWrite
+    lint: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    saved: bool = False
+
+
 def _apply_role_write(payload: RoleWrite) -> dict:
     if (
         payload.permission_mode == "bypassPermissions"
@@ -4600,6 +4617,33 @@ def list_roles_endpoint(
     caller: token_service.TokenEntry = Depends(require_role("read")),
 ) -> RoleListResponse:
     return RoleListResponse(roles=[RoleOut.model_validate(row) for row in roles.api_roster()])
+
+
+@v1.post("/roles/draft", dependencies=[Depends(require_role("admin"))])
+@app.post("/roles/draft", dependencies=[Depends(require_role("admin"))])
+def draft_role_endpoint(payload: RoleDraftAsk) -> RoleDraftResponse:
+    """Propose a store role from a natural-language spec (HP-27).
+
+    Fail-closed: the concierge/OSS model runs with no tools and the result
+    is a proposal only. Nothing is written to the roles store — a human
+    admin reviews the draft (and its lint) in Agent Studio, then saves via
+    `POST /v1/roles`.
+    """
+    spec = (payload.spec or "").strip()
+    if not spec:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="empty spec")
+    try:
+        result = role_draft_service.draft_role(spec)
+    except role_draft_service.RoleDraftError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+    return RoleDraftResponse(
+        draft=RoleWrite.model_validate(result.fields),
+        lint=result.lint,
+        notes=result.notes,
+        saved=False,
+    )
 
 
 @v1.get("/roles/{name}")

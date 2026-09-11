@@ -9,7 +9,7 @@ HivePilot is a YAML-driven orchestrator that runs a company of role-bound AI age
 - Code review + Git/GitHub automation: branch/commit/push, PR create/draft/promote/merge, `gh` issue/release.
 - Opt-in adjudicated debate: dual-model positions produce an ADR, with an optional independent LLM judge + challenge arbiter that fail-closed gates PR promotion (blocks `promote_pr`/`merge_pr` on any absent, low-confidence, or non-approval verdict).
 - Opt-in auto-learning lessons loop: distills a run's verdicts/outcomes into candidate lessons, validates each against the run's real outcome (never an LLM self-report), and injects only validated lessons into future runs.
-- Pollen dashboard: a TUI and a web dashboard (approve/deny, launch async runs, stop/cancel, toggle plugins), reading the SQLite state store tenant-scoped.
+- Pollen dashboard: a TUI and a web dashboard (approve/deny, launch async runs, stop/cancel, toggle plugins, Agent Studio role CRUD + NL draft), reading the SQLite state store tenant-scoped.
 - Remote control via Telegram bot, Slack/Discord, and an HTTP API (`hivepilot api serve`).
 - Plugin system: contribute runners, notifiers, lifecycle hooks, secrets backends, dashboard panels, and skills; loaded from installed packages or local files, fail-closed trust (no network fetch of plugin code).
 - Infrastructure runners (terraform / opentofu / pulumi, kubectl) with destructive-op auto-gating, plus drift detection with scheduled scans and gated auto-remediation.

@@ -17,6 +17,8 @@ The engine ships with **one generic role by default**: `developer → claude`. T
 
 The full multi-role roster — CEO → Chief of Staff → CTO → Developer → Reviewer → CISO → QA → Documentation → Report → Approval — is a **config-owned, opt-in template** (`examples/roles.yaml`). It's illustrative of what you can build, not something the engine hardcodes or requires. You add roles by editing `roles.yaml`; nothing in the orchestrator assumes a fixed org chart.
 
+Pollen **Agent Studio** can also author a role without YAML: describe the agent in plain language (`POST /v1/roles/draft`). The concierge/OSS model returns a **proposal** (runner, model profile, prompt, `can_block`, inputs/outputs) — it is not saved. A human admin reviews the pre-filled builder form and persists via the store CRUD (`POST /v1/roles`). The draft path is fail-closed and tool-less; the config linter runs on the proposal before the UI shows it.
+
 ## Roles
 
 Key `Role` fields:

@@ -5,17 +5,18 @@ import { LanguageProvider } from '@/lib/i18n'
 import type { StudioRole } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchRoles, createRole, updateRole, deleteRole, useRoleMock } = vi.hoisted(() => ({
+const { fetchRoles, createRole, updateRole, deleteRole, draftRole, useRoleMock } = vi.hoisted(() => ({
   fetchRoles: vi.fn(),
   createRole: vi.fn(),
   updateRole: vi.fn(),
   deleteRole: vi.fn(),
+  draftRole: vi.fn(),
   useRoleMock: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchRoles, createRole, updateRole, deleteRole }
+  return { ...actual, fetchRoles, createRole, updateRole, deleteRole, draftRole }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -71,6 +72,7 @@ describe('AgentStudioView', () => {
     createRole.mockReset()
     updateRole.mockReset()
     deleteRole.mockReset()
+    draftRole.mockReset()
     useRoleMock.mockReset()
     mockRole('admin')
     fetchRoles.mockResolvedValue({ roles: [role()] })
@@ -94,6 +96,55 @@ describe('AgentStudioView', () => {
     mockRole('read')
     await mount()
     expect(container.querySelector('[data-testid="studio-new"]')).toBeNull()
+    expect(container.querySelector('[data-testid="studio-describe-box"]')).toBeNull()
+  })
+
+  it('generates a draft from a description and prefills the form without saving', async () => {
+    draftRole.mockResolvedValue({
+      draft: {
+        name: 'tf_auditor',
+        title: 'Terraform Security Auditor',
+        model_profile: 'architecture',
+        runner: 'claude',
+        inputs: ['terraform'],
+        outputs: ['security_report'],
+        can_block: true,
+        order: 6,
+        prompt_text: 'Review Terraform for security defects.',
+      },
+      lint: [],
+      notes: [],
+      saved: false,
+    })
+    await mount()
+    const describe = container.querySelector<HTMLTextAreaElement>('[data-testid="studio-describe"]')
+    expect(describe).not.toBeNull()
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set
+      setter?.call(describe, 'a security auditor that reviews Terraform, can block release')
+      describe?.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="studio-generate"]')?.click()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(draftRole).toHaveBeenCalledWith(
+      'a security auditor that reviews Terraform, can block release',
+    )
+    expect(createRole).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="studio-editor"]')).not.toBeNull()
+    expect(container.querySelector<HTMLInputElement>('[data-testid="studio-field-name"]')?.value).toBe(
+      'tf_auditor',
+    )
+    expect(container.querySelector<HTMLInputElement>('[data-testid="studio-field-can-block"]')?.checked).toBe(
+      true,
+    )
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="studio-field-prompt"]')?.value).toMatch(
+      /Terraform/,
+    )
+    expect(container.querySelector('[data-testid="studio-draft-ready"]')).not.toBeNull()
   })
 
   it('refuses to save an empty new role', async () => {

@@ -55,6 +55,11 @@ Pollen client for roles / concierge / schedules is generated from
 `web/openapi.json` — regenerate with `python scripts/export_openapi.py` then
 `npm run generate:api` in `web/`.
 
+**Agent Studio** (System → Studio) lists the store-backed roster. Admins can
+type a natural-language spec in **Describe your agent**; `POST /v1/roles/draft`
+pre-fills the create form. The draft is a proposal only — Save still calls
+`POST /v1/roles`.
+
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
 
 The deprecated synchronous run-trigger endpoint (`POST /run` / `POST /v1/run`,
