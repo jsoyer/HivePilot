@@ -31,6 +31,7 @@ AGENT_KINDS: frozenset[str] = frozenset(
         "codex",
         "vibe",
         "openrouter",
+        "openai",
         "gemini",
         "opencode",
         "pi",

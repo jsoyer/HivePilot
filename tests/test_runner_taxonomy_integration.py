@@ -470,7 +470,7 @@ def test_plugins_list_renders_agent_runner_taxonomy(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Agent Runners" in result.output
-    for kind in ("claude", "codex", "vibe", "openrouter"):
+    for kind in ("claude", "codex", "vibe", "openrouter", "openai"):
         assert kind in result.output
     assert "API-only" in result.output
 

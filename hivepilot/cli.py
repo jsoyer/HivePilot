@@ -4310,7 +4310,7 @@ def plugins_list() -> None:
     # below, not this built-in loop. `vibe` followed them (#520) and this
     # tuple was not updated with it, so `doctor` listed a gated plugin as a
     # built-in and reported it against the wrong loop.
-    _builtin_agent_kinds = ("claude", "openrouter")
+    _builtin_agent_kinds = ("claude", "openrouter", "openai")
     # Canonical set, shared with `doctor_liveness`'s agent-CLI version check --
     # it used to be a private local here, which is why that check could not see
     # it and told the operator to install a CLI that does not exist.

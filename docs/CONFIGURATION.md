@@ -956,12 +956,24 @@ role_profiles:
   ciso: deep
 ```
 
-Per-runner keys (`grok:`, `cursor:`, `codex:`, `openrouter:`, `nous:`) sit beside the
-Claude `model:` value. `resolve_profile_model(profile, runner_kind)` picks the key for
-the **resolved** runner (after the roster preset). Claude `model:` stays so preset
-`claude` is unchanged.
+Per-runner keys (`grok:`, `cursor:`, `codex:`, `openrouter:`, `nous:`, `opencode:`,
+`openai:`) sit beside the Claude `model:` value. `resolve_profile_model(profile, runner_kind)`
+picks the key for the **resolved** runner (after the roster preset). Claude `model:`
+stays so preset `claude` is unchanged.
 
-Hermes-4 (HP-71) is the OpenAI-compat OSS column — not the Hermes Agent framework:
+HP-19 adds selectable OpenCode Go / OpenAI-compat columns (`opencode:`, `openai:`)
+on `coding` / `architecture` / `automation`. They do **not** flip production roles
+off their current vendors — select them with `HIVEPILOT_ROSTER_PRESET=oss` (loads
+`roster-presets/oss.yaml`) or by binding a single role to `runner: opencode` /
+`runner: openai`.
+
+| Profile | Roles | OpenCode Go (`opencode:` / `openai:`) | Ollama Cloud (comment / `ollama` runner) |
+| -- | -- | -- | -- |
+| automation | Docs, CoS, concierge | `glm-5.3-flash` | `gpt-oss:20b`, `nemotron-3-nano:30b` |
+| coding | Developer, Reviewer, QA | `kimi-k2.7-code` | `qwen3.5:397b`, `kimi-k2.7-code` |
+| architecture | CEO, CTO, CISO | `deepseek-v4-pro` | `deepseek-v4-flash`, `deepseek-v4-pro` |
+
+Hermes-4 (HP-71) is the OpenRouter / Nous OSS column — not the Hermes Agent framework:
 
 - `openrouter:` — OpenRouter slugs (`nousresearch/hermes-4-70b` / `hermes-4-405b`)
 - `nous:` — native Nous Portal names (`Hermes-4-70B` / `Hermes-4-405B`)
@@ -1003,6 +1015,8 @@ overlay of `{role: {runner, model}}` plus optional `judge:` / `lessons:` blocks.
 
 - `claude` — identity (missing file is OK).
 - `mix` — Grok CLI for restricted roles, Cursor for makers (see the operator vault note).
+- `oss` — OpenCode Go for the whole roster (HP-19). Models resolve from the
+  `opencode:` columns in `model_profiles.yaml`. Does not rewrite `roles.yaml`.
 - Any other name — fail closed if the file is missing.
 
 Precedence: `policy.role_overrides` > roster preset > stage > role.

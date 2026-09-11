@@ -9,6 +9,12 @@ claude_profiles:
     # `api_provider: nous`.
     openrouter: nousresearch/hermes-4-70b
     nous: Hermes-4-70B
+    # HP-19: selectable OSS columns (OpenCode Go + OpenAI-compat). Do not
+    # change default roles.yaml vendors — select via HIVEPILOT_ROSTER_PRESET=oss
+    # or by binding a role to runner: opencode / openai.
+    # Ollama Cloud alternatives: qwen3.5:397b, kimi-k2.7-code
+    opencode: kimi-k2.7-code
+    openai: kimi-k2.7-code
   architecture:
     model: opus
     grok: grok-4.6
@@ -16,6 +22,9 @@ claude_profiles:
     ollama: llama3.1
     openrouter: nousresearch/hermes-4-405b
     nous: Hermes-4-405B
+    # Ollama Cloud alternatives: deepseek-v4-flash (1M ctx), deepseek-v4-pro
+    opencode: deepseek-v4-pro
+    openai: deepseek-v4-pro
   automation:
     model: haiku
     grok: grok-4.5
@@ -23,6 +32,10 @@ claude_profiles:
     ollama: llama3.2
     openrouter: nousresearch/hermes-4-70b
     nous: Hermes-4-70B
+    # Concierge / CoS / Docs. OpenCode Go alternatives: mimo-v2.5,
+    # deepseek-v4-flash. Ollama Cloud: gpt-oss:20b, nemotron-3-nano:30b
+    opencode: glm-5.3-flash
+    openai: glm-5.3-flash
   # Dedicated Hermes-4 profiles — bind a role with `model_profile: hermes-4`
   # (or hermes-4-405b) to use the model as primary via `runner: openrouter`
   # or `api_provider: nous`. Claude `model:` stays so a claude roster still

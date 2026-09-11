@@ -38,6 +38,7 @@ from conftest import BUNDLED_PLUGINS
 from hivepilot.config import settings
 from hivepilot.models import KNOWN_RUNNER_KINDS
 from hivepilot.registry import RUNNER_MAP, RunnerPluginUnavailableError, resolve_runner_class
+from hivepilot.runners.openai_runner import OpenAiCompatRunner
 from hivepilot.runners.openrouter_runner import OpenRouterRunner
 from hivepilot.runners.prompt_cli_runner import (
     GeminiRunner,
@@ -94,12 +95,14 @@ class TestBuiltinReduction:
 
         assert "claude" not in _BUILTIN_RUNNERS
         assert _BUILTIN_RUNNERS["openrouter"] is OpenRouterRunner
+        assert _BUILTIN_RUNNERS["openai"] is OpenAiCompatRunner
         assert "vibe" not in _BUILTIN_RUNNERS
         assert "codex" not in _BUILTIN_RUNNERS
         assert "cursor" not in _BUILTIN_RUNNERS
 
     def test_openrouter_registered_in_runner_map_by_default(self) -> None:
         assert RUNNER_MAP.get("openrouter") is OpenRouterRunner
+        assert RUNNER_MAP.get("openai") is OpenAiCompatRunner
 
     def test_gemini_opencode_ollama_not_in_known_runner_kinds(self) -> None:
         for kind in ("gemini", "opencode", "ollama"):
@@ -107,6 +110,7 @@ class TestBuiltinReduction:
 
     def test_openrouter_in_known_runner_kinds(self) -> None:
         assert "openrouter" in KNOWN_RUNNER_KINDS
+        assert "openai" in KNOWN_RUNNER_KINDS
 
     def test_claude_left_known_runner_kinds_too(self) -> None:
         """Renamed from `test_claude_still_in_known_runner_kinds`: the tuple's
@@ -116,6 +120,7 @@ class TestBuiltinReduction:
 
         assert "claude" not in KNOWN_RUNNER_KINDS
         assert "openrouter" in KNOWN_RUNNER_KINDS
+        assert "openai" in KNOWN_RUNNER_KINDS
 
     def test_codex_cursor_vibe_not_in_known_runner_kinds(self) -> None:
         # codex-cursor-plugins migration: codex/cursor removed from

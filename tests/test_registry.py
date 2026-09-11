@@ -40,6 +40,7 @@ def test_known_kinds_returns_frozenset_of_builtins() -> None:
         "internal",
         "container",
         "openrouter",
+        "openai",
     }
     known = RunnerRegistry.known_kinds()
     assert isinstance(known, frozenset)

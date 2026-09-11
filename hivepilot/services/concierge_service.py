@@ -1267,33 +1267,47 @@ def route(
     prompt = _build_classifier_prompt(text, roster, snapshot, history_text)
 
     model = settings.chatops_concierge_model or _DEFAULT_CONCIERGE_MODEL
-    mode = _resolve_mode()
-    options = _build_classifier_options(mode)
+    runner_kind = (settings.chatops_concierge_runner or "claude").strip().lower()
+    prompt_file = _resolve_prompt_file()
+    runner_env: dict[str, str] = {}
 
-    # HARD INVARIANT: the cli classifier must never run tool-capable on
-    # untrusted input. This check is deliberately decoupled from
-    # `_build_classifier_options` (a separate function, re-reading its
-    # output rather than trusting a shared flag) and is a runtime check —
-    # not a bare `assert`, which can be stripped by `python -O` — so it
-    # holds even if a future edit to that function forgets to wire the
-    # no-tools restriction: refuse to spawn the cli session at all rather
-    # than ever risk a tool-capable claude process on attacker-controlled
-    # concierge input.
-    if mode == "cli" and options.get("tools") != _CLASSIFIER_NO_TOOLS:
-        logger.error("concierge.cli_no_tools_invariant_violated_refusing")
-        # Also infrastructure, not comprehension: we refused to spawn the
-        # session at all, so the message was never classified.
-        return ConciergeDecision(kind="answer", answer_text=_INFRASTRUCTURE_FALLBACK_ANSWER)
+    if runner_kind == "claude":
+        mode = _resolve_mode()
+        options = _build_classifier_options(mode)
+
+        # HARD INVARIANT: the cli classifier must never run tool-capable on
+        # untrusted input. This check is deliberately decoupled from
+        # `_build_classifier_options` (a separate function, re-reading its
+        # output rather than trusting a shared flag) and is a runtime check —
+        # not a bare `assert`, which can be stripped by `python -O` — so it
+        # holds even if a future edit to that function forgets to wire the
+        # no-tools restriction: refuse to spawn the cli session at all rather
+        # than ever risk a tool-capable claude process on attacker-controlled
+        # concierge input.
+        if mode == "cli" and options.get("tools") != _CLASSIFIER_NO_TOOLS:
+            logger.error("concierge.cli_no_tools_invariant_violated_refusing")
+            # Also infrastructure, not comprehension: we refused to spawn the
+            # session at all, so the message was never classified.
+            return ConciergeDecision(kind="answer", answer_text=_INFRASTRUCTURE_FALLBACK_ANSWER)
+    else:
+        # API runner (openai / openrouter / …): the classifier reaches the model
+        # over an HTTP chat-completions call with NO tools available at all, so
+        # the cli no-tools invariant above simply does not apply on this path.
+        # Thread the base URL (openai only) so that only the API KEY has to be a
+        # secret, not the endpoint.
+        options = {"mode": "api", "api_model": model}
+        if runner_kind == "openai" and settings.chatops_concierge_api_base:
+            runner_env["OPENAI_BASE_URL"] = settings.chatops_concierge_api_base
 
     runner_def = RunnerDefinition(
         name="concierge",
-        kind=cast(RunnerKind, "claude"),
+        kind=cast(RunnerKind, runner_kind),
         model=model,
         options=options,
+        env=runner_env,
         timeout_seconds=_classifier_timeout_seconds(),
     )
-    prompt_file = _resolve_prompt_file()
-    step = TaskStep(name="concierge", runner="claude", prompt_file=prompt_file)
+    step = TaskStep(name="concierge", runner=runner_kind, prompt_file=prompt_file)
     payload = RunnerPayload(
         project_name="concierge",
         project=ProjectConfig(path=Path(".")),

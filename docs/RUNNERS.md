@@ -97,6 +97,12 @@ Registered at import time — no PATH check required. Each can be opted out via
   (`HIVEPILOT_DEV_FALLBACK_RUNNERS`). Direct Nous Portal is `api_provider: nous`
   (OpenAI-compat at `https://inference-api.nousresearch.com/v1`, key `NOUS_API_KEY`)
   — the Hermes Agent framework is not embedded.
+- `openai` — **API-only** (HP-18): same contract as `openrouter`, routed through
+  `PromptCliRunner._run_api`'s `provider == "openai"` branch. Endpoint is
+  `OPENAI_BASE_URL` (default `https://api.openai.com/v1`); auth is `OPENAI_API_KEY`.
+  Point the base URL at OpenCode Zen/Go, Ollama Cloud, LM Studio, or vLLM. Default
+  `model_profiles.yaml` maps each profile's `openai:` / `opencode:` column to the
+  HP-19 OSS preset (selectable via `HIVEPILOT_ROSTER_PRESET=oss`).
 
 ### PATH-gated plugin agent kinds
 
