@@ -101,6 +101,7 @@ KNOWN_RUNNER_KINDS: tuple[str, ...] = (
     # registration and into default-on, PATH-gated plugins (plugins/codex.py
     # / plugins/cursor.py); see tests/test_codex.py / tests/test_cursor.py.
     "openrouter",
+    "openai",
     "terraform",
     "opentofu",
     "pulumi",

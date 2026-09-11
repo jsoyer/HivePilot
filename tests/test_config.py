@@ -708,6 +708,26 @@ class TestConciergeConfig:
         s = Settings()
         assert s.chatops_concierge_model == "haiku"
 
+    def test_concierge_runner_defaults_claude(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_CONCIERGE_RUNNER", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_concierge_runner == "claude"
+
+    def test_concierge_runner_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_CONCIERGE_RUNNER", "openai")
+        s = Settings()
+        assert s.chatops_concierge_runner == "openai"
+
+    def test_concierge_api_base_defaults_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("HIVEPILOT_CHATOPS_CONCIERGE_API_BASE", raising=False)
+        s = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert s.chatops_concierge_api_base is None
+
+    def test_concierge_api_base_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HIVEPILOT_CHATOPS_CONCIERGE_API_BASE", "https://opencode.ai/zen/go/v1")
+        s = Settings()
+        assert s.chatops_concierge_api_base == "https://opencode.ai/zen/go/v1"
+
 
 class TestConfigPathSearchDirs:
     """`Settings.config_path_search_dirs()` -- every directory

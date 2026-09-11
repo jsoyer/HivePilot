@@ -46,6 +46,7 @@ AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
         "cursor",
         "vibe",
         "openrouter",
+        "openai",
         "gemini",
         "opencode",
         "ollama",
@@ -67,8 +68,9 @@ AGENT_RUNNER_KINDS: frozenset[str] = frozenset(
 # suggestion that breaks a working feature is worse than no suggestion.
 #
 # Membership is a property of the RUNNER, not of a deployment: OpenRouterRunner
-# is documented API-only at hivepilot/registry.py and hivepilot/models.py.
-API_ONLY_AGENT_KINDS: frozenset[str] = frozenset({"openrouter"})
+# and OpenAiCompatRunner are documented API-only at hivepilot/registry.py and
+# hivepilot/models.py.
+API_ONLY_AGENT_KINDS: frozenset[str] = frozenset({"openrouter", "openai"})
 
 
 @dataclass(frozen=True)

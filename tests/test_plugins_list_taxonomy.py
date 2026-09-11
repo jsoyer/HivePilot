@@ -176,11 +176,13 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         assert "HIVEPILOT_CODEX_ENABLED" in result.output
         assert "HIVEPILOT_VIBE_ENABLED" in result.output
         assert "HIVEPILOT_OPENROUTER_ENABLED" in result.output
-        # openrouter is the one built-in API-only kind (_api_only_agent_kinds
-        # == frozenset({"openrouter"})); with it active, its row renders the
+        assert "HIVEPILOT_OPENAI_ENABLED" in result.output
+        # openrouter and openai are the built-in API-only kinds
+        # (API_ONLY_AGENT_KINDS); with them active, a row renders the
         # "API-only" status. This is the positive counterpart to
         # test_openrouter_disabled_renders_inactive_not_api_only below.
         assert "openrouter" in RUNNER_MAP
+        assert "openai" in RUNNER_MAP
         assert "API-only" in result.output
 
     def test_builtin_kind_disabled_renders_inactive(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -233,17 +235,14 @@ class TestAgentRunnersTableReflectsEnabledFlags:
     def test_openrouter_disabled_renders_inactive_not_api_only(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Regression guard for the EXACT branch cli.py fixes. openrouter is
-        the sole built-in API-only agent kind (_api_only_agent_kinds ==
-        frozenset({"openrouter"})). The old code set status via
+        """Regression guard for the EXACT branch cli.py fixes. openrouter
+        (and openai, HP-18) are API-only. The old code set status via
         `"API-only" if kind in _api_only_agent_kinds else "active"` --
         UNCONDITIONALLY, so a disabled openrouter (absent from RUNNER_MAP)
         wrongly rendered "API-only". The fix checks RUNNER_MAP membership
-        FIRST. With openrouter removed and no plugins loaded (loaded=[]), NO
-        row is API-only -- the optional-plugin loop never emits that status --
-        so "API-only" must be entirely absent while openrouter's row shows
-        `inactive`. `conftest.py`'s autouse map-isolation fixture restores
-        RUNNER_MAP afterwards, so this mutation never leaks."""
+        FIRST. The openrouter row must show `inactive`, never `API-only`.
+        `conftest.py`'s autouse map-isolation fixture restores RUNNER_MAP
+        afterwards, so this mutation never leaks."""
         assert "openrouter" in RUNNER_MAP
         monkeypatch.delitem(RUNNER_MAP, "openrouter")
 
@@ -256,11 +255,16 @@ class TestAgentRunnersTableReflectsEnabledFlags:
 
         assert result.exit_code == 0, result.output
         assert "HIVEPILOT_OPENROUTER_ENABLED" in result.output
-        assert "API-only" not in result.output, (
-            "disabled openrouter must render 'inactive', not 'API-only' "
-            f"(branch-ordering regression):\n{result.output}"
+        openrouter_rows = [
+            line
+            for line in result.output.splitlines()
+            if "openrouter" in line and "HIVEPILOT" not in line
+        ]
+        assert openrouter_rows, f"openrouter row not found:\n{result.output}"
+        assert any("inactive" in line for line in openrouter_rows), (
+            f"disabled openrouter must render 'inactive', not 'API-only':\n{openrouter_rows}"
         )
-        assert "inactive" in result.output
+        assert all("API-only" not in line for line in openrouter_rows)
 
 
 if __name__ == "__main__":
