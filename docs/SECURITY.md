@@ -48,6 +48,24 @@ hivepilot approvals approve <id>
 hivepilot approvals deny <id>
 ```
 
+### HP-61 change class (mechanical vs ask)
+
+Per-action approval rules (`PUT /v1/approval-rules`) may set optional
+`change_class`. This is a label on the **existing** rule, not a second
+gate:
+
+| `change_class` | `auto=approve` | otherwise |
+| --- | --- | --- |
+| `mechanical` | may skip the pending card | `auto=deny` still denies |
+| `product_fork` / `security` / `destructive` / `unknown` / omitted | never — pending card | `auto=deny` still denies |
+
+Unknown is the default. A watcher wake (`source` / `woke` / bus kind) is
+**not** a class and cannot unlock auto-approve. A metadata claim
+(`change_class`, `class`, or `contested`) can only tighten, never widen.
+Partition destructive / outward / `merge_pr` invariants are a separate
+plane and are not waived by a mechanical rule. See
+[docs/adr/2026-09-11-hp61-change-classes.md](./adr/2026-09-11-hp61-change-classes.md).
+
 ## Runner allow-listing
 
 Policy field `allowed_runners` controls which runners a stage/step may use:

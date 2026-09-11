@@ -1,20 +1,23 @@
 ## Summary
 
-**HP-27** — Agent Studio Phase 3: natural-language agent authoring.
+**HP-86** — bind a change-class taxonomy to existing HP-61 approval rules (spike).
 
-The headline of Agent Studio: describe an agent in plain language → HivePilot generates the full config → you review/tweak in the builder → save.
+- No second control plane. Optional `change_class` on the same `approve` / `deny` rule + pending cards.
+- `mechanical` (lint, lockfile, changelog typo) may auto-approve when the rule says so.
+- `product_fork` / `security` / `destructive` / `unknown` (default) never auto-approve.
+- Watcher wake (`source` / `woke` / bus kind) is not a class and cannot unlock auto-approve.
+- A metadata claim can only tighten. Class veto on approve does not fall through to a less-specific rule.
+- `auto=deny` unchanged. `INVARIANTS.md` destructive / outward / `merge_pr` untouched.
 
-- `POST /v1/roles/draft` (admin-gated) turns a free-text spec into a **RoleWrite proposal** (runner, model/profile, prompt, `can_block`, inputs/outputs). Nothing is written to the store.
-- Fail-closed no-tools LLM path: same concierge/OSS model and `--tools ""` invariant as HP-18/HP-22. `allowed_tools` / `bypassPermissions` in model JSON are stripped. A human admin saves via existing CRUD; `lint_role_draft` validates the skeleton.
-- Pollen Agent Studio: **Describe your agent** box → pre-fills the create form → Save still calls `POST /v1/roles`.
+ADR: `docs/adr/2026-09-11-hp61-change-classes.md` (amends HP-84). Thin hook: `approval_rules_service.match_auto`.
 
-Linear: [HP-27](https://linear.app/js-workspace/issue/HP-27/agent-studio-phase-3-natural-language-agent-authoring).
+Linear: [HP-86](https://linear.app/js-workspace/issue/HP-86/spike-bind-mechanical-auto-fix-vs-product-fork-classes-to-hp-61)
 
-Replay: `hivepilot run example-api docs` (draft path is unit-tested with a mocked LLM; no live model required).
+Replay: `hivepilot run example-api docs --dry-run`
 
 ## Testing
 
-- [x] `pytest tests/test_role_draft_service.py tests/test_roles_draft_api.py tests/test_roles_api.py tests/test_openapi_contract.py -q` — 45 passed
-- [x] `npm test --prefix web -- --run src/components/views/AgentStudioView.test.tsx src/lib/pollen-api.test.ts src/lib/generated/contract.test.ts src/lib/i18n/en.test.ts src/lib/i18n/fr.test.ts` — 86 passed
-- [x] `ruff check` / `ruff format --check` on touched Python — clean
-- [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
+- [ ] `pytest tests/test_hp61_approval_rules.py -q`
+- [ ] `python scripts/export_openapi.py --check`
+- [ ] `hivepilot lint` (no YAML surface change expected)
+- [ ] `INVARIANTS.md` unchanged
