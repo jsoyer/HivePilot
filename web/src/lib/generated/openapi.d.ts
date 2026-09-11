@@ -50,6 +50,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/roles/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Draft Role Endpoint
+         * @description Propose a store role from a natural-language spec (HP-27).
+         *
+         *     Fail-closed: the concierge/OSS model runs with no tools and the result
+         *     is a proposal only. Nothing is written to the roles store — a human
+         *     admin reviews the draft (and its lint) in Agent Studio, then saves via
+         *     `POST /v1/roles`.
+         */
+        post: operations["draft_role_endpoint_v1_roles_draft_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/roles/{name}": {
         parameters: {
             query?: never;
@@ -783,6 +808,31 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * RoleDraftAsk
+         * @description Natural-language spec for `POST /v1/roles/draft` (HP-27).
+         */
+        RoleDraftAsk: {
+            /** Spec */
+            spec: string;
+        };
+        /**
+         * RoleDraftResponse
+         * @description A proposed RoleWrite. `saved` is always false — the human admin
+         *     persists via POST /v1/roles after reviewing the builder form.
+         */
+        RoleDraftResponse: {
+            draft: components["schemas"]["RoleWrite"];
+            /** Lint */
+            lint?: string[];
+            /** Notes */
+            notes?: string[];
+            /**
+             * Saved
+             * @default false
+             */
+            saved: boolean;
+        };
         /** RoleListResponse */
         RoleListResponse: {
             /** Roles */
@@ -1290,6 +1340,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RoleOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_role_endpoint_v1_roles_draft_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleDraftAsk"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDraftResponse"];
                 };
             };
             /** @description Validation Error */

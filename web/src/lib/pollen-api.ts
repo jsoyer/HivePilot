@@ -2634,8 +2634,9 @@ export function connectModel(body: {
 }
 
 // ---------------------------------------------------------------------------
-// Agent Studio (HP-66) — GET/POST/PUT/DELETE /v1/roles (HP-25 store CRUD).
-// Reads are `read`-gated; writes are `admin`-gated (403 stays a token).
+// Agent Studio (HP-66) — GET/POST/PUT/DELETE /v1/roles (HP-25 store CRUD)
+// plus POST /v1/roles/draft (HP-27 NL authoring). Reads are `read`-gated;
+// writes and drafts are `admin`-gated (403 stays a token).
 // ---------------------------------------------------------------------------
 
 export interface StudioRole {
@@ -2703,6 +2704,18 @@ export function deleteRole(name: string): Promise<{ deleted: boolean; name: stri
     method: 'DELETE',
     on403: 'forbidden',
   })
+}
+
+export interface RoleDraftResponse {
+  draft: RoleWritePayload
+  lint: string[]
+  notes: string[]
+  saved: boolean
+}
+
+/** Propose a role from a natural-language spec (HP-27). Never persists. */
+export function draftRole(spec: string): Promise<RoleDraftResponse> {
+  return postJson<RoleDraftResponse>('/v1/roles/draft', { spec })
 }
 
 // ---------------------------------------------------------------------------

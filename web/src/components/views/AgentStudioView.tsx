@@ -10,6 +10,7 @@ import { useT } from '@/lib/i18n'
 import {
   createRole,
   deleteRole,
+  draftRole,
   fetchRoles,
   updateRole,
   type RoleWritePayload,
@@ -20,8 +21,10 @@ import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
 
 /**
- * Agent Studio (HP-66): CRUD the store-backed roster on `/v1/roles`.
- * List/read for any token; create/update/delete hide unless `can('admin')`.
+ * Agent Studio (HP-66 / HP-27): CRUD the store-backed roster on `/v1/roles`.
+ * List/read for any token; create/update/delete and NL draft hide unless
+ * `can('admin')`. Describe → `POST /v1/roles/draft` prefills the form; Save
+ * still goes through Phase 1 CRUD.
  */
 
 function csv(values: string[] | null | undefined): string {
@@ -86,6 +89,23 @@ function emptyForm(): RoleFormState {
   }
 }
 
+function formFromDraft(draft: RoleWritePayload): RoleFormState {
+  return {
+    name: draft.name,
+    title: draft.title,
+    display_name: draft.display_name ?? '',
+    model_profile: draft.model_profile,
+    model: draft.model ?? '',
+    runner: draft.runner ?? '',
+    inputs: csv(draft.inputs),
+    outputs: csv(draft.outputs),
+    can_block: draft.can_block,
+    order: String(draft.order ?? 0),
+    prompt_text: draft.prompt_text ?? '',
+    prompt_file: draft.prompt_file ?? '',
+  }
+}
+
 function formFromRole(role: StudioRole): RoleFormState {
   return {
     name: role.name,
@@ -115,22 +135,52 @@ export function AgentStudioView() {
   const [form, setForm] = useState<RoleFormState>(emptyForm())
   const [working, setWorking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [spec, setSpec] = useState('')
+  const [draftLint, setDraftLint] = useState<string[]>([])
+  const [draftReady, setDraftReady] = useState(false)
 
   function openCreate() {
     setForm(emptyForm())
     setError(null)
+    setDraftLint([])
+    setDraftReady(false)
     setEditor({ kind: 'create' })
   }
 
   function openEdit(role: StudioRole) {
     setForm(formFromRole(role))
     setError(null)
+    setDraftLint([])
+    setDraftReady(false)
     setEditor({ kind: 'edit', role })
   }
 
   function closeEditor() {
     setEditor({ kind: 'closed' })
     setError(null)
+    setDraftLint([])
+    setDraftReady(false)
+  }
+
+  async function generateDraft() {
+    const text = spec.trim()
+    if (!text) {
+      setError(t('studio.needSpec'))
+      return
+    }
+    setWorking(true)
+    setError(null)
+    try {
+      const result = await draftRole(text)
+      setForm(formFromDraft(result.draft))
+      setDraftLint(result.lint)
+      setDraftReady(true)
+      setEditor({ kind: 'create' })
+    } catch (err) {
+      setError(err instanceof ApiForbiddenError ? t('studio.needAdmin') : describeApiError(err))
+    } finally {
+      setWorking(false)
+    }
   }
 
   async function save() {
@@ -190,6 +240,33 @@ export function AgentStudioView() {
           </Button>
         )}
       </div>
+
+      {canAdmin && (
+        <div className="flex flex-col gap-2 rounded-lg border border-border p-3" data-testid="studio-describe-box">
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-muted-foreground">{t('studio.describeLabel')}</span>
+            <textarea
+              data-testid="studio-describe"
+              value={spec}
+              rows={3}
+              placeholder={t('studio.describePlaceholder')}
+              onChange={(event) => setSpec(event.target.value)}
+              className="min-h-20 w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </label>
+          <p className="text-xs text-muted-foreground">{t('studio.describeHint')}</p>
+          <div>
+            <Button type="button" data-testid="studio-generate" disabled={working} onClick={() => void generateDraft()}>
+              {working && editor.kind === 'closed' ? t('common.working') : t('studio.generate')}
+            </Button>
+          </div>
+          {error && editor.kind === 'closed' && (
+            <p role="alert" data-testid="studio-describe-error" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
 
       <AsyncSection
         state={rolesState}
@@ -255,6 +332,8 @@ export function AgentStudioView() {
             canAdmin={canAdmin}
             working={working}
             error={error}
+            draftReady={draftReady}
+            draftLint={draftLint}
             onSave={save}
             onDelete={editor.kind === 'edit' ? () => remove(editor.role) : undefined}
           />
@@ -286,6 +365,8 @@ function RoleEditor({
   canAdmin,
   working,
   error,
+  draftReady,
+  draftLint,
   onSave,
   onDelete,
 }: {
@@ -295,6 +376,8 @@ function RoleEditor({
   canAdmin: boolean
   working: boolean
   error: string | null
+  draftReady: boolean
+  draftLint: string[]
   onSave: () => void
   onDelete?: () => void
 }) {
@@ -311,6 +394,21 @@ function RoleEditor({
         if (canAdmin) onSave()
       }}
     >
+      {draftReady && (
+        <p data-testid="studio-draft-ready" className="text-sm text-muted-foreground">
+          {t('studio.draftReady')}
+        </p>
+      )}
+      {draftLint.length > 0 && (
+        <div data-testid="studio-draft-lint" className="text-sm text-destructive">
+          <p>{t('studio.draftLint')}</p>
+          <ul className="list-disc pl-5">
+            {draftLint.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
       <Field label={t('studio.fieldName')}>
         <Input
           data-testid="studio-field-name"

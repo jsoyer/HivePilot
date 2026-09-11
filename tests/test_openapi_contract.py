@@ -42,6 +42,7 @@ class TestContractFilter:
         paths = set(schema["paths"])
         assert "/v1/roles" in paths
         assert "/v1/roles/{name}" in paths
+        assert "/v1/roles/draft" in paths
         assert "/v1/concierge" in paths
         assert "/v1/schedules" in paths
         assert "/v1/webhook/trigger/{schedule_name}" in paths
@@ -64,6 +65,8 @@ class TestContractFilter:
             "ConciergeDecisionOut",
             "ConciergeAsk",
             "RoleWrite",
+            "RoleDraftAsk",
+            "RoleDraftResponse",
             "RoleListResponse",
             "ScheduleListResponse",
             "TriggerResponse",
