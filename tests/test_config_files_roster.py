@@ -81,6 +81,11 @@ class TestEveryDeclaredConfigFileIsAccountedFor:
         names the file rather than a diff of two sets."""
         assert "vault.yaml" in CONFIG_FILES
 
+    def test_telegram_avatars_yaml_is_synced(self) -> None:
+        """HP-16: custom-emoji IDs are operator config, not secrets. Absent
+        from CONFIG_FILES a pasted map would never leave the config repo."""
+        assert "telegram_avatars.yaml" in CONFIG_FILES
+
     def test_api_tokens_is_never_synced(self) -> None:
         """The exclusion is load-bearing, not an oversight: syncing a secrets
         file from a shared config repo would distribute credentials."""

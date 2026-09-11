@@ -1,0 +1,25 @@
+# Optional map of roles.yaml keys → Telegram custom_emoji_id (HP-16).
+#
+# HivePilot never uploads a sticker set. Create one via @Stickers (or
+# stickers.createStickerSet with the emojis flag). short_name must end in
+# `_by_<bot_username>`. Source art: Avatar Lab PNG → 100×100 WEBP (or
+# WEBM/TGS). The bot owner must have Telegram Premium. Not supported in
+# channels.
+#
+# Empty / omitted IDs use the built-in Unicode fallback:
+#   ceo 👑  chief_of_staff 📋  cto 🧭  developer 🛠️
+#   reviewer 🔍  ciso 🛡️  qa 🧪  documentation 📝
+#
+# Copy this file to the config tier you actually use (XDG, config repo, or
+# workspace root) and paste the digit IDs from the sticker set.
+
+sticker_set: hivepilot_roles_by_yourbot
+avatars:
+  ceo: ""
+  chief_of_staff: ""
+  cto: ""
+  developer: ""
+  reviewer: ""
+  ciso: ""
+  qa: ""
+  documentation: ""

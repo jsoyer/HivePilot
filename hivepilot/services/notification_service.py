@@ -217,6 +217,7 @@ def _send_telegram(
     chat_id: int | str | None = None,
     message_thread_id: int | None = None,
     parse_mode: str | None = None,
+    entities: list[dict[str, Any]] | None = None,
 ) -> None:
     token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = (
@@ -230,8 +231,11 @@ def _send_telegram(
     payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
     if message_thread_id is not None:
         payload["message_thread_id"] = message_thread_id
+    # parse_mode and entities are mutually exclusive on sendMessage.
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
+    elif entities:
+        payload["entities"] = entities
     resp = requests.post(url, json=payload, timeout=5)
     # Telegram returns HTTP 400 for a malformed HTML request (e.g. an
     # unbalanced/unsupported entity our formatter didn't anticipate). Raise a
@@ -782,8 +786,11 @@ def _render_rich_card(
     """
     lines: list[str] = []
 
-    # Header: icon <b>Actor</b> → <i>Target</i>
-    header = f"{icon} <b>{html.escape(actor)}</b>"
+    # Header: icon [role-avatar] <b>Actor</b> → <i>Target</i>
+    from hivepilot.services.telegram_avatars import html_mark, role_key_from_actor
+
+    avatar = html_mark(role_key_from_actor(actor))
+    header = f"{icon} {avatar}<b>{html.escape(actor)}</b>"
     if target:
         header += f" → <i>{html.escape(target)}</i>"
     lines.append(header)
@@ -1077,12 +1084,44 @@ def _split_for_telegram(
     return split_for(text, limit, max_chunks, entity_aware=html_aware)
 
 
+def _telegram_send(
+    chunk: str,
+    *,
+    chat_id: Any,
+    message_thread_id: int | None,
+    parse_mode: str | None,
+    entities: list[dict[str, Any]] | None = None,
+) -> None:
+    """Call ``_send_telegram`` without passing ``entities=`` when unused.
+
+    Existing tests patch ``_send_telegram`` with a fixed arity that rejects
+    an unexpected ``entities`` kwarg. Only attach it when we actually have
+    a custom-emoji entity list (HP-16).
+    """
+    if entities:
+        _send_telegram(
+            chunk,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            parse_mode=parse_mode,
+            entities=entities,
+        )
+        return
+    _send_telegram(
+        chunk,
+        chat_id=chat_id,
+        message_thread_id=message_thread_id,
+        parse_mode=parse_mode,
+    )
+
+
 def _deliver_threadless(
     chunk: str,
     *,
     chat_id: Any,
     parse_mode: str | None,
     agent_key: str | None,
+    entities: list[dict[str, Any]] | None = None,
 ) -> None:
     """Last-resort send with NO ``message_thread_id`` (the chat's General
     topic) — used once a topic is confirmed dead/closed and recreation
@@ -1093,12 +1132,20 @@ def _deliver_threadless(
     defense against ever silently dropping a message.
     """
     try:
-        _send_telegram(chunk, chat_id=chat_id, message_thread_id=None, parse_mode=parse_mode)
+        _telegram_send(
+            chunk,
+            chat_id=chat_id,
+            message_thread_id=None,
+            parse_mode=parse_mode,
+            entities=entities if parse_mode is None else None,
+        )
     except _NotConfigured:
         raise
     except Exception as exc:  # noqa: BLE001
         plain = _strip_html(chunk) if parse_mode else chunk
-        _send_telegram(plain, chat_id=chat_id, message_thread_id=None, parse_mode=None)
+        _telegram_send(
+            plain, chat_id=chat_id, message_thread_id=None, parse_mode=None, entities=None
+        )
         logger.info(
             "stream.topic_self_heal_delivered_general_plain",
             agent_key=agent_key,
@@ -1122,6 +1169,7 @@ def _send_one_chunk(
     parse_mode: str | None,
     agent_key: str | None,
     topic_title: str | None,
+    entities: list[dict[str, Any]] | None = None,
 ) -> int | None:
     """Send a single *chunk*, self-healing a dead/closed registry topic id
     and never losing the message. Returns the ``message_thread_id`` that
@@ -1130,8 +1178,12 @@ def _send_one_chunk(
     the fresh id instead of repeating the invalidate/recreate dance).
     """
     try:
-        _send_telegram(
-            chunk, chat_id=chat_id, message_thread_id=message_thread_id, parse_mode=parse_mode
+        _telegram_send(
+            chunk,
+            chat_id=chat_id,
+            message_thread_id=message_thread_id,
+            parse_mode=parse_mode,
+            entities=entities if parse_mode is None else None,
         )
         # Log the SUCCESS, not only the failures. A delivered message recorded
         # nothing, so an empty log was compatible with both "the roles are
@@ -1164,7 +1216,13 @@ def _send_one_chunk(
                 message_thread_id=message_thread_id,
                 description=description,
             )
-            _deliver_threadless(chunk, chat_id=chat_id, parse_mode=parse_mode, agent_key=agent_key)
+            _deliver_threadless(
+                chunk,
+                chat_id=chat_id,
+                parse_mode=parse_mode,
+                agent_key=agent_key,
+                entities=entities if parse_mode is None else None,
+            )
             return None
 
         if (
@@ -1191,11 +1249,12 @@ def _send_one_chunk(
                     message_thread_id=new_thread_id,
                 )
                 try:
-                    _send_telegram(
+                    _telegram_send(
                         chunk,
                         chat_id=chat_id,
                         message_thread_id=new_thread_id,
                         parse_mode=parse_mode,
+                        entities=entities if parse_mode is None else None,
                     )
                     return new_thread_id
                 except Exception as retry_exc:  # noqa: BLE001
@@ -1208,7 +1267,13 @@ def _send_one_chunk(
                     )
             # Recreate failed, or the resend to the fresh topic also failed
             # -- never drop the message, deliver it threadless instead.
-            _deliver_threadless(chunk, chat_id=chat_id, parse_mode=parse_mode, agent_key=agent_key)
+            _deliver_threadless(
+                chunk,
+                chat_id=chat_id,
+                parse_mode=parse_mode,
+                agent_key=agent_key,
+                entities=entities if parse_mode is None else None,
+            )
             return None
 
         # Not a topic problem -- keep the existing "retry as plain text"
@@ -1219,6 +1284,27 @@ def _send_one_chunk(
         # (a network error, ...) degrades to just `error=str(exc)` -- either
         # way a 400 is never just a silent retry with no diagnostic trail.
         if parse_mode is None:
+            # HP-16: a custom-emoji entity can 400 when the bot owner has no
+            # Premium or the id is stale. Retry the same plain text without
+            # entities so the Unicode fallback still lands.
+            if entities:
+                logger.warning(
+                    "stream.custom_emoji_rejected_retry_plain",
+                    kind="stream_chunk",
+                    status_code=getattr(exc, "status_code", None),
+                    description=description,
+                    chat_id=mask_id(chat_id),
+                    message_thread_id=message_thread_id,
+                    error=str(exc),
+                )
+                _telegram_send(
+                    chunk,
+                    chat_id=chat_id,
+                    message_thread_id=message_thread_id,
+                    parse_mode=None,
+                    entities=None,
+                )
+                return message_thread_id
             raise
         logger.warning(
             "stream.chunk_send_failed_retry_plain",
@@ -1263,6 +1349,7 @@ def _send_chunks(
     html_aware: bool,
     agent_key: str | None = None,
     topic_title: str | None = None,
+    entities: list[dict[str, Any]] | None = None,
 ) -> None:
     """Split *text* and send each chunk, in order, to the same chat + topic.
 
@@ -1281,7 +1368,12 @@ def _send_chunks(
     General topic without recreating (the operator closed it on purpose).
     """
     thread_id = message_thread_id
+    first = True
     for chunk in _split_for_telegram(text, html_aware=html_aware):
+        # Custom-emoji entities only wrap the header glyph on the first
+        # chunk; later chunks are body continuation.
+        chunk_entities = entities if first and parse_mode is None else None
+        first = False
         thread_id = _send_one_chunk(
             chunk,
             chat_id=chat_id,
@@ -1289,6 +1381,7 @@ def _send_chunks(
             parse_mode=parse_mode,
             agent_key=agent_key,
             topic_title=topic_title,
+            entities=chunk_entities,
         )
 
 
@@ -1351,10 +1444,21 @@ def _stream_agent_turn_telegram(
     chat_id = settings.telegram_stream_chat_id
     label = _ICON_LABELS.get(icon)
     tag = f"{icon} ({label})" if label else icon
+    from hivepilot.services.telegram_avatars import (
+        custom_emoji_entities,
+        html_mark,
+        plain_mark,
+        role_key_from_actor,
+    )
+
+    avatar_key = role_key_from_actor(actor)
+    avatar_html = html_mark(avatar_key)
+    avatar_plain = plain_mark(avatar_key)
 
     message_text: str | None = None
     parse_mode: str | None = None
     html_aware = False
+    stream_entities: list[dict[str, Any]] | None = None
 
     if use_rich and summary:
         try:
@@ -1375,7 +1479,7 @@ def _stream_agent_turn_telegram(
                 # Long, unstructured hand-off/stage output — the case that
                 # used to get clipped at _STREAM_MAX_CHARS. Render readable
                 # HTML instead of a plain, collapsed-whitespace snippet.
-                header_html = f"<b>{html.escape(tag)} {html.escape(actor)}</b>"
+                header_html = f"<b>{html.escape(tag)} {avatar_html}{html.escape(actor)}</b>"
                 if stage:
                     header_html += f" — {html.escape(stage)}"
                 body_lines = [header_html]
@@ -1396,7 +1500,7 @@ def _stream_agent_turn_telegram(
     # rich render above raised) — same legacy rendering as before, minus the
     # hard truncation: full content, split into multiple messages if long. ---
     if message_text is None:
-        header = f"{tag} {actor}" + (f" — {stage}" if stage else "")
+        header = f"{tag} {avatar_plain}{actor}" + (f" — {stage}" if stage else "")
         plain_lines = [header]
         if target:
             plain_lines.append(f"   ↳ {target}")
@@ -1407,6 +1511,8 @@ def _stream_agent_turn_telegram(
         message_text = "\n".join(plain_lines)
         parse_mode = None
         html_aware = False
+        if avatar_plain:
+            stream_entities = custom_emoji_entities(avatar_key, prefix=f"{tag} ")
 
     try:
         # Live agent stream goes to its dedicated channel when set, else
@@ -1420,6 +1526,7 @@ def _stream_agent_turn_telegram(
             html_aware=html_aware,
             agent_key=stream_agent_key,
             topic_title=stream_topic_title,
+            entities=stream_entities,
         )
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort

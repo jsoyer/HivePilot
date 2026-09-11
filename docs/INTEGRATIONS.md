@@ -37,6 +37,31 @@ message directly to a specific agent. Exact command names are chat commands the 
 for running a pipeline, listing steps/interactions, and approving gated actions — check
 `telegram info` or the bot's own help output for the current set.
 
+### Role avatars on hand-offs (HP-16)
+
+Each streamed hand-off prefixes the actor with a per-role emoji (the same eight
+first-class roles as the Pollen avatars): CEO 👑, Chief of Staff 📋, CTO 🧭,
+Developer 🛠️, Reviewer 🔍, CISO 🛡️, QA 🧪, Documentation 📝. That Unicode map
+always works.
+
+To show the **Avatar Lab** artwork as a Telegram custom emoji (Bot API 9.4):
+
+1. The **bot owner** must have Telegram Premium. Custom emoji from a bot are
+   not supported in channels.
+2. Export each role from the Avatar Lab as **100×100 WEBP** (static) or
+   WEBM/TGS (animated).
+3. Create a custom-emoji sticker set via `@Stickers` or `stickers.createStickerSet`
+   (emojis flag). `short_name` must end in `_by_<bot_username>`.
+4. Copy each `custom_emoji_id` into `telegram_avatars.yaml` (XDG → config repo
+   → workspace; see `examples/telegram_avatars.yaml`).
+5. Leave `HIVEPILOT_TELEGRAM_CUSTOM_EMOJI=true` (the default). Set it `false`
+   to force the Unicode fallback even when IDs are present.
+
+HTML cards emit `<tg-emoji emoji-id="…">👑</tg-emoji>`. The plain-text path
+attaches a `custom_emoji` MessageEntity wrapping the same alt glyph. A missing
+file, an unknown role, or a rejected send (no Premium / stale id) degrades to
+the Unicode emoji — the existing HTML→plain retry already strips `<tg-emoji>`.
+
 ## Slack
 
 ```bash
