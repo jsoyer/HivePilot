@@ -258,7 +258,7 @@ class TestAgentRunnersTableReflectsEnabledFlags:
         openrouter_rows = [
             line
             for line in result.output.splitlines()
-            if "openrouter" in line and "HIVEPILOT" not in line
+            if "openrouter" in line and "built-in" in line
         ]
         assert openrouter_rows, f"openrouter row not found:\n{result.output}"
         assert any("inactive" in line for line in openrouter_rows), (
