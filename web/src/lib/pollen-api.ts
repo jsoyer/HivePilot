@@ -1218,6 +1218,8 @@ export interface ApprovalRule {
   task: string
   action: string
   auto: 'approve' | 'deny'
+  /** HP-86: mechanical may auto-approve; omitted/unknown fails closed. */
+  change_class?: string
 }
 
 export function fetchApprovalRules(): Promise<{ rules: ApprovalRule[] }> {

@@ -178,6 +178,11 @@ export interface components {
             action: string;
             /** Auto */
             auto: string;
+            /**
+             * Change Class
+             * @default
+             */
+            change_class: string;
             /** Id */
             id?: string | null;
             /**

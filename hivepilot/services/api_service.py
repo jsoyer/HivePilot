@@ -1221,6 +1221,7 @@ class ApprovalRuleIn(BaseModel):
     task: str = ""
     action: str = ""
     auto: str
+    change_class: str = ""
 
 
 class ApprovalRulesReplace(BaseModel):
