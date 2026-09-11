@@ -169,8 +169,24 @@ Enable it:
 export HIVEPILOT_CHATOPS_CONCIERGE_ENABLED=true   # opt-in, default OFF
 export HIVEPILOT_CHATOPS_DEFAULT_ROLE=ceo          # role addressed when the user doesn't name one (default: ceo)
 export HIVEPILOT_CHATOPS_CONCIERGE_MODEL=haiku     # cheap/fast classifier model (default: a built-in cheap model)
-export HIVEPILOT_CHATOPS_CONCIERGE_MODE=api        # "api" (default) or "cli" — see below
+export HIVEPILOT_CHATOPS_CONCIERGE_MODE=api        # "api" (default) or "cli" — claude path only
+export HIVEPILOT_CHATOPS_CONCIERGE_RUNNER=claude   # "claude" (default), "openai", or "openrouter"
 ```
+
+**OpenAI-compatible classifier (HP-18).** The classifier is a cheap JSON call —
+reach it over HTTP, not a CLI subprocess. Point the built-in `openai` runner at
+OpenCode Go / Zen, Ollama Cloud, or any `/v1/chat/completions` gateway:
+
+```bash
+export HIVEPILOT_CHATOPS_CONCIERGE_RUNNER=openai
+export HIVEPILOT_CHATOPS_CONCIERGE_MODEL=glm-5.3-flash
+export HIVEPILOT_CHATOPS_CONCIERGE_API_BASE=https://opencode.ai/zen/go/v1
+export OPENAI_API_KEY=<Zen key>
+```
+
+`HIVEPILOT_CHATOPS_CONCIERGE_MODE` and the Anthropic API-key fallback apply only
+when the runner is `claude`. The `openai` / `openrouter` paths are always
+`mode: api` (no tools exist on that HTTP call).
 
 **No `ANTHROPIC_API_KEY`? The concierge still works.** `HIVEPILOT_CHATOPS_CONCIERGE_MODE`
 controls how the classifier's `claude` call is dispatched:

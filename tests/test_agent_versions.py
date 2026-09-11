@@ -327,4 +327,5 @@ class TestApiOnlyKindsAreNotMissingCLIs:
         from hivepilot.services.agent_checks import AGENT_RUNNER_KINDS, API_ONLY_AGENT_KINDS
 
         assert "openrouter" in API_ONLY_AGENT_KINDS
+        assert "openai" in API_ONLY_AGENT_KINDS
         assert API_ONLY_AGENT_KINDS <= AGENT_RUNNER_KINDS

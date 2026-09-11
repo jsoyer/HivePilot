@@ -72,9 +72,10 @@ class TestBuiltinRunnersGate:
             _env_file=None,  # type: ignore[call-arg]
             claude_enabled=False,
             openrouter_enabled=False,
+            openai_enabled=False,
         )
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
-        for disabled in ("claude", "openrouter"):
+        for disabled in ("claude", "openrouter", "openai"):
             assert disabled not in active
         # infra kinds carry no `<kind>_enabled` flag -> getattr(..., True) default wins
         for infra in ("shell", "terraform", "kubectl", "helm"):
@@ -91,6 +92,7 @@ class TestBuiltinRunnersGate:
         s = Settings(_env_file=None)  # type: ignore[call-arg]
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
         assert "openrouter" in active
+        assert "openai" in active
         # ...and the plugin's own default keeps claude ON for any deployment
         # that changes nothing, which is the same promise this test made.
         assert s.claude_enabled is True
@@ -100,6 +102,7 @@ class TestBuiltinRunnersGate:
         active = {kind for kind in _BUILTIN_RUNNERS if getattr(s, f"{kind}_enabled", True)}
         assert "claude" not in active
         assert "openrouter" in active
+        assert "openai" in active
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +253,7 @@ class TestAgentRunnerKindsSingleSourceOfTruth:
                 "cursor",
                 "vibe",
                 "openrouter",
+                "openai",
                 "gemini",
                 "opencode",
                 "ollama",

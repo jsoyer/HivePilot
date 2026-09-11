@@ -1,0 +1,35 @@
+# HP-19 — selectable OSS roster overlay.
+#
+# `roles.yaml` stays the canonical vendor mix. This file is loaded only when
+# `HIVEPILOT_ROSTER_PRESET=oss`. Switching back is
+# `HIVEPILOT_ROSTER_PRESET=claude` (identity).
+#
+# Runner is `opencode` (OpenCode Go CLI). Models come from the matching
+# `opencode:` column in `model_profiles.yaml` unless a role sets `model:`
+# here. To classify the concierge on the same fleet, see HP-18:
+#
+#   HIVEPILOT_CHATOPS_CONCIERGE_RUNNER=openai
+#   HIVEPILOT_CHATOPS_CONCIERGE_MODEL=glm-5.3-flash
+#   HIVEPILOT_CHATOPS_CONCIERGE_API_BASE=https://opencode.ai/zen/go/v1
+#   OPENAI_API_KEY=<Zen key>
+#
+# Ollama Cloud instead of OpenCode Go: change each role's `runner` to
+# `ollama` and set `model` to the Cloud slug (e.g. gpt-oss:20b).
+
+roles:
+  ceo:
+    runner: opencode
+  cto:
+    runner: opencode
+  ciso:
+    runner: opencode
+  developer:
+    runner: opencode
+  reviewer:
+    runner: opencode
+  qa:
+    runner: opencode
+  chief_of_staff:
+    runner: opencode
+  documentation:
+    runner: opencode

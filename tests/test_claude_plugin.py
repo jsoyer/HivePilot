@@ -58,7 +58,11 @@ class TestTheCoreNoLongerKnowsClaude:
             "langchain",
         }
 
-        assert {k for k in _BUILTIN_RUNNERS if k in agent_kinds} <= {"openrouter", "langchain"}
+        assert {k for k in _BUILTIN_RUNNERS if k in agent_kinds} <= {
+            "openrouter",
+            "openai",
+            "langchain",
+        }
 
     def test_claude_left_known_runner_kinds(self):
         """That tuple's own invariant: every name in it is unconditionally

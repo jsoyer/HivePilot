@@ -86,7 +86,7 @@ class TestAGatedPluginIsNotAdvertisedAsABuiltin:
     def test_the_cli_builtin_tuple_no_longer_claims_vibe(self):
         from hivepilot import cli
 
-        assert '_builtin_agent_kinds = ("claude", "openrouter")' in inspect.getsource(cli)
+        assert '_builtin_agent_kinds = ("claude", "openrouter", "openai")' in inspect.getsource(cli)
 
     def test_mandatory_agents_still_accepts_any_one_agent(self):
         from hivepilot.services import agent_checks
