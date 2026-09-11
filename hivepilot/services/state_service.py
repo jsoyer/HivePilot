@@ -2009,6 +2009,17 @@ def record_approval_request(
             ),
             (run_id, project, task, json.dumps(metadata), tenant),
         )
+    # Lazy: events.emit → state_service.init_db; keep the cycle out of
+    # module import. emit is fail-safe and cannot break this write.
+    from hivepilot.services import events
+
+    events.emit(
+        "approval.requested",
+        "run",
+        run_id,
+        tenant=tenant,
+        payload={"run_id": run_id, "project": project, "task": task},
+    )
 
 
 def get_pending_approvals(tenant: str | None = None) -> list[dict[str, Any]]:

@@ -199,6 +199,16 @@ Inbound email/IMAP watchers (HP-75). Read-only: the mailbox is selected `readonl
 | --- | --- | --- |
 | `poll` | Poll configured watchers once; start a restricted reader run per allowlisted new message. Dedup survives restart. Intended for cron / the scheduler. | **Yes** (starts runs) |
 
+## `events`
+
+Zero-token classifier on the HP-40 `change_log` bus (HP-85 spike). See
+[actionable-events.md](./actionable-events.md). Does not start a model, a run,
+or a nudge.
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `classify` | Print wake/sleep for recent `change_log` rows (`--after`, `--limit`). Allowlist only; unknown kind = sleep. | No |
+
 ## `tokens`
 
 | Command | Purpose | Mutating? |
@@ -388,6 +398,7 @@ actions it covers by default.
 
 ## See also
 
+- [actionable-events.md](./actionable-events.md) — HP-85 zero-token bus classifier (spike)
 - [SECURITY.md](./SECURITY.md) — approval-gate model, secrets handling, fail-closed policies
 - [USAGE.md](./GETTING-STARTED.md) — task/pipeline/config concepts and everyday workflows
 - [PLUGINS.md](./PLUGINS.md) — plugin types (runner/notifier/secrets/panel/skill), install and trust model

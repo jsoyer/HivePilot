@@ -60,6 +60,7 @@ hivepilot interactive
 | --- | --- |
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | Install, `doctor`, first pipeline, approval walkthrough |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the orchestrator, config, runners, and state fit together |
+| [docs/actionable-events.md](docs/actionable-events.md) | HP-85 spike: zero-token allowlist consumer on the HP-40 event bus |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | The YAML config files and environment variables |
 | [docs/CLI-REFERENCE.md](docs/CLI-REFERENCE.md) | Every command |
 | [docs/PIPELINES-AND-ROLES.md](docs/PIPELINES-AND-ROLES.md) | The agent "company", roles, pipeline stages, groups/multi-repo |

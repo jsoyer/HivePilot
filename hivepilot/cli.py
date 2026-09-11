@@ -41,6 +41,8 @@ model_app = typer.Typer(help="Model connections: verify before you save")
 app.add_typer(model_app, name="model")
 mail_app = typer.Typer(help="Inbound email/IMAP watchers (restricted reader agents)")
 app.add_typer(mail_app, name="mail")
+events_app = typer.Typer(help="HP-40 event bus: zero-token classify (HP-85 spike)")
+app.add_typer(events_app, name="events")
 memory_app = typer.Typer(help="Memory backend utilities (mem0 → Hindsight)")
 app.add_typer(memory_app, name="memory")
 
@@ -191,6 +193,23 @@ def mail_poll_command(
             f"{name}: dispatched={r.dispatched} rejected={r.rejected} "
             f"duplicates={r.duplicates} failed={r.failed} skipped={r.skipped}"
         )
+
+
+@events_app.command("classify")
+def events_classify(
+    after_id: int = typer.Option(0, "--after", help="Classify change_log rows after this id."),
+    limit: int = typer.Option(50, "--limit", help="Max rows to classify."),
+) -> None:
+    """Print wake/sleep for change_log rows. Never calls a model (HP-85)."""
+    from hivepilot.services import events
+    from hivepilot.services.actionable_events import classify, render_classification
+
+    rows = events.read_since(after_id, limit=limit)
+    if not rows:
+        typer.echo("No change_log rows.")
+        return
+    for row in rows:
+        typer.echo(render_classification(classify(row)))
 
 
 config_app = typer.Typer(help="Config repo sync")

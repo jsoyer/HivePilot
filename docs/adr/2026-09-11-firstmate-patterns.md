@@ -103,6 +103,8 @@ Do not open these as part of landing this ADR. Titles only:
 - Verify: parallel coding missions never share a checkout under partition dispatch
 - Verify: nudge/orchestrator can wake from bus kinds (`nudge.posted`, approval requested, run failed) without in-process-only hooks
 
+Spike 1 prototype: [actionable-events.md](../actionable-events.md) (HP-85).
+
 ## Security Impact:
 
 - **Not** embedding Firstmate avoids a second agent runtime, a second secrets/MCP surface, and a second place that can mutate git. Same supply-chain posture as leaving the Hermes Agent framework out (HP-71).
