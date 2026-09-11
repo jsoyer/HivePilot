@@ -279,24 +279,33 @@ def lint_role_draft(fields: dict[str, Any]) -> list[str]:
 def _call_no_tools_llm(spec: str) -> str:
     """One-shot concierge-model call. Fail-closed: raises RoleDraftError."""
     model = settings.chatops_concierge_model or concierge_service._DEFAULT_CONCIERGE_MODEL
-    mode = concierge_service._resolve_mode()
-    options = concierge_service._build_classifier_options(mode)
+    runner_kind = (settings.chatops_concierge_runner or "claude").strip().lower()
+    runner_env: dict[str, str] = {}
 
-    # HARD INVARIANT (same as concierge_service.route): untrusted spec text
-    # must never reach a tool-capable cli session. Not an `assert` — those
-    # disappear under `python -O`.
-    if mode == "cli" and options.get("tools") != concierge_service._CLASSIFIER_NO_TOOLS:
-        logger.error("role_draft.cli_no_tools_invariant_violated_refusing")
-        raise RoleDraftError("refused to call the model with tools enabled")
+    if runner_kind == "claude":
+        mode = concierge_service._resolve_mode()
+        options = concierge_service._build_classifier_options(mode)
+        # HARD INVARIANT (same as concierge_service.route): untrusted spec
+        # text must never reach a tool-capable cli session. Not an `assert`
+        # — those disappear under `python -O`.
+        if mode == "cli" and options.get("tools") != concierge_service._CLASSIFIER_NO_TOOLS:
+            logger.error("role_draft.cli_no_tools_invariant_violated_refusing")
+            raise RoleDraftError("refused to call the model with tools enabled")
+    else:
+        # API runner (openai / openrouter): HTTP chat-completions, no tools.
+        options = {"mode": "api", "api_model": model}
+        if runner_kind == "openai" and settings.chatops_concierge_api_base:
+            runner_env["OPENAI_BASE_URL"] = settings.chatops_concierge_api_base
 
     runner_def = RunnerDefinition(
         name="role_draft",
-        kind=cast(RunnerKind, "claude"),
+        kind=cast(RunnerKind, runner_kind),
         model=model,
         options=options,
+        env=runner_env,
         timeout_seconds=concierge_service._classifier_timeout_seconds(),
     )
-    step = TaskStep(name="role_draft", runner="claude", prompt_file=_resolve_prompt_file())
+    step = TaskStep(name="role_draft", runner=runner_kind, prompt_file=_resolve_prompt_file())
     payload = RunnerPayload(
         project_name="role_draft",
         project=ProjectConfig(path=Path(".")),

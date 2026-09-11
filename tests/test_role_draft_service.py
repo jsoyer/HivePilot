@@ -186,6 +186,24 @@ class TestNoToolsPath:
                 draft_role("a security auditor")
         orch.registry.capture_definition.assert_not_called()
 
+    def test_openai_runner_is_api_only_without_tools_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(role_draft_service.settings, "chatops_concierge_runner", "openai")
+        monkeypatch.setattr(
+            role_draft_service.settings, "chatops_concierge_api_base", "https://example.test/v1"
+        )
+        orch = _orch_with_capture(return_value=_auditor_json())
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
+            draft_role("a security auditor")
+        runner_def, _payload = orch.registry.capture_definition.call_args.args
+        assert runner_def.kind == "openai"
+        assert runner_def.options.get("mode") == "api"
+        assert "tools" not in runner_def.options
+        assert runner_def.env.get("OPENAI_BASE_URL") == "https://example.test/v1"
+
 
 class TestSanitizeAndLint:
     def test_unknown_runner_and_profile_are_coerced(self) -> None:
