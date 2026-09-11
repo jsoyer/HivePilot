@@ -13,11 +13,14 @@ ADR: `docs/adr/2026-09-11-hp61-change-classes.md` (amends HP-84). Thin hook: `ap
 
 Linear: [HP-86](https://linear.app/js-workspace/issue/HP-86/spike-bind-mechanical-auto-fix-vs-product-fork-classes-to-hp-61)
 
-Replay: `hivepilot run example-api docs --dry-run`
+Replay: `hivepilot run example-api docs --simulate` (CLI has no `--dry-run`; this env needs `--token` / `HIVEPILOT_API_TOKEN`. Hook is covered by `tests/test_hp61_approval_rules.py`.)
 
 ## Testing
 
-- [ ] `pytest tests/test_hp61_approval_rules.py -q`
-- [ ] `python scripts/export_openapi.py --check`
-- [ ] `hivepilot lint` (no YAML surface change expected)
-- [ ] `INVARIANTS.md` unchanged
+- [x] `pytest tests/test_hp61_approval_rules.py -q` — 15 passed
+- [x] INVARIANTS.md verify: consent 8 passed; outward allowlist 9 passed; merge_pr 2 passed
+- [x] `git diff origin/main -- INVARIANTS.md` — empty
+- [x] `python scripts/export_openapi.py --check` — matches
+- [x] `ruff check` + `ruff format --check` on touched Python — clean
+- [x] `mypy` on touched files — clean
+- [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only

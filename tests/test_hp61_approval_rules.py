@@ -180,9 +180,12 @@ def test_watcher_wake_is_not_a_class():
         )
         is None
     )
-    assert approval_rules_service.claimed_change_class(
-        {"source": "watcher", "woke": True, "kind": "pipeline_checkpoint"}
-    ) == ""
+    assert (
+        approval_rules_service.claimed_change_class(
+            {"source": "watcher", "woke": True, "kind": "pipeline_checkpoint"}
+        )
+        == ""
+    )
 
 
 def test_claimed_non_mechanical_vetoes_mechanical_rule():
@@ -227,8 +230,7 @@ def test_deny_does_not_need_a_class():
         [{"project": "example-api", "task": "docs", "auto": "deny"}]
     )
     assert (
-        approval_rules_service.match_auto(project="example-api", task="docs", metadata={})
-        == "deny"
+        approval_rules_service.match_auto(project="example-api", task="docs", metadata={}) == "deny"
     )
 
 
@@ -245,8 +247,7 @@ def test_class_veto_does_not_fall_through():
         ]
     )
     assert (
-        approval_rules_service.match_auto(project="example-api", task="docs", metadata={})
-        is None
+        approval_rules_service.match_auto(project="example-api", task="docs", metadata={}) is None
     )
 
 
@@ -286,6 +287,5 @@ def test_legacy_table_gains_change_class_column(tmp_path, monkeypatch):
     rules = approval_rules_service.list_rules()
     assert rules[0].change_class == ""
     assert (
-        approval_rules_service.match_auto(project="example-api", task="docs", metadata={})
-        is None
+        approval_rules_service.match_auto(project="example-api", task="docs", metadata={}) is None
     )

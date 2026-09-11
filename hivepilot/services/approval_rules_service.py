@@ -219,9 +219,8 @@ def claimed_change_class(metadata: dict[str, Any] | None) -> str:
     return ""
 
 
-def rule_change_class(rule: ApprovalRule) -> ChangeClass:
-    resolved = normalize_change_class(rule.change_class, persist=False)
-    return resolved if resolved in CHANGE_CLASSES else UNKNOWN
+def rule_change_class(rule: ApprovalRule) -> str:
+    return normalize_change_class(rule.change_class, persist=False)
 
 
 def _allows_auto_approve(rule: ApprovalRule, metadata: dict[str, Any] | None) -> bool:
