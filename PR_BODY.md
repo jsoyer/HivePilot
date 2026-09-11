@@ -35,6 +35,7 @@ Replay: `hivepilot run example-api docs --dry-run`
 
 ## Testing
 
-- [ ] `pytest` on touched suites (recorded after the run)
-- [ ] `hivepilot lint`
-- [ ] `hivepilot run example-api docs --dry-run`
+- [x] `pytest` targeted suites — **553 passed** (`test_openai_runner`, `test_concierge_service`, `test_oss_preset`, `test_config`, `test_pipeline_mode`, `test_hermes4_profiles`, `test_gating_conformance`, `test_agent_plugin_migration`, `test_agent_versions`, `test_registry`, `test_runner_registry_open`, `test_auditor_runner_is_configurable`, `test_claude_plugin`, `test_runner_taxonomy_integration`, `test_openrouter_runner`, `test_profile_service`, `test_roster_preset`, `test_roles`, Agent Runners taxonomy). Focused re-run of the HP-18/19 slice: **171 passed**.
+- [x] `hivepilot lint` — only pre-existing missing `~/dev/*` project paths (same as main).
+- [x] `hivepilot run --help` — `--dry-run` was renamed to `--simulate`; simulate still requires `HIVEPILOT_API_TOKEN` in this environment, so replay is the unit suite + `hivepilot lint`.
+- Two `test_plugins_list_taxonomy` contribution-string asserts also fail on current `main` in this environment (vaultwarden / sample-skill table text); not introduced here.
