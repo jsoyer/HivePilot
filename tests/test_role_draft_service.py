@@ -62,10 +62,10 @@ def _api_key_for_api_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestDraftRoleHappyPath:
     def test_sample_spec_returns_linter_passing_skeleton(self) -> None:
         orch = _orch_with_capture(return_value=_auditor_json())
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
-            result = draft_role(
-                "a security auditor that reviews Terraform, can block release"
-            )
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
+            result = draft_role("a security auditor that reviews Terraform, can block release")
         assert result.saved is False
         draft = result.fields
         assert draft["name"] == "tf_auditor"
@@ -84,7 +84,9 @@ class TestDraftRoleHappyPath:
         from hivepilot.services import state_service
 
         orch = _orch_with_capture(return_value=_auditor_json())
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             draft_role("a security auditor that reviews Terraform, can block release")
         assert state_service.get_role_row("tf_auditor") is None
 
@@ -94,7 +96,9 @@ class TestDraftRoleHappyPath:
             allowed_tools=["Bash", "Edit"],
         )
         orch = _orch_with_capture(return_value=raw)
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             result = draft_role("auditor with tools please")
         assert "permission_mode" not in result.fields
         assert "allowed_tools" not in result.fields
@@ -105,7 +109,9 @@ class TestDraftRoleHappyPath:
     def test_accepts_fenced_json(self) -> None:
         fenced = "```json\n" + _auditor_json() + "\n```"
         orch = _orch_with_capture(return_value=fenced)
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             result = draft_role("security auditor")
         assert result.fields["name"] == "tf_auditor"
 
@@ -117,19 +123,25 @@ class TestDraftRoleFailClosed:
 
     def test_llm_error_raises_and_does_not_invent_a_role(self) -> None:
         orch = _orch_with_capture(side_effect=RuntimeError("timeout"))
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             with pytest.raises(RoleDraftError, match="did not return"):
                 draft_role("a security auditor")
 
     def test_malformed_json_raises(self) -> None:
         orch = _orch_with_capture(return_value="not json at all")
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             with pytest.raises(RoleDraftError, match="unparseable"):
                 draft_role("a security auditor")
 
     def test_empty_model_output_raises(self) -> None:
         orch = _orch_with_capture(return_value="   ")
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             with pytest.raises(RoleDraftError, match="empty"):
                 draft_role("a security auditor")
 
@@ -142,15 +154,18 @@ class TestNoToolsPath:
             role_draft_service.concierge_service.settings, "chatops_concierge_mode", "cli"
         )
         orch = _orch_with_capture(return_value=_auditor_json())
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             draft_role("a security auditor")
         runner_def, payload = orch.registry.capture_definition.call_args.args
         assert runner_def.options.get("mode") == "cli"
         assert runner_def.options.get("tools") == ""
         assert "permission_mode" not in runner_def.options
-        assert "Terraform" in payload.metadata["extra_prompt"] or "auditor" in payload.metadata[
-            "extra_prompt"
-        ].lower()
+        assert (
+            "Terraform" in payload.metadata["extra_prompt"]
+            or "auditor" in payload.metadata["extra_prompt"].lower()
+        )
 
     def test_cli_no_tools_invariant_violation_refuses(
         self, monkeypatch: pytest.MonkeyPatch
@@ -164,7 +179,9 @@ class TestNoToolsPath:
             lambda mode: {"mode": mode, "tools": "Bash"},
         )
         orch = _orch_with_capture(return_value=_auditor_json())
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             with pytest.raises(RoleDraftError, match="tools enabled"):
                 draft_role("a security auditor")
         orch.registry.capture_definition.assert_not_called()
@@ -174,7 +191,9 @@ class TestSanitizeAndLint:
     def test_unknown_runner_and_profile_are_coerced(self) -> None:
         raw = _auditor_json(runner="not-a-runner", model_profile="turbo")
         orch = _orch_with_capture(return_value=raw)
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             result = draft_role("auditor")
         assert result.fields["runner"] == "claude"
         assert result.fields["model_profile"] == "architecture"
@@ -185,7 +204,9 @@ class TestSanitizeAndLint:
         data = json.loads(raw)
         data.pop("prompt_text")
         orch = _orch_with_capture(return_value=json.dumps(data))
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             result = draft_role("reviews Terraform and can block release")
         assert result.fields["prompt_text"]
         assert "Terraform" in result.fields["prompt_text"]
@@ -194,7 +215,9 @@ class TestSanitizeAndLint:
     def test_collision_is_a_lint_finding_not_a_save(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(role_draft_service, "api_roster", lambda: [{"name": "tf_auditor"}])
         orch = _orch_with_capture(return_value=_auditor_json())
-        with patch.object(role_draft_service.concierge_service, "_get_orchestrator", return_value=orch):
+        with patch.object(
+            role_draft_service.concierge_service, "_get_orchestrator", return_value=orch
+        ):
             result = draft_role("auditor")
         assert result.saved is False
         assert any("already exists" in item for item in result.lint)

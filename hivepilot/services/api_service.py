@@ -4635,9 +4635,7 @@ def draft_role_endpoint(payload: RoleDraftAsk) -> RoleDraftResponse:
     try:
         result = role_draft_service.draft_role(spec)
     except role_draft_service.RoleDraftError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return RoleDraftResponse(
         draft=RoleWrite.model_validate(result.fields),
         lint=result.lint,

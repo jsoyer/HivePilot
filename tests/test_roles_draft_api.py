@@ -61,9 +61,7 @@ class TestRolesDraftEndpoint:
 
     def test_requires_admin(self, api_client, tmp_tokens_file):
         raw, _ = add_token("read")
-        resp = api_client.post(
-            "/v1/roles/draft", json={"spec": "an auditor"}, headers=_auth(raw)
-        )
+        resp = api_client.post("/v1/roles/draft", json={"spec": "an auditor"}, headers=_auth(raw))
         assert resp.status_code == 403
 
     def test_empty_spec_is_400(self, api_client, tmp_tokens_file):
@@ -103,9 +101,7 @@ class TestRolesDraftEndpoint:
 
         monkeypatch.setattr(role_draft_service, "draft_role", _boom)
         raw, _ = add_token("admin")
-        resp = api_client.post(
-            "/v1/roles/draft", json={"spec": "an auditor"}, headers=_auth(raw)
-        )
+        resp = api_client.post("/v1/roles/draft", json={"spec": "an auditor"}, headers=_auth(raw))
         assert resp.status_code == 502
         assert "did not return" in resp.json()["detail"]
 
