@@ -18,7 +18,8 @@ Out of scope: ship/scout, Firstmate runtime, rewriting nudge, persisting a water
 
 ## Testing
 
-- [ ] `pytest tests/test_actionable_events.py tests/test_events.py tests/test_nudge_engine.py -q`
-- [ ] `hivepilot events classify --after 0`
-- [ ] `hivepilot lint`
-- [ ] `ruff format --check` on touched Python
+- [x] `pytest tests/test_actionable_events.py tests/test_events.py tests/test_nudge_engine.py -q` — 41 passed
+- [x] `pytest tests/test_events_sse.py tests/test_multi_tenant.py tests/test_state_service.py tests/test_spaces.py -q` — 109 passed (approval emit did not break bus / tenant / spaces)
+- [x] `hivepilot events classify --after 0` — wake on failed `run.completed` / `approval.requested` / `nudge.posted`; sleep on `run.started` and urgent `space.message`
+- [x] `hivepilot lint` — pre-existing missing `~/dev/*` project paths only
+- [x] `ruff format --check` / `ruff check` on touched Python — clean
