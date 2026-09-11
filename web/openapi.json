@@ -51,6 +51,11 @@
             "title": "Auto",
             "type": "string"
           },
+          "change_class": {
+            "default": "",
+            "title": "Change Class",
+            "type": "string"
+          },
           "id": {
             "anyOf": [
               {

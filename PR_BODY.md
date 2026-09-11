@@ -10,6 +10,8 @@ Idle sleeper that tails `events.subscribe()` / `change_log` and classifies each 
 - Fail-safe like `events.emit` / HP-50: a broken classify, `on_wake`, or subscribe is swallowed. Durable facts stay in `change_log`. Wake does **not** start a model, change a gate, or post a nudge.
 - Thin CLI: `hivepilot events classify --after 0`. Design notes: `docs/actionable-events.md`.
 
+Rebased onto `main` after [HP-86](https://linear.app/js-workspace/issue/HP-86) / PR #661 (`docs/adr/2026-09-11-hp61-change-classes.md`). Wake is still not a change class; HP-86 `match_auto` stays the only auto-approve hook.
+
 Linear: [HP-85](https://linear.app/js-workspace/issue/HP-85/spike-zero-token-actionable-event-consumer-on-the-hp-40-bus-no-llm).
 
 Replay: `hivepilot events classify --after 0` (and `pytest tests/test_actionable_events.py`).

@@ -60,6 +60,11 @@ pytest tests/test_actionable_events.py -q
 hivepilot events classify --after 0
 ```
 
+A wake is **not** an HP-61 change class. Auto-approve still goes through
+`approval_rules_service.match_auto` and
+[docs/adr/2026-09-11-hp61-change-classes.md](./adr/2026-09-11-hp61-change-classes.md)
+(HP-86). `source` / `woke` / bus kind never unlock `mechanical`.
+
 ## Out of scope
 
 Ship/scout contracts, Firstmate runtime, rewriting nudge, persisting a

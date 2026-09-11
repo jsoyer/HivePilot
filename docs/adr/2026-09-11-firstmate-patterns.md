@@ -73,10 +73,10 @@ HP-84 suggested watcher + worktree as the likely pair. We keep the watcher and *
 
 ### Spikes (top 1–2 only)
 
-1. **Zero-token actionable-event consumer on the HP-40 bus** — subscribe / tail `change_log`; allowlist kinds (e.g. `nudge.posted`, approval requested, run failed); sleep otherwise; never call a model to decide whether to wake.
-2. **Mechanical vs product-fork classes on HP-61 rules** — a small taxonomy bound to existing `approve` / `deny` / pending cards; unknown class fail-closed to "ask".
+1. **Zero-token actionable-event consumer on the HP-40 bus** — subscribe / tail `change_log`; allowlist kinds (e.g. `nudge.posted`, approval requested, run failed); sleep otherwise; never call a model to decide whether to wake. Prototype in [actionable-events.md](../actionable-events.md) ([HP-85](https://linear.app/js-workspace/issue/HP-85)).
+2. **Mechanical vs product-fork classes on HP-61 rules** — a small taxonomy bound to existing `approve` / `deny` / pending cards; unknown class fail-closed to "ask". Specified and thinly wired in [2026-09-11-hp61-change-classes.md](./2026-09-11-hp61-change-classes.md) ([HP-86](https://linear.app/js-workspace/issue/HP-86)).
 
-Do not implement either spike in the same change as this ADR.
+Do not implement either spike in the same change as this ADR. HP-86 is the follow-up for #2; it must not weaken `INVARIANTS.md`.
 
 ## Consequences:
 

@@ -448,6 +448,8 @@ def init_db() -> None:
         )
         # HP-61 — per-action auto-approve / auto-deny. Empty match fields are
         # wildcards. Never stores a Disposition.
+        # HP-86 — optional change_class (mechanical vs human-gate). Empty
+        # means unknown and fails closed on auto-approve.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS approval_action_rules (
@@ -455,9 +457,13 @@ def init_db() -> None:
                 project TEXT NOT NULL DEFAULT '',
                 task TEXT NOT NULL DEFAULT '',
                 action TEXT NOT NULL DEFAULT '',
-                auto TEXT NOT NULL
+                auto TEXT NOT NULL,
+                change_class TEXT NOT NULL DEFAULT ''
             )
             """
+        )
+        _add_column_if_missing(
+            conn, "approval_action_rules", "change_class TEXT NOT NULL DEFAULT ''"
         )
         conn.execute(
             """
