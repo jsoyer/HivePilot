@@ -43,7 +43,8 @@ const DEFAULT_RUN_LIMIT = 50
 export { type RunColumn, runColumn }
 
 /** Live kanban only. Done is History — never a fifth full-height column. */
-export const BOARD_COLUMNS: RunColumn[] = ['queued', 'running', 'waitingApproval', 'failed']
+export const BOARD_COLUMNS = ['queued', 'running', 'waitingApproval', 'failed'] as const
+export type BoardColumn = (typeof BOARD_COLUMNS)[number]
 
 export type RunsSurface = 'board' | 'history'
 
@@ -55,7 +56,7 @@ export type RunsSurface = 'board' | 'history'
  * paused/deferred stay on the board under Waiting so they remain visible
  * without inventing a fifth column.
  */
-export function boardPlacement(status: string): RunColumn | 'history' {
+export function boardPlacement(status: string): BoardColumn | 'history' {
   const column = runColumn(status)
   if (column === 'done') return 'history'
   if (column === 'other') {
@@ -68,7 +69,7 @@ export function isHistoryRun(status: string): boolean {
   return boardPlacement(status) === 'history'
 }
 
-const COLUMN_LABEL_KEY: Record<(typeof BOARD_COLUMNS)[number], TranslationKey> = {
+const COLUMN_LABEL_KEY: Record<BoardColumn, TranslationKey> = {
   queued: 'board.colQueued',
   running: 'board.colRunning',
   waitingApproval: 'board.colWaitingApproval',
@@ -190,7 +191,7 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
 }
 
 interface RunColumnSectionProps {
-  column: (typeof BOARD_COLUMNS)[number]
+  column: BoardColumn
   runs: RunSummary[]
   density: BoardDensity
   canRun: boolean
@@ -259,7 +260,7 @@ interface RunBoardProps {
 
 function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardProps) {
   const t = useT()
-  const grouped: Record<(typeof BOARD_COLUMNS)[number], RunSummary[]> = {
+  const grouped: Record<BoardColumn, RunSummary[]> = {
     queued: [],
     running: [],
     waitingApproval: [],

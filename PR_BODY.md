@@ -14,6 +14,6 @@ Replay: `cd web && npm test -- src/components/views/RunBoardView.test.tsx src/li
 
 ## Testing
 
-- [ ] `cd web && npm test -- src/components/views/RunBoardView.test.tsx src/lib/i18n/fr.test.ts`
-- [ ] `cd web && npm test`
-- [ ] `cd web && npm run build`
+- [x] `cd web && npm test -- src/components/views/RunBoardView.test.tsx src/lib/i18n/fr.test.ts` — 37 passed
+- [x] `cd web && npm test` — 926 passed
+- [x] `cd web && npm run build` (refreshed `hivepilot/webui/static`; CI `git diff --exit-code hivepilot/webui/static`)
