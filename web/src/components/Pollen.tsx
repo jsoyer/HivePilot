@@ -33,9 +33,9 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ApiForbiddenError } from '@/lib/api'
 import { LanguageProvider, useT } from '@/lib/i18n'
-import { fetchPanels, fetchPluginsHealth, fetchRuns } from '@/lib/pollen-api'
+import { fetchHealthProbes, fetchPanels, fetchPluginsHealth, fetchRuns } from '@/lib/pollen-api'
 import { RoleProvider } from '@/lib/role-context'
-import { countShellIssues } from '@/lib/shell-issues'
+import { buildAlertFeed, countAlertIssues } from '@/lib/alert-feed'
 import { useAsyncData } from '@/lib/use-async-data'
 import { CommandPalette } from './CommandPalette'
 import { buildNavGroups, pickNavItems, PLUS_NAV, PRIMARY_NAV, type NavItem } from './nav/nav-config'
@@ -120,10 +120,18 @@ function PollenShell() {
       throw error
     }
   }, [])
-  const issuesReady = health.status !== 'loading' && runs.status !== 'loading'
-  const issueCount = countShellIssues(
-    health.status === 'success' ? health.data.plugins : [],
-    runs.status === 'success' ? runs.data : [],
+  const probes = useAsyncData(() => fetchHealthProbes().catch(() => null), [])
+  const issuesReady =
+    health.status !== 'loading' && runs.status !== 'loading' && probes.status !== 'loading'
+  const issueCount = countAlertIssues(
+    buildAlertFeed({
+      plugins: health.status === 'success' ? health.data.plugins : [],
+      disabled: health.status === 'success' ? health.data.disabled : [],
+      denied: health.status === 'success' ? (health.data.denied ?? []) : [],
+      notInstalled: health.status === 'success' ? (health.data.not_installed ?? []) : [],
+      runs: runs.status === 'success' ? runs.data : [],
+      agentSurface: probes.status === 'success' ? (probes.data?.agent_surface ?? null) : null,
+    }),
   )
 
   const navItems: NavItem[] = [
