@@ -44,7 +44,9 @@ class OpenAiCompatRunner(PromptCliRunner):
     """API-only runner for an OpenAI-compatible `/chat/completions` endpoint.
 
     Endpoint is `OPENAI_BASE_URL` (or `OPENAI_API_BASE`), defaulting to
-    `https://api.openai.com/v1`; auth is `OPENAI_API_KEY`.
+    `https://api.openai.com/v1`; auth is `OPENAI_API_KEY`. When the base URL
+    contains `opencode.ai` (OpenCode Go / Zen), `_run_api` also sends
+    `x-opencode-session` and `User-Agent: hivepilot/<version>`.
     """
 
     command_name: str = "openai"

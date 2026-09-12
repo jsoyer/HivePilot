@@ -12,6 +12,7 @@
 #   HIVEPILOT_CHATOPS_CONCIERGE_MODEL=glm-5.3-flash
 #   HIVEPILOT_CHATOPS_CONCIERGE_API_BASE=https://opencode.ai/zen/go/v1
 #   OPENAI_API_KEY=<Zen key>
+#   (x-opencode-session + User-Agent are sent automatically on opencode.ai)
 #
 # Ollama Cloud instead of OpenCode Go: change each role's `runner` to
 # `ollama` and set `model` to the Cloud slug (e.g. gpt-oss:20b).

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from hivepilot import __version__
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, TaskStep
 from hivepilot.runners.base import RunnerPayload
@@ -467,6 +468,108 @@ class TestApiModeCaptureUsage:
         runner = _api_runner("nous", model="Hermes-4-70B")
         with pytest.raises(RuntimeError, match="NOUS_API_KEY"):
             runner.capture(_api_payload(tmp_path))
+
+
+# ── HP-87: OpenCode Go requires x-opencode-session on openai-compat ──────────
+
+
+def _openai_run_api_headers(
+    tmp_path: Path,
+    *,
+    env: dict[str, str],
+    metadata: dict | None = None,
+) -> dict[str, str]:
+    """Call `_run_api` and return the headers passed to `_post_json`."""
+    captured: list[dict] = []
+
+    def fake_post(url, headers, payload, timeout):  # noqa: ANN001
+        captured.append({"url": url, "headers": headers, "payload": payload})
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    runner = _api_runner("openai", model="glm-5.3-flash")
+    runner._post_json = fake_post  # type: ignore[method-assign,assignment]
+    runner._run_api("test prompt", _cli_payload(tmp_path, metadata or {}), env)
+    assert captured, "_run_api did not POST"
+    return captured[0]["headers"]
+
+
+class TestOpenaiOpencodeGoHeaders:
+    """OpenCode Go (`opencode.ai`, especially `/zen/go/`) needs a session
+    header; a generic OpenAI-compat endpoint must stay Authorization-only."""
+
+    def test_opencode_go_base_sends_session_and_user_agent(self, tmp_path: Path) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://opencode.ai/zen/go/v1",
+            },
+        )
+        assert headers["Authorization"] == "Bearer sk-test"
+        assert headers["x-opencode-session"] == "hivepilot-concierge"
+        assert headers["User-Agent"] == f"hivepilot/{__version__}"
+
+    def test_non_opencode_base_does_not_send_session_header(self, tmp_path: Path) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://api.openai.com/v1",
+            },
+        )
+        assert headers == {"Authorization": "Bearer sk-test"}
+        assert "x-opencode-session" not in headers
+        assert "User-Agent" not in headers
+
+    def test_session_from_env_wins_over_metadata(self, tmp_path: Path) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://opencode.ai/zen/go/v1",
+                "HIVEPILOT_OPENCODE_SESSION": "env-session",
+                "OPENCODE_SESSION": "other-env",
+            },
+            metadata={"conversation_id": "meta-session"},
+        )
+        assert headers["x-opencode-session"] == "env-session"
+
+    def test_session_from_opencode_session_env_when_hivepilot_unset(
+        self, tmp_path: Path
+    ) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://opencode.ai/zen/go/v1",
+                "OPENCODE_SESSION": "legacy-session",
+            },
+        )
+        assert headers["x-opencode-session"] == "legacy-session"
+
+    def test_session_from_conversation_metadata(self, tmp_path: Path) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://opencode.ai/zen/go/v1",
+            },
+            metadata={"conversation_id": "discord:99"},
+        )
+        assert headers["x-opencode-session"] == "discord:99"
+
+    def test_session_env_does_not_leak_onto_non_opencode_base(self, tmp_path: Path) -> None:
+        headers = _openai_run_api_headers(
+            tmp_path,
+            env={
+                "OPENAI_API_KEY": "sk-test",
+                "OPENAI_BASE_URL": "https://example.test/v1",
+                "HIVEPILOT_OPENCODE_SESSION": "must-not-send",
+            },
+            metadata={"conversation_id": "must-not-send-either"},
+        )
+        assert "x-opencode-session" not in headers
+        assert "User-Agent" not in headers
 
 
 class TestApiModeUsagePersistsViaRecordStep:

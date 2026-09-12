@@ -1298,6 +1298,10 @@ def route(
         options = {"mode": "api", "api_model": model}
         if runner_kind == "openai" and settings.chatops_concierge_api_base:
             runner_env["OPENAI_BASE_URL"] = settings.chatops_concierge_api_base
+        # OpenCode Go requires x-opencode-session. Thread the conversation so
+        # the openai runner can send a stable per-chat id (HP-87).
+        if runner_kind == "openai" and conversation_id and conversation_id.strip():
+            runner_env["HIVEPILOT_OPENCODE_SESSION"] = conversation_id.strip()
 
     runner_def = RunnerDefinition(
         name="concierge",
@@ -1308,12 +1312,15 @@ def route(
         timeout_seconds=_classifier_timeout_seconds(),
     )
     step = TaskStep(name="concierge", runner=runner_kind, prompt_file=prompt_file)
+    payload_metadata: dict[str, str] = {"extra_prompt": prompt, "prior_context": ""}
+    if conversation_id and conversation_id.strip():
+        payload_metadata["conversation_id"] = conversation_id.strip()
     payload = RunnerPayload(
         project_name="concierge",
         project=ProjectConfig(path=Path(".")),
         task_name="concierge",
         step=step,
-        metadata={"extra_prompt": prompt, "prior_context": ""},
+        metadata=payload_metadata,
         secrets={},
     )
 

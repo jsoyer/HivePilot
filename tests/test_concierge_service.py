@@ -130,9 +130,36 @@ class TestConciergeRunnerSelection:
         assert runner_def.options.get("api_model") == "glm-5.3-flash"
         # Base URL threaded as env so only the API KEY need be a secret.
         assert runner_def.env.get("OPENAI_BASE_URL") == "https://opencode.ai/zen/go/v1"
+        # No conversation_id on this call — do not invent a session env var;
+        # the runner falls back to the stable CLI default itself.
+        assert "HIVEPILOT_OPENCODE_SESSION" not in runner_def.env
         assert payload.step.runner == "openai"
         # API path has no tools key — the cli no-tools invariant does not apply.
         assert "tools" not in runner_def.options
+
+    def test_openai_runner_threads_conversation_id_as_opencode_session(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "openai")
+        monkeypatch.setattr(concierge_service.settings, "chatops_concierge_model", "glm-5.3-flash")
+        monkeypatch.setattr(
+            concierge_service.settings,
+            "chatops_concierge_api_base",
+            "https://opencode.ai/zen/go/v1",
+        )
+        raw = json.dumps({"kind": "answer", "answer_text": "ok"})
+        orch = _orch_with_capture(return_value=raw)
+        with patch.object(concierge_service, "_get_orchestrator", return_value=orch):
+            concierge_service.route(
+                "hi",
+                default_role="developer",
+                default_target="acme",
+                conversation_id="discord:42",
+            )
+
+        runner_def, payload = orch.registry.capture_definition.call_args.args
+        assert runner_def.env.get("HIVEPILOT_OPENCODE_SESSION") == "discord:42"
+        assert payload.metadata.get("conversation_id") == "discord:42"
 
     def test_openai_runner_omits_base_url_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(concierge_service.settings, "chatops_concierge_runner", "openai")

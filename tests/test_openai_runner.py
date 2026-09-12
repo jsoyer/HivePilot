@@ -106,6 +106,7 @@ class TestApiModeSuccess:
         assert url == "https://api.openai.com/v1/chat/completions"
         headers = mock_post.call_args.kwargs.get("headers", {})
         assert headers.get("Authorization") == f"Bearer {_FAKE_KEY}"
+        assert "x-opencode-session" not in headers
 
     def test_custom_base_url_from_env_targets_the_gateway(
         self, tmp_path: Path, monkeypatch
@@ -123,6 +124,9 @@ class TestApiModeSuccess:
             runner.capture(payload)
         url = mock_post.call_args.kwargs.get("url") or mock_post.call_args.args[0]
         assert url == "https://opencode.ai/zen/go/v1/chat/completions"
+        headers = mock_post.call_args.kwargs.get("headers", {})
+        assert headers.get("x-opencode-session") == "hivepilot-concierge"
+        assert headers.get("User-Agent", "").startswith("hivepilot/")
 
 
 class TestFailClosedMissingKey:

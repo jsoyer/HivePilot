@@ -184,6 +184,14 @@ export HIVEPILOT_CHATOPS_CONCIERGE_API_BASE=https://opencode.ai/zen/go/v1
 export OPENAI_API_KEY=<Zen key>
 ```
 
+Go subscribers should use `https://opencode.ai/zen/go/v1` (not a generic Zen
+URL). OpenCode Go requires `x-opencode-session` (it returns `400 MissingSessionID`
+without it) and prefers a non-generic `User-Agent`. HivePilot adds both
+automatically on any OpenAI-compat base whose URL contains `opencode.ai`. The
+session id is, in order: `HIVEPILOT_OPENCODE_SESSION` / `OPENCODE_SESSION`, the
+concierge `conversation_id` (threaded into the runner env), or the stable CLI
+default `hivepilot-concierge`.
+
 `HIVEPILOT_CHATOPS_CONCIERGE_MODE` and the Anthropic API-key fallback apply only
 when the runner is `claude`. The `openai` / `openrouter` paths are always
 `mode: api` (no tools exist on that HTTP call).
