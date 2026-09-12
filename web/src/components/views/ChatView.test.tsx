@@ -4,16 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
 import type { ConciergeDecision } from '@/lib/pollen-api'
 
-const { askConcierge, speakReply, postApproval, useRoleMock } = vi.hoisted(() => ({
+const { askConcierge, speakReply, postApproval, createRun, useRoleMock } = vi.hoisted(() => ({
   askConcierge: vi.fn(),
   speakReply: vi.fn(),
   postApproval: vi.fn(),
+  createRun: vi.fn(),
   useRoleMock: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, askConcierge, postApproval }
+  return { ...actual, askConcierge, postApproval, createRun }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -32,6 +33,7 @@ beforeEach(() => {
   askConcierge.mockReset()
   speakReply.mockReset()
   postApproval.mockReset().mockResolvedValue({ result: { success: true } })
+  createRun.mockReset().mockResolvedValue({ run_id: 9, status: 'running' })
   useRoleMock.mockReturnValue({
     role: 'admin',
     can: (needed: string) => ['read', 'run', 'approve', 'admin'].includes(needed),
@@ -107,7 +109,19 @@ describe('ChatView', () => {
     expect(askConcierge).toHaveBeenCalledOnce()
   })
 
-  it('surfaces a route decision as a proposal card, not an executed action', async () => {
+  it('does not put confirm buttons on an ANSWER', async () => {
+    askConcierge.mockResolvedValue(answer('Run 8 succeeded.'))
+    render()
+    type('how did the last run go?')
+    await send()
+    expect(container.querySelector('[data-testid="inbox-intent-card"]')).toBeNull()
+    expect(container.querySelector('[data-testid="inbox-intent-confirm"]')).toBeNull()
+    expect(container.querySelector('[data-testid="inbox-intent-cancel"]')).toBeNull()
+    expect(createRun).not.toHaveBeenCalled()
+    expect(postApproval).not.toHaveBeenCalled()
+  })
+
+  it('surfaces a ROUTE as a confirm card and does not execute until Confirm', async () => {
     askConcierge.mockResolvedValue({
       kind: 'route',
       answer_text: null,
@@ -123,10 +137,40 @@ describe('ChatView', () => {
     type('ask the dev to add a healthcheck')
     await send()
 
-    const proposal = container.querySelector('[data-testid="chat-proposal"]')
-    expect(proposal).not.toBeNull()
-    expect(proposal?.textContent).toContain('developer')
-    expect(proposal?.textContent).toContain('example-api')
+    const card = container.querySelector('[data-testid="inbox-intent-card"]')
+    expect(card).not.toBeNull()
+    expect(card?.textContent).toContain('developer')
+    expect(card?.textContent).toContain('example-api')
+    expect(card?.textContent).toMatch(/intent: ROUTE/)
+    expect(container.querySelector('[data-testid="inbox-intent-confirm"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="inbox-intent-cancel"]')).not.toBeNull()
+    expect(createRun).not.toHaveBeenCalled()
+    expect(postApproval).not.toHaveBeenCalled()
+  })
+
+  it('cancels a ROUTE without calling any execute API', async () => {
+    askConcierge.mockResolvedValue({
+      kind: 'route',
+      answer_text: null,
+      role_key: 'developer',
+      target: 'example-api',
+      order: 'add a healthcheck',
+      action: null,
+      params: null,
+      destructive: true,
+      dispatches: [],
+    })
+    render()
+    type('ask the dev to add a healthcheck')
+    await send()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="inbox-intent-cancel"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(createRun).not.toHaveBeenCalled()
+    expect(postApproval).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="inbox-intent-done"]')?.textContent).toMatch(/Cancelled/)
+    expect(container.querySelector('[data-testid="inbox-intent-confirm"]')).toBeNull()
   })
 
   it('speaks the concierge answer when a call is in progress', async () => {
@@ -147,7 +191,7 @@ describe('ChatView', () => {
     expect(container.querySelector('[data-testid="chat-message-error"]')).not.toBeNull()
   })
 
-  it('renders an inline approval card and posts approve for a concierge approve action', async () => {
+  it('renders an ACTION confirm card and posts approve only after Confirmer', async () => {
     askConcierge.mockResolvedValue({
       kind: 'action',
       answer_text: 'Approve run 42?',
@@ -162,13 +206,72 @@ describe('ChatView', () => {
     render()
     type('approve run 42')
     await send()
-    expect(container.querySelector('[data-testid="chat-approval-card"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="chat-proposal"]')).toBeNull()
+    const card = container.querySelector('[data-testid="inbox-intent-card"]')
+    expect(card).not.toBeNull()
+    expect(card?.getAttribute('data-intent')).toBe('ACTION')
+    expect(card?.textContent).toMatch(/intent: ACTION/)
+    expect(postApproval).not.toHaveBeenCalled()
     await act(async () => {
-      ;(container.querySelector('[data-testid="chat-approval-approve"]') as HTMLButtonElement).click()
+      ;(container.querySelector('[data-testid="inbox-intent-confirm"]') as HTMLButtonElement).click()
       await Promise.resolve()
     })
     expect(postApproval).toHaveBeenCalledWith(42, { approve: true, reason: undefined })
-    expect(container.querySelector('[data-testid="chat-approval-done"]')?.textContent).toMatch(/42/)
+    expect(container.querySelector('[data-testid="inbox-intent-done"]')?.textContent).toMatch(/42/)
+  })
+
+  it('triggers createRun only after Confirmer on an ACTION run', async () => {
+    askConcierge.mockResolvedValue({
+      kind: 'action',
+      answer_text: null,
+      role_key: null,
+      target: 'noxxy',
+      order: null,
+      action: 'run',
+      params: { task: 'docs', extra_prompt: 'add a healthcheck' },
+      destructive: true,
+      dispatches: [],
+    })
+    render()
+    type('run docs on noxxy')
+    await send()
+    expect(createRun).not.toHaveBeenCalled()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="inbox-intent-confirm"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(createRun).toHaveBeenCalledWith({
+      task: 'docs',
+      project: 'noxxy',
+      extra_prompt: 'add a healthcheck',
+      auto_git: true,
+    })
+  })
+
+  it('does not execute a pipeline ACTION until Confirmer, and Confirmer still does not invent a pipeline API', async () => {
+    askConcierge.mockResolvedValue({
+      kind: 'action',
+      answer_text: null,
+      role_key: null,
+      target: 'noxys',
+      order: null,
+      action: 'run_pipeline',
+      params: { pipeline: 'noxys', branch: 'staging' },
+      destructive: true,
+      dispatches: [],
+    })
+    render()
+    type('lance le pipeline noxys sur staging')
+    await send()
+    const card = container.querySelector('[data-testid="inbox-intent-card"]')
+    expect(card?.textContent).toMatch(/pipeline noxys/)
+    expect(card?.textContent).toMatch(/staging/)
+    expect(createRun).not.toHaveBeenCalled()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="inbox-intent-confirm"]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(createRun).not.toHaveBeenCalled()
+    expect(postApproval).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="inbox-intent-done"]')).not.toBeNull()
   })
 })
