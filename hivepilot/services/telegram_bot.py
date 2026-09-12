@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
-from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.services.notification_service import ensure_pollen_doors
+from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.services.telegram_doors import (
     APPROVALS,
     concierge_action_prompt,

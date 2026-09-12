@@ -28,9 +28,9 @@ from hivepilot.services.notification_service import (
     NOTIFIER_MAP,
     NotifierKindCollisionError,
     NotifierRegistry,
+    _notify_telegram,
     _send_discord,
     _send_slack,
-    _notify_telegram,
     send_notification,
 )
 
