@@ -14,6 +14,6 @@ Replay: `cd web && npm test -- src/lib/concierge-intent.test.ts src/components/v
 
 ## Testing
 
-- [ ] `cd web && npm test -- src/lib/concierge-intent.test.ts src/components/views/ChatView.test.tsx src/components/views/InboxView.test.tsx src/lib/i18n/fr.test.ts`
-- [ ] `cd web && npm test`
-- [ ] `cd web && npm run build` (refreshes `hivepilot/webui/static`; CI `git diff --exit-code hivepilot/webui/static`)
+- [x] `cd web && npm test -- src/lib/concierge-intent.test.ts src/components/views/ChatView.test.tsx src/components/views/InboxView.test.tsx src/lib/i18n/fr.test.ts` — 22 passed
+- [x] `cd web && npm test` — 952 passed
+- [x] `cd web && npm run build` (refreshed `hivepilot/webui/static`; CI `git diff --exit-code hivepilot/webui/static`)
