@@ -7,9 +7,8 @@ import { ApiForbiddenError } from '@/lib/api'
 // Runs/Graph) — mock every endpoint they call so this test exercises the
 // shell (sidebar nav, header, default view, switching) without depending on
 // network behavior. Each view's own loading/error/empty/data states are
-// covered by its dedicated test file. `fetchPluginsHealth` also backs the
-// header's issues chip (failed runs + degraded plugins) in addition to
-// `HealthView` — one mock, both consumers.
+// covered by its dedicated test file. `fetchPluginsHealth` + `fetchRuns` +
+// `fetchHealthProbes` also back the header issues chip (the Alerts feed).
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsSummary: vi.fn().mockResolvedValue({
     total: 0,
@@ -83,6 +82,10 @@ const mocks = vi.hoisted(() => ({
     latency_note: 'p50/p95 latency is not computable from current data.',
   }),
   fetchPluginsHealth: vi.fn().mockResolvedValue({ plugins: [], disabled: [] }),
+  fetchHealthProbes: vi.fn().mockResolvedValue({
+    agent_surface: { state: 'not_configured', backend: null },
+    otel: { state: 'never_arrived', rows: 0, age_hours: null },
+  }),
   fetchMcpServers: vi.fn().mockResolvedValue({ servers: [], cost_note: '' }),
   fetchMcpCatalog: vi.fn().mockResolvedValue({ catalog: [] }),
   fetchTypedTools: vi.fn().mockResolvedValue({ tools: [] }),
@@ -216,6 +219,10 @@ beforeEach(() => {
   window.localStorage.clear()
   for (const mock of Object.values(mocks)) mock.mockClear()
   mocks.fetchPluginsHealth.mockResolvedValue({ plugins: [], disabled: [] })
+  mocks.fetchHealthProbes.mockResolvedValue({
+    agent_surface: { state: 'not_configured', backend: null },
+    otel: { state: 'never_arrived', rows: 0, age_hours: null },
+  })
   mocks.fetchRuns.mockResolvedValue([])
   mocks.fetchPanels.mockResolvedValue({ panels: [] })
   container = document.createElement('div')
@@ -294,7 +301,7 @@ describe('Pollen', () => {
     expect(tab('Inbox').getAttribute('aria-selected')).toBe('true')
   })
 
-  it('switches to Approvals, Runs, and the Alerts stub from the sidebar', async () => {
+  it('switches to Approvals, Runs, and Alerts from the sidebar', async () => {
     await act(async () => {
       click(tab('Approvals'))
       await Promise.resolve()

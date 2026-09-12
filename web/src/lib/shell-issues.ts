@@ -1,17 +1,18 @@
 /**
- * Header + Alerts-door issue count for the redesign shell (PR1).
+ * Header + Alerts-door issue count for the redesign shell.
  *
- * Matches mock A: failed runs + degraded/error plugins. Pending approvals
- * stay on the Approvals door — they are not "issues" in this chip.
- * The Alerts *list* is a follow-up; this helper only counts.
+ * The count is the same feed the Alerts page renders — Failed runs,
+ * Degraded plugins, and a down Classifier. Pending approvals stay on the
+ * Approvals door. A healthy Classifier row is visible on Alerts but is not
+ * an "issue".
  */
+
+import { buildAlertFeed, countAlertIssues, type AlertFeedInput } from './alert-feed'
+
 export function countShellIssues(
-  plugins: ReadonlyArray<{ status: string }>,
-  runs: ReadonlyArray<{ status: string }>,
+  plugins: NonNullable<AlertFeedInput['plugins']>,
+  runs: NonNullable<AlertFeedInput['runs']>,
+  extras: Omit<AlertFeedInput, 'plugins' | 'runs'> = {},
 ): number {
-  const pluginIssues = plugins.filter(
-    (plugin) => plugin.status === 'degraded' || plugin.status === 'error',
-  ).length
-  const failedRuns = runs.filter((run) => run.status === 'failed').length
-  return pluginIssues + failedRuns
+  return countAlertIssues(buildAlertFeed({ plugins, runs, ...extras }))
 }

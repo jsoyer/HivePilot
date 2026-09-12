@@ -9,9 +9,9 @@ export interface IssuesChipProps {
 }
 
 /**
- * Single header status chip (redesign PR1) — "All clear" / "N issues".
- * Replaces the plugin-status pills row. Clicking opens the Alerts door;
- * the Alerts *list* itself is a follow-up PR.
+ * Single header status chip — "All clear" / "N issues".
+ * Count is the Alerts feed (Failed + Degraded + down Classifier).
+ * Clicking opens the Alerts door.
  */
 export function IssuesChip({ count, ready, onClick }: IssuesChipProps) {
   const t = useT()

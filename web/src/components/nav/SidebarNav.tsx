@@ -14,7 +14,7 @@ export interface SidebarNavProps {
   plusItems: NavItem[]
   plusLabel: string
   plusHint: string
-  /** Failed runs + degraded plugins — badge on the Alerts door only. */
+  /** Same count as the Alerts feed / header chip — badge on the Alerts door. */
   alertsCount?: number
   mobileOpen: boolean
   onCloseMobile: () => void
