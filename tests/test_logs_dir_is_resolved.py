@@ -90,3 +90,34 @@ class TestTheLogDirectoryFollowsBaseDirNotTheCwd:
         logging_module.get_logger(__name__).info("probe.line")
 
         assert (base / "runs" / "logs" / "hivepilot.log").exists()
+
+    def test_unwritable_log_file_falls_back_to_stderr(self, logging_module, tmp_path, monkeypatch):
+        """`hivepilot --version` from $HOME on noxysdevbot died here:
+        ~/runs/logs existed (often root-owned) and WatchedFileHandler raised
+        PermissionError during import. stderr-only must still configure."""
+        from hivepilot.config import settings
+
+        monkeypatch.setattr(settings, "logs_dir", tmp_path / "logs", raising=False)
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+
+        def _boom(*_a, **_k):
+            raise PermissionError(13, "Permission denied", str(tmp_path / "logs" / "hivepilot.log"))
+
+        monkeypatch.setattr(logging_module.logging.handlers, "WatchedFileHandler", _boom)
+        logging_module.configure_logging()
+        assert logging_module._configured is True
+        logging_module.get_logger(__name__).info("probe.after_fallback")
+
+    def test_unwritable_log_dir_mkdir_also_falls_back(self, logging_module, tmp_path, monkeypatch):
+        from hivepilot.config import settings
+
+        target = tmp_path / "blocked" / "logs"
+        monkeypatch.setattr(settings, "logs_dir", target, raising=False)
+        monkeypatch.setattr(settings, "base_dir", tmp_path, raising=False)
+
+        def _boom_mkdir(self, *args, **kwargs):
+            raise PermissionError(13, "Permission denied", str(self))
+
+        monkeypatch.setattr(Path, "mkdir", _boom_mkdir)
+        logging_module.configure_logging()
+        assert logging_module._configured is True

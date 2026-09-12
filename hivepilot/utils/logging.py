@@ -77,7 +77,9 @@ def configure_logging() -> None:
     # still reporting "active"). Fourth instance of the shape already
     # documented for state.db, the plugin install dir and the .env.
     log_dir = settings.resolve_path(settings.logs_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "hivepilot.log"
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    file_error: OSError | None = None
     # WatchedFileHandler, not FileHandler: it re-opens the path when the
     # inode changes, which is what makes EXTERNAL rotation safe.
     #
@@ -95,13 +97,22 @@ def configure_logging() -> None:
     # rename one file, each invalidating the descriptors of the others --
     # one writer wins, the rest are orphaned. Rotating belongs to a single
     # scheduled process; the writers only have to notice that it happened.
+    #
+    # Fail-open to stderr when the resolved path is not writable. The units
+    # write `/runs/logs` because `WorkingDirectory=/`. A login-shell CLI
+    # from `$HOME` resolves the default relative `runs/logs` to
+    # `~/runs/logs` — often created earlier as root — and used to die on
+    # `hivepilot --version` with PermissionError before printing anything.
+    # stderr-only is the same degrade as "file handler never attached".
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.handlers.WatchedFileHandler(log_path, encoding="utf-8"))
+    except OSError as exc:
+        file_error = exc
     logging.basicConfig(
         level=logging.INFO,
         format="%(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.handlers.WatchedFileHandler(log_dir / "hivepilot.log", encoding="utf-8"),
-        ],
+        handlers=handlers,
     )
     structlog.configure(
         processors=[
@@ -113,6 +124,12 @@ def configure_logging() -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
     _configured = True
+    if file_error is not None:
+        logging.getLogger(__name__).warning(
+            "logging.file_handler_unavailable path=%s error=%s",
+            log_path,
+            file_error,
+        )
 
 
 def get_logger(name: str):
