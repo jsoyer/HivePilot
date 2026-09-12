@@ -21,6 +21,7 @@ from hivepilot.services.telegram_doors import (
     INBOX_WELCOME_HTML,
     PERSISTENT_DOORS,
     RUNS,
+    SEMANTIC_TURN_ICONS,
     classify_notification_door,
     door_title,
     is_run_topic_key,
@@ -894,8 +895,7 @@ def _render_rich_card(
     is escaped via ``html.escape``. Softer Pollen card: bold title plus two
     meta lines (target/status, then first summary or next/confidence).
     """
-    _ = icon  # status lives on the meta line; icon chrome stayed noisy.
-    return soft_card_from_report(actor=actor, target=target, report=report)
+    return soft_card_from_report(actor=actor, target=target, report=report, icon=icon)
 
 
 # ---------------------------------------------------------------------------
@@ -1561,8 +1561,9 @@ def _stream_agent_turn_telegram(
     chat_id = settings.telegram_stream_chat_id
 
     avatar_key = role_key_from_actor(actor)
-    avatar_html = speaker_html(actor)
-    avatar_plain = speaker_plain(actor)
+    avatar_html = speaker_html(actor, icon=icon)
+    avatar_plain = speaker_plain(actor, icon=icon)
+    use_semantic_mark = icon in SEMANTIC_TURN_ICONS
 
     message_text: str | None = None
     parse_mode: str | None = None
@@ -1620,7 +1621,7 @@ def _stream_agent_turn_telegram(
         message_text = "\n".join(plain_lines[:3] if not summary else plain_lines)
         parse_mode = None
         html_aware = False
-        if avatar_key:
+        if avatar_key and not use_semantic_mark:
             stream_entities = custom_emoji_entities(avatar_key, prefix="")
 
     try:

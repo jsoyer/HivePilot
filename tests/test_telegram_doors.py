@@ -12,6 +12,7 @@ from hivepilot.services.telegram_doors import (
     INBOX,
     PERSISTENT_DOORS,
     RUNS,
+    SEMANTIC_TURN_ICONS,
     SYSTEM_EMOJI,
     classify_notification_door,
     concierge_action_prompt,
@@ -59,6 +60,18 @@ def test_system_uses_bee_not_a_new_role_glyph() -> None:
     assert SYSTEM_EMOJI not in CANONICAL_ROLE_EMOJI.values()
     assert speaker_plain("HivePilot").startswith("🐝")
     assert "🐝" in speaker_html("HivePilot")
+
+
+def test_semantic_turn_icons_override_role_charte() -> None:
+    """Challenge / request / answer keep ⚔️ ❓ ↩️; hand-offs stay role-charte."""
+    assert speaker_plain("CTO").startswith("🧭")
+    assert speaker_plain("CTO", icon="🗣").startswith("🧭")
+    assert speaker_plain("CTO", icon="⚔️").startswith("⚔️")
+    assert speaker_plain("CISO", icon="❓").startswith("❓")
+    assert speaker_plain("CISO", icon="↩️").startswith("↩️")
+    assert "⚔️" in speaker_html("CTO", icon="⚔️")
+    assert "🧭" not in speaker_html("CTO", icon="⚔️")
+    assert SEMANTIC_TURN_ICONS >= {"⚔️", "❓", "↩️"}
 
 
 def test_run_topic_title_is_emoji_plus_slug() -> None:

@@ -39,6 +39,10 @@ DOOR_TITLES: dict[str, str] = {
 
 SYSTEM_EMOJI = "🐝"
 
+# Challenge / question / answer (and sibling debate turns) keep their
+# historical semantic markers. Hand-offs (🗣) still use role-charte emojis.
+SEMANTIC_TURN_ICONS: frozenset[str] = frozenset({"⚔️", "❓", "↩️", "🛡️", "⚖️", "🙋"})
+
 INBOX_WELCOME_HTML = (
     f"{SYSTEM_EMOJI} <b>Inbox</b>\n"
     "Talk · classify · confirm\n"
@@ -104,13 +108,17 @@ def classify_notification_door(message: str) -> str:
     return INBOX
 
 
-def speaker_html(actor: str) -> str:
-    """Role-charte mark, or 🐝 for system / concierge / unmatched actors."""
+def speaker_html(actor: str, *, icon: str = "") -> str:
+    """Semantic turn mark, else role-charte / 🐝 for system and unmatched."""
+    if icon in SEMANTIC_TURN_ICONS:
+        return f"{icon} "
     mark = html_mark(role_key_from_actor(actor))
     return mark if mark else f"{SYSTEM_EMOJI} "
 
 
-def speaker_plain(actor: str) -> str:
+def speaker_plain(actor: str, *, icon: str = "") -> str:
+    if icon in SEMANTIC_TURN_ICONS:
+        return f"{icon} "
     role_key = role_key_from_actor(actor)
     emoji = fallback_emoji(role_key) or SYSTEM_EMOJI
     return f"{emoji} "
@@ -122,9 +130,10 @@ def render_soft_card(
     target: str | None = None,
     status: str | None = None,
     meta: str | None = None,
+    icon: str = "",
 ) -> str:
     """Bold title plus at most two meta lines. No chrome colors."""
-    lines = [f"{speaker_html(actor)}<b>{html.escape(actor)}</b>"]
+    lines = [f"{speaker_html(actor, icon=icon)}<b>{html.escape(actor)}</b>"]
     meta1_parts: list[str] = []
     if target:
         meta1_parts.append(html.escape(target))
@@ -142,6 +151,7 @@ def soft_card_from_report(
     actor: str,
     target: str | None,
     report: Any,
+    icon: str = "",
 ) -> str:
     """Softer stream card: title + two meta lines from a parsed report."""
     from hivepilot.services.agent_report import to_telegram_text
@@ -165,7 +175,9 @@ def soft_card_from_report(
         )
         if artifact:
             meta = str(artifact)
-    return render_soft_card(actor=actor, target=target, status=status, meta=meta)
+    return render_soft_card(
+        actor=actor, target=target, status=status, meta=meta, icon=icon
+    )
 
 
 def concierge_answer_text(answer: str) -> str:
