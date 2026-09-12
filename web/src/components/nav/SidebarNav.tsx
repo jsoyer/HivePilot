@@ -132,7 +132,10 @@ function NavTrigger({
       value={item.value}
       onClick={onCloseMobile}
       className={cn(
-        'min-h-11 w-full justify-start gap-2 rounded-[10px] px-3 text-sm md:min-h-10',
+        // shadcn TabsTrigger defaults to flex-1 + h-[calc(100%-1px)], which
+        // stretches the active door down the sidebar. Doors stay compact;
+        // Plus is pinned with mt-auto on the tray.
+        'h-auto min-h-11 w-full flex-none justify-start gap-2 rounded-[10px] px-3 text-sm md:min-h-10',
         'data-active:bg-card data-active:text-foreground data-active:shadow-none',
       )}
       title={item.label}

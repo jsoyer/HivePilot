@@ -209,6 +209,18 @@ describe('SidebarNav', () => {
     expect(list.className).not.toContain('justify-center')
   })
 
+  it('doors stay compact — they do not flex-grow to fill the sidebar', () => {
+    act(() => {
+      root.render(<Harness />)
+    })
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')) as HTMLElement[]
+    expect(tabs.length).toBeGreaterThan(0)
+    for (const tab of tabs) {
+      expect(tab.className).toMatch(/\bflex-none\b/)
+      expect(tab.className).toMatch(/\bh-auto\b/)
+    }
+  })
+
   it('the persistent sidebar breakpoint is md, not lg', () => {
     act(() => {
       root.render(<Harness />)
