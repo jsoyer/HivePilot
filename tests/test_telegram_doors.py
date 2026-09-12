@@ -115,6 +115,18 @@ def test_soft_card_from_report_uses_first_summary_only() -> None:
     assert "artifact.md" not in card
 
 
+def test_soft_card_uses_artifact_when_summary_absent() -> None:
+    report = SimpleNamespace(
+        status="PASS",
+        summary=[],
+        next_handoff=None,
+        confidence=None,
+        links=["/vault/artifact.md"],
+    )
+    card = soft_card_from_report(actor="Developer", target=None, report=report)
+    assert "artifact.md" in card
+
+
 def test_answer_never_looks_like_an_action_prompt() -> None:
     text = concierge_answer_text("Nothing is running right now.")
     assert text.startswith("🐝")

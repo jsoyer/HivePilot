@@ -187,14 +187,14 @@ def test_rich_card_html_sent_for_structured_summary(
 def test_rich_card_contains_bullets_not_raw_dump(
     captured_rich: list[dict],
 ) -> None:
-    """The rendered card has bullets from parsed summary, NOT the raw agent dump."""
+    """Softer card: first summary line only — not the raw dump, not a bullet list."""
     structured = "## status\nPASS\n## summary\n- bullet one\n- bullet two\n"
     ns.stream_agent_turn(actor="Blaise (CTO)", summary=structured)
     assert len(captured_rich) == 1
     msg = captured_rich[0]["msg"]
-    assert "• bullet one" in msg
-    assert "• bullet two" in msg
-    # The raw markdown header syntax should not appear verbatim
+    assert "bullet one" in msg
+    assert "bullet two" not in msg
+    assert "•" not in msg
     assert "## status" not in msg
 
 

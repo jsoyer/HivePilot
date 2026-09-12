@@ -117,5 +117,8 @@ def test_stream_agent_turn_artifact_link_in_card(rich_capture: list[dict]) -> No
     assert len(rich_capture) == 1
     msg = rich_capture[0]["msg"]
 
-    # The artifact path should appear in the card
-    assert "artifact.md" in msg, f"Artifact link not found in card: {msg!r}"
+    # Soft card: title + status + first summary. Vault links stay in the
+    # artifact, not a third chrome line, unless there is no summary.
+    assert "<b>Developer</b>" in msg
+    assert "Implementation complete" in msg
+    assert msg.count("\n") == 2

@@ -18,5 +18,5 @@ This slice closes the Pollen redesign Telegram follow-up (PR1–PR4 were web-onl
 
 ## Testing
 
-- [ ] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_approval_forum_topic.py tests/test_stream_topics.py tests/test_telegram_formatting.py tests/test_notification_service.py tests/test_topic_naming_convention.py tests/test_doctor_liveness.py tests/test_notifier_registry.py tests/test_telegram_avatars.py`
-- [ ] `hivepilot lint` (if the env is ready)
+- [x] `pytest` Telegram / topic / concierge / doctor / chatops suites — 347 passed
+- [x] `hivepilot lint` — no new Telegram/config errors (pre-existing missing example project paths in this environment)
