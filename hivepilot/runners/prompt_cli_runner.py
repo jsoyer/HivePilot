@@ -7,6 +7,7 @@ from typing import Any, ClassVar
 
 import requests
 
+from hivepilot import __version__
 from hivepilot.config import Settings
 from hivepilot.models import RunnerDefinition
 from hivepilot.runners.base import (
@@ -23,6 +24,49 @@ from hivepilot.utils.logging import get_logger
 from hivepilot.utils.remote import build_invocation
 
 logger = get_logger(__name__)
+
+# OpenCode Go (`https://opencode.ai/zen/go/v1`) rejects chat-completions
+# without `x-opencode-session` (400 MissingSessionID) and prefers a
+# non-generic User-Agent. Any OpenAI-compat base whose URL contains
+# `opencode.ai` gets both headers; other gateways stay Authorization-only.
+_OPENCODE_HOST_MARK = "opencode.ai"
+_OPENCODE_SESSION_ENV = ("HIVEPILOT_OPENCODE_SESSION", "OPENCODE_SESSION")
+_OPENCODE_SESSION_METADATA = ("conversation_id", "session_id")
+_OPENCODE_SESSION_DEFAULT = "hivepilot-concierge"
+
+
+def _is_opencode_compat_endpoint(endpoint: str) -> bool:
+    """True when *endpoint* is an OpenCode Zen/Go (or other opencode.ai) gateway."""
+    return _OPENCODE_HOST_MARK in endpoint.lower()
+
+
+def _first_nonempty_str(*values: object) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                return stripped
+    return None
+
+
+def _resolve_opencode_session(env: dict[str, str], payload: RunnerPayload) -> str:
+    """Stable OpenCode session id: env, then payload metadata, then CLI default."""
+    from_env = _first_nonempty_str(*(env.get(key) for key in _OPENCODE_SESSION_ENV))
+    if from_env:
+        return from_env
+    from_meta = _first_nonempty_str(
+        *(payload.metadata.get(key) for key in _OPENCODE_SESSION_METADATA)
+    )
+    if from_meta:
+        return from_meta
+    return _OPENCODE_SESSION_DEFAULT
+
+
+def _opencode_compat_headers(env: dict[str, str], payload: RunnerPayload) -> dict[str, str]:
+    return {
+        "User-Agent": f"hivepilot/{__version__}",
+        "x-opencode-session": _resolve_opencode_session(env, payload),
+    }
 
 
 @dataclass
@@ -440,9 +484,12 @@ class PromptCliRunner(BaseRunner):
             api_key = env.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY missing.")
+            openai_headers = {"Authorization": f"Bearer {api_key}"}
+            if _is_opencode_compat_endpoint(endpoint):
+                openai_headers.update(_opencode_compat_headers(env, payload))
             return self._post_json(
                 url=f"{endpoint}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers=openai_headers,
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
                 timeout=timeout,
             )

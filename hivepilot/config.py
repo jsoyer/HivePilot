@@ -1367,10 +1367,12 @@ class Settings(BaseSettings):
     # docs/INTEGRATIONS.md "Natural-language concierge (opt-in)".
     chatops_concierge_runner: str = "claude"
     # Base URL for the OpenAI-compatible endpoint when
-    # chatops_concierge_runner="openai" (e.g. "https://opencode.ai/zen/go/v1").
-    # None -> the openai runner's default (https://api.openai.com/v1). Threaded
-    # to the classifier call as OPENAI_BASE_URL so only the API KEY needs to be
-    # a secret.
+    # chatops_concierge_runner="openai" (e.g. "https://opencode.ai/zen/go/v1"
+    # for OpenCode Go subscribers). None -> the openai runner's default
+    # (https://api.openai.com/v1). Threaded to the classifier call as
+    # OPENAI_BASE_URL so only the API KEY needs to be a secret. When the base
+    # contains `opencode.ai`, the openai runner also sends `x-opencode-session`
+    # and `User-Agent: hivepilot/<version>` automatically (HP-87).
     chatops_concierge_api_base: str | None = None
     linear_api_key: str | None = None
     linear_team_id: str | None = None  # default team for issue creation

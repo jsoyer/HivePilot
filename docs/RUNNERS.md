@@ -103,6 +103,9 @@ Registered at import time — no PATH check required. Each can be opted out via
   Point the base URL at OpenCode Zen/Go, Ollama Cloud, LM Studio, or vLLM. Default
   `model_profiles.yaml` maps each profile's `openai:` / `opencode:` column to the
   HP-19 OSS preset (selectable via `HIVEPILOT_ROSTER_PRESET=oss`).
+  OpenCode Go (`https://opencode.ai/zen/go/v1`) also needs `x-opencode-session`
+  and a non-generic `User-Agent`; both are added automatically when the base URL
+  contains `opencode.ai` (HP-87).
 
 ### PATH-gated plugin agent kinds
 
