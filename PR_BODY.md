@@ -6,9 +6,9 @@ HP-87: OpenCode Go (`https://opencode.ai/zen/go/v1`) returns `400 MissingSession
 
 Owning issue: [HP-87](https://linear.app/js-workspace/issue/HP-87/opencode-go-send-x-opencode-session-on-concierge-openai-compat-runner) (follow-up to HP-18).
 
-Replay: `hivepilot run example-api docs --dry-run`
+Replay: `pytest tests/test_prompt_cli_runner.py::TestOpenaiOpencodeGoHeaders tests/test_concierge_service.py::TestConciergeRunnerSelection -q`
 
 ## Testing
 
-- [x] `pytest tests/test_prompt_cli_runner.py tests/test_openai_runner.py tests/test_concierge_service.py -q`
-- [x] `hivepilot lint`
+- [x] `pytest tests/test_prompt_cli_runner.py tests/test_openai_runner.py tests/test_concierge_service.py tests/test_role_draft_service.py -q` — 188 passed (174 + 14 role-draft)
+- [x] `hivepilot lint` — pre-existing missing example/acme project paths on this box; no new lint errors from this change
