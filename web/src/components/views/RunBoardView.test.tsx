@@ -26,8 +26,6 @@ vi.mock('@/lib/role-context', async (importOriginal) => {
   return { ...actual, useRole: useRoleMock }
 })
 
-// Capture the callback RunBoardView registers with the realtime SSE hook so a
-// test can deliver a synthetic change event and assert the board refetches.
 const { useEventStreamMock, lastStreamHandler } = vi.hoisted(() => {
   const ref: { current: ((event: { entity_type: string }) => void) | null } = { current: null }
   return {
@@ -38,7 +36,7 @@ const { useEventStreamMock, lastStreamHandler } = vi.hoisted(() => {
 
 vi.mock('@/lib/use-event-stream', () => ({ useEventStream: useEventStreamMock }))
 
-import { RunBoardView } from './RunBoardView'
+import { boardPlacement, isHistoryRun, RunBoardView } from './RunBoardView'
 
 function setSelectValue(select: HTMLSelectElement, value: string) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!
@@ -85,6 +83,12 @@ async function mountResolved() {
   })
 }
 
+function clickTab(name: 'board' | 'history') {
+  act(() => {
+    ;(container.querySelector(`[data-testid="runs-surface-${name}"]`) as HTMLButtonElement).click()
+  })
+}
+
 beforeEach(() => {
   window.localStorage.clear()
   fetchRuns.mockReset()
@@ -125,6 +129,21 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+describe('boardPlacement', () => {
+  it('sends done and cancelled to History, and keeps live work on the four columns', () => {
+    expect(boardPlacement('new')).toBe('queued')
+    expect(boardPlacement('running')).toBe('running')
+    expect(boardPlacement('approval')).toBe('waitingApproval')
+    expect(boardPlacement('failed')).toBe('failed')
+    expect(boardPlacement('success')).toBe('history')
+    expect(boardPlacement('complete')).toBe('history')
+    expect(boardPlacement('cancelled')).toBe('history')
+    expect(boardPlacement('paused')).toBe('waitingApproval')
+    expect(isHistoryRun('success')).toBe(true)
+    expect(isHistoryRun('running')).toBe(false)
+  })
+})
+
 describe('RunBoardView', () => {
   it('shows a loading indicator before the list resolves', () => {
     fetchRuns.mockReturnValue(new Promise(() => {}))
@@ -138,10 +157,8 @@ describe('RunBoardView', () => {
     mockRole('run', 1)
     await mountResolved()
 
-    // No form on screen until the operator asks for one.
     expect(container.querySelector('form')).toBeNull()
     expect(container.querySelector('#new-run-task')).toBeNull()
-    // The board itself is what renders.
     expect(container.querySelector('[data-testid="run-board-kanban-scroll"]')).not.toBeNull()
   })
 
@@ -182,9 +199,7 @@ describe('RunBoardView', () => {
     const empty = container.querySelector('[data-testid="run-board-empty"]')
     expect(empty).not.toBeNull()
     expect(empty?.textContent).toMatch(/no runs yet/i)
-    // Not just "nothing": it says what fills the board...
-    expect(empty?.textContent).toMatch(/grouped by stage/i)
-    // ...and offers the way to fill it.
+    expect(empty?.textContent).toMatch(/history/i)
     expect(empty?.querySelector('[data-slot="empty-state-action"] button')).not.toBeNull()
   })
 
@@ -198,7 +213,7 @@ describe('RunBoardView', () => {
     expect(empty?.querySelector('[data-slot="empty-state-action"]')).toBeNull()
   })
 
-  it('CRITICAL: maps every real run status to the correct column, faithfully (not invented)', async () => {
+  it('CRITICAL: live statuses land on the four board columns; Done never does', async () => {
     fetchRuns.mockResolvedValue([
       run({ id: 1, status: 'new' }),
       run({ id: 2, status: 'running' }),
@@ -215,8 +230,48 @@ describe('RunBoardView', () => {
     expect(at('running')?.querySelector('[data-testid="run-board-card-2"]')).not.toBeNull()
     expect(at('waitingApproval')?.querySelector('[data-testid="run-board-card-3"]')).not.toBeNull()
     expect(at('failed')?.querySelector('[data-testid="run-board-card-4"]')).not.toBeNull()
-    expect(at('done')?.querySelector('[data-testid="run-board-card-5"]')).not.toBeNull()
-    expect(at('other')?.querySelector('[data-testid="run-board-card-6"]')).not.toBeNull()
+    expect(at('waitingApproval')?.querySelector('[data-testid="run-board-card-6"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-board-column-done"]')).toBeNull()
+    expect(container.querySelector('[data-testid="run-board-column-other"]')).toBeNull()
+    expect(container.querySelector('[data-testid="run-board-card-5"]')).toBeNull()
+  })
+
+  it('CRITICAL: History lists completed runs and never a Done kanban column', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 5, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+      run({ id: 8, status: 'cancelled', finished_at: '2026-07-18T10:00:04Z' }),
+      run({ id: 2, status: 'running' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+
+    clickTab('history')
+
+    expect(container.querySelector('[data-testid="run-board-column-done"]')).toBeNull()
+    expect(container.querySelector('[data-testid="run-history-table"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-history-row-5"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-history-row-8"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-history-row-2"]')).toBeNull()
+    expect(container.querySelector('[data-testid="run-history-caption"]')?.textContent).toMatch(/2/)
+  })
+
+  it('the Done shortcut opens History', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 5, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+      run({ id: 2, status: 'running' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+
+    const shortcut = container.querySelector('[data-testid="runs-done-shortcut"]') as HTMLButtonElement
+    expect(shortcut.textContent).toMatch(/done \(1\)/i)
+    act(() => {
+      shortcut.click()
+    })
+    expect(container.querySelector('[data-testid="run-history-row-5"]')).not.toBeNull()
+    expect(
+      container.querySelector('[data-testid="runs-surface-history"]')?.getAttribute('aria-selected'),
+    ).toBe('true')
   })
 
   it('column counts reflect the number of cards in each column', async () => {
@@ -233,7 +288,7 @@ describe('RunBoardView', () => {
     expect(container.querySelector('[data-testid="run-board-count-queued"]')?.textContent).toBe('0')
   })
 
-  it('CRITICAL: an empty column collapses to a rail instead of claiming a populated column width', async () => {
+  it('CRITICAL: empty columns stay equal-width rails with an em dash', async () => {
     fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' })])
     mockRole('run', 1)
     await mountResolved()
@@ -243,10 +298,9 @@ describe('RunBoardView', () => {
 
     expect(running?.getAttribute('data-empty')).toBe('false')
     expect(queued?.getAttribute('data-empty')).toBe('true')
-    expect(running?.className).toMatch(/sm:w-72/)
-    expect(queued?.className).toMatch(/sm:w-28/)
-    expect(queued?.className).not.toMatch(/sm:w-72/)
-    // And it no longer repeats "Nothing here." in every empty column.
+    expect(running?.className).toMatch(/flex-1/)
+    expect(queued?.className).toMatch(/flex-1/)
+    expect(queued?.textContent).toContain('—')
     expect(container.textContent).not.toMatch(/nothing here/i)
   })
 
@@ -272,58 +326,47 @@ describe('RunBoardView', () => {
     expect(container.textContent).not.toContain('SECRET INTERNAL DETAIL')
   })
 
-  it('CRITICAL: a failed card states the reason from the canonical status, never invents one', async () => {
+  it('a card shows title, project, and age — not a fabricated reason', async () => {
     fetchRuns.mockResolvedValue([
-      run({ id: 1, status: 'test_failure', finished_at: '2026-07-18T10:00:08Z' }),
-      run({ id: 2, status: 'security_blocker', finished_at: '2026-07-18T10:00:08Z' }),
-      run({ id: 3, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+      run({ id: 1, task: 'groomer-scan', project: 'noxys', status: 'failed' }),
     ])
     mockRole('run', 1)
     await mountResolved()
 
-    expect(container.querySelector('[data-testid="run-board-reason-1"]')?.textContent).toMatch(
-      /tests failed/i,
-    )
-    expect(container.querySelector('[data-testid="run-board-reason-2"]')?.textContent).toMatch(
-      /security gate/i,
-    )
-    // A nominal status has no reason to state, so none is fabricated.
-    expect(container.querySelector('[data-testid="run-board-reason-3"]')).toBeNull()
+    const card = container.querySelector('[data-testid="run-board-card-1"]')
+    expect(card?.textContent).toContain('groomer-scan')
+    expect(card?.textContent).toContain('noxys')
+    expect(card?.textContent).toContain('#1')
+    expect(container.querySelector('[data-testid="run-board-reason-1"]')).toBeNull()
   })
 
-  it('CRITICAL: a card carries a real timestamp, not just a duration', async () => {
+  it('CRITICAL: a card carries age with the full stamp on hover', async () => {
     const started = '2026-07-18T10:00:00Z'
     fetchRuns.mockResolvedValue([run({ id: 1, started_at: started, finished_at: '2026-07-18T10:00:08Z' })])
     mockRole('run', 1)
     await mountResolved()
 
     const card = container.querySelector('[data-testid="run-board-card-1"]')
-    expect(card?.textContent).toContain(new Date(started).toLocaleTimeString())
-    expect(card?.textContent).toMatch(/8s/)
-    // Full stamp available on hover rather than crowding the card.
     expect(card?.querySelector(`[title="${new Date(started).toLocaleString()}"]`)).not.toBeNull()
   })
 
-  it('applies a severity stripe to failed/waiting-approval cards, not to done/running/queued cards', async () => {
+  it('applies a 2px crit stripe to failed cards only — no glow, no waiting stripe', async () => {
     fetchRuns.mockResolvedValue([
       run({ id: 1, status: 'failed' }),
       run({ id: 2, status: 'approval' }),
-      run({ id: 3, status: 'success' }),
-      run({ id: 4, status: 'running' }),
+      run({ id: 3, status: 'running' }),
     ])
     mockRole('run', 1)
     await mountResolved()
 
-    expect(container.querySelector('[data-testid="run-board-card-1"]')?.className).toMatch(
-      /border-l-\[var\(--color-crit\)\]/,
-    )
-    expect(container.querySelector('[data-testid="run-board-card-2"]')?.className).toMatch(
-      /border-l-\[var\(--color-warn\)\]/,
-    )
-    expect(container.querySelector('[data-testid="run-board-card-3"]')?.className).not.toMatch(
+    const failed = container.querySelector('[data-testid="run-board-card-1"]')
+    expect(failed?.className).toMatch(/border-l-2/)
+    expect(failed?.className).toMatch(/border-l-\[var\(--color-crit\)\]/)
+    expect(failed?.className).toMatch(/shadow-none/)
+    expect(container.querySelector('[data-testid="run-board-card-2"]')?.className).not.toMatch(
       /border-l-\[var\(--color-(crit|warn)\)\]/,
     )
-    expect(container.querySelector('[data-testid="run-board-card-4"]')?.className).not.toMatch(
+    expect(container.querySelector('[data-testid="run-board-card-3"]')?.className).not.toMatch(
       /border-l-\[var\(--color-(crit|warn)\)\]/,
     )
   })
@@ -353,6 +396,23 @@ describe('RunBoardView', () => {
     expect(container.querySelector('[data-testid="run-board-result-count"]')?.textContent).toContain('2')
   })
 
+  it('History can filter completed runs by status', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 5, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+      run({ id: 8, status: 'cancelled', finished_at: '2026-07-18T10:00:04Z' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+    clickTab('history')
+
+    act(() => {
+      setSelectValue(container.querySelector('#run-filter-status') as HTMLSelectElement, 'cancelled')
+    })
+
+    expect(container.querySelector('[data-testid="run-history-row-8"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-history-row-5"]')).toBeNull()
+  })
+
   it('a filter combination with no match explains itself and offers a way back', async () => {
     fetchRuns.mockResolvedValue([
       run({ id: 1, project: 'acme-web', task: 'deploy' }),
@@ -378,7 +438,7 @@ describe('RunBoardView', () => {
     expect(container.querySelector('[data-testid="run-board-card-1"]')).not.toBeNull()
   })
 
-  it('CRITICAL: the density toggle compacts cards and persists across mounts', async () => {
+  it('CRITICAL: the density toggle persists across mounts', async () => {
     fetchRuns.mockResolvedValue([run({ id: 1, finished_at: '2026-07-18T10:00:08Z' })])
     mockRole('run', 1)
     await mountResolved()
@@ -388,13 +448,8 @@ describe('RunBoardView', () => {
     act(() => {
       ;(container.querySelector('[data-testid="run-board-density-compact"]') as HTMLButtonElement).click()
     })
-    const compactCard = container.querySelector('[data-testid="run-board-card-1"]')
-    expect(compactCard?.className).toMatch(/\bp-2\b/)
-    // Compact drops the secondary lines, keeping identity + status.
-    expect(compactCard?.textContent).toContain('acme-web')
-    expect(compactCard?.textContent).not.toContain(new Date('2026-07-18T10:00:00Z').toLocaleTimeString())
+    expect(container.querySelector('[data-testid="run-board-card-1"]')?.className).toMatch(/\bp-2\b/)
 
-    // Remount: the choice survives.
     act(() => {
       root.unmount()
     })
@@ -411,6 +466,24 @@ describe('RunBoardView', () => {
     const card = container.querySelector('[data-testid="run-board-card-7"]') as HTMLElement
     await act(async () => {
       card.click()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(fetchRun).toHaveBeenCalledWith(7)
+  })
+
+  it('clicking a History row opens the run detail panel', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 7, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+    clickTab('history')
+
+    const row = container.querySelector('[data-testid="run-history-row-7"]') as HTMLElement
+    await act(async () => {
+      row.click()
       await Promise.resolve()
     })
 
@@ -455,7 +528,6 @@ describe('RunBoardView', () => {
       auto_git: false,
     })
     expect(fetchRuns.mock.calls.length).toBeGreaterThanOrEqual(2)
-    // The drawer closes on success — back to content.
     expect(container.querySelector('#new-run-task')).toBeNull()
   })
 
@@ -506,13 +578,14 @@ describe('RunBoardView', () => {
     expect(container.textContent).toMatch(/run-rank/i)
   })
 
-  it('renders a cancelled run in the "Other" column with distinct destructive styling', async () => {
+  it('renders a cancelled run in History, not on the board', async () => {
     fetchRuns.mockResolvedValue([run({ id: 1, status: 'cancelled' })])
     mockRole('run', 1)
     await mountResolved()
 
-    const other = container.querySelector('[data-testid="run-board-column-other"]')
-    expect(other?.querySelector('[data-testid="run-board-card-1"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-board-card-1"]')).toBeNull()
+    clickTab('history')
+    expect(container.querySelector('[data-testid="run-history-row-1"]')).not.toBeNull()
     const badge = Array.from(container.querySelectorAll('span')).find((el) => el.textContent === 'cancelled')
     expect(badge?.className).toMatch(/destructive/)
   })
@@ -532,6 +605,8 @@ describe('RunBoardView', () => {
     })
 
     expect(container.textContent).toContain('Exécutions')
+    expect(container.textContent).toContain('Tableau')
+    expect(container.textContent).toContain('Historique')
   })
 
   it('refreshes the board when a run change arrives on the realtime stream', async () => {
@@ -558,6 +633,7 @@ describe('RunBoardView', () => {
 
     expect(fetchRuns).toHaveBeenCalledTimes(2)
     expect(container.querySelector('[data-testid="run-board-card-2"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-board-card-1"]')).toBeNull()
   })
 
   it('ignores non-run change events (no refetch)', async () => {
@@ -592,70 +668,15 @@ describe('RunBoardView', () => {
     expect(lastCall?.[1]).toEqual({ enabled: false })
   })
 
-  it('shows a zone-coded status glyph on each card', async () => {
-    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' }), run({ id: 2, status: 'failed' })])
-    mockRole('run', 1)
-    await mountResolved()
-
-    const card1 = container.querySelector('[data-testid="run-board-card-1"]')
-    const card2 = container.querySelector('[data-testid="run-board-card-2"]')
-    expect(card1?.querySelector('[data-testid="status-glyph"]')?.getAttribute('data-zone')).toBe(
-      'working',
-    )
-    expect(card2?.querySelector('[data-testid="status-glyph"]')?.getAttribute('data-zone')).toBe(
-      'needs_you',
-    )
-  })
-
-  it('shows an attention summary with per-zone counts', async () => {
+  it('an all-done tenant still shows the four empty live columns plus a History shortcut', async () => {
     fetchRuns.mockResolvedValue([
-      run({ id: 1, status: 'running' }),
-      run({ id: 2, status: 'failed' }),
-      run({ id: 3, status: 'failed' }),
-      run({ id: 4, status: 'success' }),
+      run({ id: 5, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
     ])
     mockRole('run', 1)
     await mountResolved()
 
-    expect(container.querySelector('[data-testid="board-attention-summary"]')).not.toBeNull()
-    expect(
-      container.querySelector('[data-testid="board-attention-count-needs_you"]')?.textContent,
-    ).toBe('2')
-    expect(
-      container.querySelector('[data-testid="board-attention-count-working"]')?.textContent,
-    ).toBe('1')
-    expect(
-      container.querySelector('[data-testid="board-attention-count-ready"]')?.textContent,
-    ).toBe('1')
-  })
-
-  it('filters the board to a zone when its chip is clicked', async () => {
-    fetchRuns.mockResolvedValue([run({ id: 1, status: 'running' }), run({ id: 2, status: 'failed' })])
-    mockRole('run', 1)
-    await mountResolved()
-
-    const chip = container.querySelector(
-      '[data-testid="board-attention-zone-needs_you"]',
-    ) as HTMLButtonElement
-    await act(async () => {
-      chip.click()
-      await Promise.resolve()
-    })
-
-    expect(container.querySelector('[data-testid="run-board-card-2"]')).not.toBeNull()
-    expect(container.querySelector('[data-testid="run-board-card-1"]')).toBeNull()
-    expect(chip.getAttribute('aria-pressed')).toBe('true')
-  })
-
-  it('shows step count and last heartbeat on a card when present', async () => {
-    fetchRuns.mockResolvedValue([
-      run({ id: 1, status: 'running', step_count: 3, last_activity_at: '2026-07-18T10:05:00Z' }),
-    ])
-    mockRole('run', 1)
-    await mountResolved()
-
-    const progress = container.querySelector('[data-testid="run-board-progress-1"]')
-    expect(progress).not.toBeNull()
-    expect(progress?.textContent).toContain('3')
+    expect(container.querySelector('[data-testid="run-board-column-queued"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="run-board-column-done"]')).toBeNull()
+    expect(container.querySelector('[data-testid="runs-done-shortcut"]')).not.toBeNull()
   })
 })
