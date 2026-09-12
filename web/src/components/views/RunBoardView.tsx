@@ -2,19 +2,24 @@ import { Plus } from 'lucide-react'
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Select } from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { EmptyState } from '@/components/dashboard/EmptyState'
-import { StatusGlyph } from '@/components/dashboard/StatusGlyph'
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
-import { formatAge, formatClock, formatElapsed, formatTimestamp } from '@/lib/format-time'
+import { formatAge, formatElapsed, formatTimestamp } from '@/lib/format-time'
 import { useT, type TranslationKey } from '@/lib/i18n'
 import { cancelRun, fetchRuns, type RunSummary } from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import {
-  type AttentionZone,
-  attentionZone,
   DONE_STATUSES,
   FAILED_STATUSES,
   type RunColumn,
@@ -32,88 +37,42 @@ import { RunDetailPanel } from './RunDetailPanel'
  * `<= 3000` per the sprint's acceptance criteria. */
 const POLL_INTERVAL_MS = 3000
 
-// How many runs the board requests. 50 used to be hard-coded with no way to
-// ask for fewer, so an operator watching one pipeline had to read 50 cards.
-// The API bounds the value to 1-500; these are the steps offered in the UI.
 const RUN_LIMIT_OPTIONS = [10, 25, 50, 100, 200] as const
 const DEFAULT_RUN_LIMIT = 50
 
-// Status -> column/zone classification lives in the shared derived-status
-// contract (`@/lib/status-contract`, HP-42), the single source of truth
-// mirrored from `hivepilot/services/status_contract.py`. Re-exported here so
-// existing importers of `RunBoardView` keep resolving `runColumn`/`RunColumn`.
 export { type RunColumn, runColumn }
 
-const COLUMN_ORDER: RunColumn[] = ['queued', 'running', 'waitingApproval', 'failed', 'done']
+/** Live kanban only. Done is History — never a fifth full-height column. */
+export const BOARD_COLUMNS: RunColumn[] = ['queued', 'running', 'waitingApproval', 'failed']
 
-// Attention zones (HP-42/HP-43): the "where should I look?" lens over the board,
-// most → least urgent. A representative status per zone drives the zone chip's
-// glyph so it matches the cards' glyphs exactly.
-const ATTENTION_ZONE_ORDER: AttentionZone[] = ['needs_you', 'in_review', 'working', 'queued', 'ready']
+export type RunsSurface = 'board' | 'history'
 
-const ZONE_LABEL_KEY: Record<AttentionZone, TranslationKey> = {
-  needs_you: 'board.zoneNeedsYou',
-  in_review: 'board.zoneInReview',
-  working: 'board.zoneWorking',
-  queued: 'board.zoneQueued',
-  ready: 'board.zoneReady',
-  other: 'board.zoneOther',
+/**
+ * Where a run belongs after the Board / History split.
+ *
+ * `runColumn` (HP-42) is unchanged. This is a presentation overlay:
+ * success/complete → History; cancelled (terminal, not live) → History;
+ * paused/deferred stay on the board under Waiting so they remain visible
+ * without inventing a fifth column.
+ */
+export function boardPlacement(status: string): RunColumn | 'history' {
+  const column = runColumn(status)
+  if (column === 'done') return 'history'
+  if (column === 'other') {
+    return status.trim().toLowerCase() === 'cancelled' ? 'history' : 'waitingApproval'
+  }
+  return column
 }
 
-const ZONE_SAMPLE_STATUS: Record<AttentionZone, string> = {
-  needs_you: 'failed',
-  in_review: 'review',
-  working: 'running',
-  queued: 'new',
-  ready: 'success',
-  other: 'cancelled',
+export function isHistoryRun(status: string): boolean {
+  return boardPlacement(status) === 'history'
 }
 
-const COLUMN_LABEL_KEY: Record<RunColumn, TranslationKey> = {
+const COLUMN_LABEL_KEY: Record<(typeof BOARD_COLUMNS)[number], TranslationKey> = {
   queued: 'board.colQueued',
   running: 'board.colRunning',
   waitingApproval: 'board.colWaitingApproval',
   failed: 'board.colFailed',
-  done: 'board.colDone',
-  other: 'board.colOther',
-}
-
-/** Severity stripe — only on the two non-nominal columns (a human needs to
- * look: something failed, or something is blocked on a decision). Neither
- * `queued`/`running`/`done` gets one — all three are nominal states, not
- * something an operator needs to be visually flagged toward. */
-const STRIPE_CLASS: Partial<Record<RunColumn, string>> = {
-  failed: 'border-l-4 border-l-[var(--color-crit)]',
-  waitingApproval: 'border-l-4 border-l-[var(--color-warn)]',
-}
-
-/**
- * Why a run is not nominal, in words, keyed off the ONLY real signal the
- * list endpoint carries: the canonical status.
- *
- * `RunSummary.detail` is untrusted, unredacted free text and is never
- * rendered anywhere in this app, so it cannot be the failure reason. The
- * status string, however, IS the classification the pipeline itself
- * assigned (`test_failure`, `security_blocker`, `rate_limit`, ...), which is
- * exactly the "why" an operator scanning the board needs. A status with no
- * entry here gets NO reason line — never a guessed one.
- *
- * Deliberately NOT shown on a card: cost. `GET /v1/runs` has no cost field
- * (only the per-run drill-down aggregates per-step cost), and fetching a
- * detail per card on every poll tick is exactly the N-requests-per-tick
- * pattern this view has always refused. A cost figure on a card would have
- * to be invented.
- */
-const REASON_KEY: Record<string, TranslationKey> = {
-  failed: 'board.reasonFailed',
-  denied: 'board.reasonDenied',
-  rate_limit: 'board.reasonRateLimit',
-  auth_expired: 'board.reasonAuthExpired',
-  test_failure: 'board.reasonTestFailure',
-  security_blocker: 'board.reasonSecurityBlocker',
-  cancelled: 'board.reasonCancelled',
-  paused: 'board.reasonPaused',
-  deferred: 'board.reasonDeferred',
 }
 
 function statusVariant(status: string): 'default' | 'secondary' | 'destructive' {
@@ -128,24 +87,6 @@ interface StopButtonProps {
   onStopped: () => void
 }
 
-/**
- * Stop control for a single `status === 'running'` card (`POST /v1/runs/
- * {run_id}/cancel`) -- only rendered by the parent when `useRole().can('run')`
- * (defense-in-depth; the server enforces the same `run` role regardless of
- * what the client shows, see `cancel_run` in `api_service.py`). Requires
- * confirmation before sending the request. Cancellation is cooperative and
- * best-effort: the run resolves to `cancelled` at its NEXT step boundary, not
- * immediately -- this component doesn't wait for that, it relies on
- * `RunBoardView`'s existing poll loop (and an immediate `onStopped` refresh)
- * to surface the eventual status transition. A `409` (the run already
- * reached a terminal status between this card rendering and the click -- a
- * race with the poll loop, not a bug) surfaces as an inline error, never a
- * crash.
- *
- * The button's own `onClick` calls `stopPropagation` -- it lives inside a
- * clickable `RunCard` (click -> opens the run detail panel), and Stop must
- * never also open the detail panel out from under an in-flight cancel.
- */
 function StopButton({ run, onStopped }: StopButtonProps) {
   const t = useT()
   const [submitting, setSubmitting] = useState(false)
@@ -200,34 +141,14 @@ interface RunCardProps {
 }
 
 /**
- * One Kanban card.
- *
- * Visual hierarchy, in priority order for someone scanning the board:
- *  1. a severity stripe on the two columns that need a human;
- *  2. the status chip, in semantic colour;
- *  3. the project (the thing an operator recognises), at full weight;
- *  4. everything else — run id, task, when it started, how long it took —
- *     in muted mono, subordinate.
- *
- * The "when" was the biggest omission in the previous card: it showed only
- * "ran for 8s" with no clue WHEN. Every card now carries a real local
- * timestamp (`formatClock`, full stamp on hover via `title`) next to the
- * duration.
- *
- * Never renders `RunSummary.detail` (untrusted free text) — only typed,
- * structural fields, plus a translated reason derived from the canonical
- * status (see `REASON_KEY`).
- *
- * The whole card is clickable (opens `RunDetailPanel`); keyboard-operable
- * via `role="button"`/`tabIndex`/Enter-or-Space (this is a `div`, not a
- * native `<button>`, because it also hosts a real nested `<button>` — the
- * Stop control — which native button-in-button nesting disallows).
+ * Kanban card — title (task), project + id, age. Failed gets a 2px crit
+ * left border and no glow. Never renders `RunSummary.detail`.
  */
 function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunCardProps) {
   const t = useT()
   const compact = density === 'compact'
-  const reasonKey = REASON_KEY[run.status.trim().toLowerCase()]
-  const duration = run.finished_at ? formatElapsed(run.started_at, run.finished_at) : formatAge(run.started_at)
+  const age = formatAge(run.last_activity_at ?? run.started_at)
+  const when = run.last_activity_at ?? run.started_at
 
   function open() {
     onOpenDetail(run.id)
@@ -250,74 +171,26 @@ function RunCard({ run, column, density, canRun, onOpenDetail, onStopped }: RunC
       onClick={open}
       onKeyDown={handleKeyDown}
       className={cn(
-        'cursor-pointer gap-1.5 transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-        compact ? 'p-2' : 'p-3',
-        STRIPE_CLASS[column],
+        'cursor-pointer rounded-[10px] shadow-none transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+        compact ? 'gap-1 p-2' : 'gap-1.5 p-3',
+        column === 'failed' && 'border-l-2 border-l-[var(--color-crit)]',
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <StatusGlyph status={run.status} />
-          <span className={cn('truncate font-medium', compact && 'text-xs')}>{run.project}</span>
-        </div>
-        <Badge variant={statusVariant(run.status)} className="shrink-0">
-          {run.status}
-        </Badge>
+      <div className={cn('truncate font-medium', compact && 'text-xs')}>{run.task}</div>
+      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+        <span className="truncate">{run.project}</span>
+        <span className="metric-mono shrink-0">#{run.id}</span>
       </div>
-
-      <div className="flex items-baseline justify-between gap-2 text-xs">
-        <span className="truncate text-muted-foreground">{run.task}</span>
-        <span className="metric-mono shrink-0 text-muted-foreground">#{run.id}</span>
+      <div className="metric-mono text-xs text-muted-foreground" title={formatTimestamp(when)}>
+        {age}
       </div>
-
-      {!compact && (
-        <div className="metric-mono flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
-          <span title={formatTimestamp(run.started_at)}>{formatClock(run.started_at)}</span>
-          <span>
-            {run.finished_at
-              ? t('board.duration', { duration })
-              : t('board.startedAgo', { age: duration })}
-          </span>
-        </div>
-      )}
-
-      {!compact && (run.step_count !== undefined || run.last_activity_at) && (
-        <div
-          data-testid={`run-board-progress-${run.id}`}
-          className="metric-mono flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
-        >
-          {run.step_count !== undefined ? (
-            <span>{t('board.stepCount', { count: run.step_count })}</span>
-          ) : (
-            <span />
-          )}
-          {run.last_activity_at && (
-            <span title={formatTimestamp(run.last_activity_at)}>
-              {t('board.lastHeartbeat', { age: formatAge(run.last_activity_at) })}
-            </span>
-          )}
-        </div>
-      )}
-
-      {!compact && reasonKey && (
-        <p
-          data-testid={`run-board-reason-${run.id}`}
-          className={cn(
-            'text-xs',
-            column === 'failed' ? 'text-[var(--color-crit)]' : 'text-muted-foreground',
-          )}
-        >
-          {t(reasonKey)}
-        </p>
-      )}
-
       {canRun && run.status === 'running' && <StopButton run={run} onStopped={onStopped} />}
     </Card>
   )
 }
 
 interface RunColumnSectionProps {
-  column: RunColumn
+  column: (typeof BOARD_COLUMNS)[number]
   runs: RunSummary[]
   density: BoardDensity
   canRun: boolean
@@ -325,16 +198,6 @@ interface RunColumnSectionProps {
   onStopped: () => void
 }
 
-/**
- * One board column.
- *
- * An EMPTY column collapses to a narrow rail instead of claiming the same
- * width as a column with forty cards in it — the previous board gave three
- * empty columns equal width and repeated "Nothing here." in each of them.
- * The count badge already says the column is empty; the body just holds an
- * em-dash so the rail still reads as a column and not as a rendering
- * failure.
- */
 function RunColumnSection({
   column,
   runs,
@@ -350,28 +213,22 @@ function RunColumnSection({
     <div
       data-testid={`run-board-column-${column}`}
       data-empty={empty ? 'true' : 'false'}
-      className={cn(
-        'flex flex-col gap-2 sm:shrink-0',
-        empty ? 'sm:w-28' : 'sm:w-72',
-        empty && 'opacity-70',
-      )}
+      className="flex min-h-64 min-w-0 flex-1 flex-col gap-2 sm:min-w-[14rem]"
     >
       <div className="flex items-center justify-between gap-2 px-1">
-        <h3 className={cn('truncate text-sm font-semibold', empty && 'text-muted-foreground')}>
-          {t(COLUMN_LABEL_KEY[column])}
-        </h3>
-        <Badge variant="outline" data-testid={`run-board-count-${column}`} className="metric-mono shrink-0">
+        <h3 className={cn('eyebrow truncate', empty && 'opacity-70')}>{t(COLUMN_LABEL_KEY[column])}</h3>
+        <span data-testid={`run-board-count-${column}`} className="metric-mono text-xs text-muted-foreground">
           {runs.length}
-        </Badge>
+        </span>
       </div>
       <div
         className={cn(
-          'flex flex-col gap-2 rounded-lg bg-muted/30 p-2',
-          empty ? 'min-h-10 items-center justify-center' : 'min-h-16',
+          'flex flex-1 flex-col gap-2 rounded-[10px] border border-border bg-card p-2',
+          empty && 'items-center justify-center',
         )}
       >
         {empty ? (
-          <span aria-hidden="true" className="metric-mono text-xs text-muted-foreground">
+          <span aria-hidden="true" className="metric-mono text-sm text-muted-foreground">
             —
           </span>
         ) : (
@@ -400,34 +257,19 @@ interface RunBoardProps {
   onStopped: () => void
 }
 
-/**
- * Groups `runs` by `runColumn` and renders one section per column. The
- * `'other'` column only appears when it actually has a run in it -- the
- * five canonical columns (`COLUMN_ORDER`) always render, even empty, so an
- * operator always sees the full board shape; `'other'` is the true "if a
- * status doesn't fit" edge case and stays out of the way otherwise.
- * Mobile: columns stack vertically; `sm:` and up: a horizontally-scrolling
- * row -- a Kanban board's natural responsive shape.
- *
- * The scroll region owns its own overflow (`kanban-scroll`, see
- * `index.css`) so the page body never scrolls sideways; `tabIndex={0}` +
- * `role="region"` + `aria-label` make it keyboard-scrollable rather than
- * mouse-drag-only; `min-w-0` keeps the row shrinkable so `overflow-x-auto`
- * can never be defeated by an ancestor flex context.
- */
 function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardProps) {
   const t = useT()
-  const grouped: Record<RunColumn, RunSummary[]> = {
+  const grouped: Record<(typeof BOARD_COLUMNS)[number], RunSummary[]> = {
     queued: [],
     running: [],
     waitingApproval: [],
     failed: [],
-    done: [],
-    other: [],
   }
-  for (const run of runs) grouped[runColumn(run.status)].push(run)
-
-  const columns: RunColumn[] = grouped.other.length > 0 ? [...COLUMN_ORDER, 'other'] : COLUMN_ORDER
+  for (const run of runs) {
+    const placement = boardPlacement(run.status)
+    if (placement === 'history') continue
+    grouped[placement].push(run)
+  }
 
   return (
     <div
@@ -435,9 +277,9 @@ function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardPr
       role="region"
       aria-label={t('board.kanbanScrollLabel')}
       tabIndex={0}
-      className="kanban-scroll flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:overflow-x-auto sm:pb-2"
+      className="kanban-scroll flex min-w-0 flex-col gap-4 sm:flex-row sm:items-stretch sm:overflow-x-auto sm:pb-2"
     >
-      {columns.map((column) => (
+      {BOARD_COLUMNS.map((column) => (
         <RunColumnSection
           key={column}
           column={column}
@@ -452,122 +294,109 @@ function RunBoard({ runs, density, canRun, onOpenDetail, onStopped }: RunBoardPr
   )
 }
 
-const ALL = '__all__'
-const NO_RUNS: RunSummary[] = []
-
-interface AttentionSummaryProps {
+interface HistoryTableProps {
   runs: RunSummary[]
-  active: AttentionZone | null
-  onSelect: (zone: AttentionZone | null) => void
+  onOpenDetail: (runId: number) => void
 }
 
-/**
- * Attention-first lens over the board (HP-43): a row of zone chips — glyph +
- * label + count — ordered most → least urgent, driven by the shared
- * derived-status contract (HP-42). Clicking a zone filters the board to it (and
- * clicking it again, or "All", clears). Counts are over ALL runs (not the
- * filtered set) so the operator can always see and switch the full
- * distribution. A chip only appears when its zone is non-empty.
- */
-function AttentionSummary({ runs, active, onSelect }: AttentionSummaryProps) {
-  const t = useT()
-  const counts = useMemo(() => {
-    const c: Record<AttentionZone, number> = {
-      needs_you: 0,
-      in_review: 0,
-      working: 0,
-      queued: 0,
-      ready: 0,
-      other: 0,
-    }
-    for (const run of runs) c[attentionZone(run.status)] += 1
-    return c
-  }, [runs])
+function historySortStamp(run: RunSummary): number {
+  const raw = run.finished_at ?? run.started_at
+  const ms = Date.parse(raw)
+  return Number.isNaN(ms) ? 0 : ms
+}
 
-  const zones = [...ATTENTION_ZONE_ORDER, 'other' as const].filter((zone) => counts[zone] > 0)
-  if (zones.length === 0) return null
+function HistoryTable({ runs, onOpenDetail }: HistoryTableProps) {
+  const t = useT()
+  const sorted = useMemo(
+    () => [...runs].sort((a, b) => historySortStamp(b) - historySortStamp(a)),
+    [runs],
+  )
+
+  function openFromKeyboard(event: KeyboardEvent<HTMLTableRowElement>, runId: number) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      onOpenDetail(runId)
+    }
+  }
 
   return (
-    <div
-      data-testid="board-attention-summary"
-      role="group"
-      aria-label={t('board.attentionFilterLabel')}
-      className="flex flex-wrap items-center gap-2"
-    >
-      <span className="eyebrow">{t('board.attentionTitle')}</span>
-      <button
-        type="button"
-        data-testid="board-attention-all"
-        aria-pressed={active === null}
-        onClick={() => onSelect(null)}
-        className={cn(
-          'rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-          active === null
-            ? 'border-primary bg-primary/10 text-foreground'
-            : 'border-border text-muted-foreground hover:bg-muted',
-        )}
-      >
-        {t('board.allZones')}
-      </button>
-      {zones.map((zone) => (
-        <button
-          key={zone}
-          type="button"
-          data-testid={`board-attention-zone-${zone}`}
-          aria-pressed={active === zone}
-          onClick={() => onSelect(active === zone ? null : zone)}
-          className={cn(
-            'flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-            active === zone
-              ? 'border-primary bg-primary/10 text-foreground'
-              : 'border-border text-muted-foreground hover:bg-muted',
-          )}
-        >
-          <StatusGlyph status={ZONE_SAMPLE_STATUS[zone]} />
-          <span>{t(ZONE_LABEL_KEY[zone])}</span>
-          <span className="metric-mono" data-testid={`board-attention-count-${zone}`}>
-            {counts[zone]}
-          </span>
-        </button>
-      ))}
-    </div>
+    <Table scrollLabel={t('board.historyScrollLabel')} data-testid="run-history-table">
+      <TableHeader>
+        <TableRow>
+          <TableHead>{t('common.task')}</TableHead>
+          <TableHead>{t('common.project')}</TableHead>
+          <TableHead>{t('common.run')}</TableHead>
+          <TableHead>{t('common.status')}</TableHead>
+          <TableHead>{t('board.age')}</TableHead>
+          <TableHead>{t('runs.finished')}</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {sorted.map((run) => {
+          const duration = run.finished_at ? formatElapsed(run.started_at, run.finished_at) : formatAge(run.started_at)
+          return (
+            <TableRow
+              key={run.id}
+              data-testid={`run-history-row-${run.id}`}
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer"
+              aria-label={t('board.cardAriaLabel', { id: run.id, task: run.task, project: run.project })}
+              onClick={() => onOpenDetail(run.id)}
+              onKeyDown={(event) => openFromKeyboard(event, run.id)}
+            >
+              <TableCell className="font-medium">{run.task}</TableCell>
+              <TableCell className="text-muted-foreground">{run.project}</TableCell>
+              <TableCell className="metric-mono text-muted-foreground">#{run.id}</TableCell>
+              <TableCell>
+                <Badge variant={statusVariant(run.status)}>{run.status}</Badge>
+              </TableCell>
+              <TableCell className="metric-mono text-muted-foreground">{duration}</TableCell>
+              <TableCell className="metric-mono text-muted-foreground" title={formatTimestamp(run.finished_at)}>
+                {run.finished_at ? formatAge(run.finished_at) : '—'}
+              </TableCell>
+            </TableRow>
+          )
+        })}
+      </TableBody>
+    </Table>
   )
 }
+
+const ALL = '__all__'
+const NO_RUNS: RunSummary[] = []
 
 interface ToolbarProps {
   projects: string[]
   tasks: string[]
+  statuses?: string[]
   project: string
   task: string
-  density: BoardDensity
+  status?: string
+  density?: BoardDensity
   shown: number
   total: number
   onProject: (value: string) => void
   onTask: (value: string) => void
-  onDensity: (value: BoardDensity) => void
+  onStatus?: (value: string) => void
+  onDensity?: (value: BoardDensity) => void
   limit: number
   onLimit: (value: number) => void
 }
 
-/**
- * Board controls: two filters and a density toggle.
- *
- * The filter options are derived from the runs actually on the board, not
- * from the full `/v1/projects` / `/v1/tasks` catalogue — filtering to a
- * project with nothing on the board would just produce five empty columns.
- * (The New Run drawer, which needs the values the SERVER accepts rather
- * than the ones currently visible, uses the catalogue endpoints instead.)
- */
 function Toolbar({
   projects,
   tasks,
+  statuses,
   project,
   task,
+  status,
   density,
   shown,
   total,
   onProject,
   onTask,
+  onStatus,
   onDensity,
   limit,
   onLimit,
@@ -575,10 +404,7 @@ function Toolbar({
   const t = useT()
 
   return (
-    <div
-      data-testid="run-board-toolbar"
-      className="flex flex-wrap items-end gap-3 border-b border-border pb-3"
-    >
+    <div data-testid="run-board-toolbar" className="flex flex-wrap items-end gap-3">
       <div className="flex flex-col gap-1">
         <label htmlFor="run-filter-project" className="eyebrow">
           {t('common.project')}
@@ -617,28 +443,52 @@ function Toolbar({
         </Select>
       </div>
 
-      <div className="flex flex-col gap-1">
-        <span className="eyebrow">{t('board.density')}</span>
-        <div className="flex overflow-hidden rounded-md border border-border" data-testid="run-board-density">
-          {(['comfortable', 'compact'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              data-testid={`run-board-density-${option}`}
-              aria-pressed={density === option}
-              onClick={() => onDensity(option)}
-              className={cn(
-                'px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-                density === option
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-transparent text-muted-foreground hover:bg-muted',
-              )}
-            >
-              {option === 'comfortable' ? t('board.densityComfortable') : t('board.densityCompact')}
-            </button>
-          ))}
+      {statuses && onStatus && status !== undefined && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor="run-filter-status" className="eyebrow">
+            {t('common.status')}
+          </label>
+          <Select
+            id="run-filter-status"
+            data-testid="run-history-status-filter"
+            className="min-w-32"
+            value={status}
+            onChange={(event) => onStatus(event.target.value)}
+          >
+            <option value={ALL}>{t('board.allStatuses')}</option>
+            {statuses.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
         </div>
-      </div>
+      )}
+
+      {density && onDensity && (
+        <div className="flex flex-col gap-1">
+          <span className="eyebrow">{t('board.density')}</span>
+          <div className="flex overflow-hidden rounded-[10px] border border-border" data-testid="run-board-density">
+            {(['comfortable', 'compact'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                data-testid={`run-board-density-${option}`}
+                aria-pressed={density === option}
+                onClick={() => onDensity(option)}
+                className={cn(
+                  'px-2.5 py-1 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                  density === option
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-transparent text-muted-foreground hover:bg-muted',
+                )}
+              >
+                {option === 'comfortable' ? t('board.densityComfortable') : t('board.densityCompact')}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-1">
         <label htmlFor="run-board-limit" className="eyebrow">
@@ -659,34 +509,54 @@ function Toolbar({
         </Select>
       </div>
 
-      <span
-        data-testid="run-board-result-count"
-        className="metric-mono ml-auto text-xs text-muted-foreground"
-      >
+      <span data-testid="run-board-result-count" className="metric-mono ml-auto text-xs text-muted-foreground">
         {t('board.showingCount', { shown, total })}
       </span>
     </div>
   )
 }
 
+interface SurfaceTabsProps {
+  surface: RunsSurface
+  onSurface: (value: RunsSurface) => void
+}
+
+function SurfaceTabs({ surface, onSurface }: SurfaceTabsProps) {
+  const t = useT()
+  return (
+    <div
+      data-testid="runs-surface-tabs"
+      role="tablist"
+      aria-label={t('board.tabsLabel')}
+      className="flex overflow-hidden rounded-full border border-border"
+    >
+      {(['board', 'history'] as const).map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="tab"
+          data-testid={`runs-surface-${option}`}
+          aria-selected={surface === option}
+          onClick={() => onSurface(option)}
+          className={cn(
+            'px-3 py-1 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+            surface === option
+              ? 'bg-muted text-foreground'
+              : 'bg-transparent text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {option === 'board' ? t('board.tabBoard') : t('board.tabHistory')}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 /**
- * Run Board — the Operate section's primary view.
+ * Runs — Board of live work, History of completed runs (redesign mock B).
  *
- * Content first: the board fills the view, and "New run" is a header button
- * that opens a drawer (`NewRunDrawer`). The previous layout nailed a
- * permanently-open creation form to the top third of the page, above any
- * content, with free-text project/task boxes for values the server can
- * enumerate.
- *
- * `GET /v1/runs` (tenant-filtered for non-admin roles, see `list_runs` in
- * `api_service.py`), polled every `POLL_INTERVAL_MS` so status transitions
- * show up without a manual refresh. It requires a `run`-rank token (stricter
- * than the token gate's own `read` floor) — a plain `read` token 403s and
- * sees a graceful message.
- *
- * Clicking any card opens `RunDetailPanel` for that run's step-level
- * timeline (which is also where per-step provider/model/token/cost live —
- * the list endpoint carries none of it, so the board never claims to).
+ * Done never occupies a kanban column. The four live columns stay Queued /
+ * Running / Waiting / Failed. New run stays a header CTA.
  */
 export function RunBoardView() {
   const t = useT()
@@ -697,20 +567,13 @@ export function RunBoardView() {
   const [creating, setCreating] = useState(false)
   const [projectFilter, setProjectFilter] = useState<string>(ALL)
   const [taskFilter, setTaskFilter] = useState<string>(ALL)
-  const [zoneFilter, setZoneFilter] = useState<AttentionZone | null>(null)
+  const [statusFilter, setStatusFilter] = useState<string>(ALL)
+  const [surface, setSurface] = usePersistedState<RunsSurface>('pollen.runs.surface', 'board')
   const [density, setDensity] = usePersistedState<BoardDensity>('pollen.board.density', 'comfortable')
-  // How many runs to ask the API for. Persisted like density: an operator
-  // watching one pipeline should not have to re-narrow the board on every
-  // visit. Bounded server-side (1-500); these are the offered steps.
   const [limit, setLimit] = usePersistedState<number>('pollen.board.limit', DEFAULT_RUN_LIMIT)
   const state = useAsyncData(() => fetchRuns(limit), [refreshKey, limit])
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
-  // Poll on an interval, cleaned up on unmount (or before the next interval
-  // is registered) so a stale timer from a previous mount never leaks. This is
-  // now a SAFETY NET behind the realtime SSE subscription below — it still
-  // catches up if the stream is unavailable (proxy, network), but the live
-  // feed is what makes status transitions appear near-instantly.
   useEffect(() => {
     const interval = window.setInterval(() => {
       setRefreshKey((key) => key + 1)
@@ -718,10 +581,6 @@ export function RunBoardView() {
     return () => window.clearInterval(interval)
   }, [])
 
-  // Realtime: refresh the board the moment a run changes (HP-40 bus → HP-41
-  // SSE). Coalesced so a burst of step events triggers one refetch, not one
-  // per event. Disabled when the board itself is forbidden (a read-only token
-  // sees no runs, so there is nothing to keep live).
   const refreshTimer = useRef<number | null>(null)
   useEffect(() => {
     return () => {
@@ -740,147 +599,205 @@ export function RunBoardView() {
     { enabled: !isForbidden },
   )
 
-  // A module-level constant for the not-yet-loaded case, so `runs` keeps a
-  // stable identity between renders and the memos below actually memoize.
   const runs = state.status === 'success' ? state.data : NO_RUNS
+  const boardRuns = useMemo(() => runs.filter((run) => !isHistoryRun(run.status)), [runs])
+  const historyRuns = useMemo(() => runs.filter((run) => isHistoryRun(run.status)), [runs])
+  const surfaceRuns = surface === 'board' ? boardRuns : historyRuns
 
   const projects = useMemo(
-    () => [...new Set(runs.map((r) => r.project))].sort((a, b) => a.localeCompare(b)),
-    [runs],
+    () => [...new Set(surfaceRuns.map((r) => r.project))].sort((a, b) => a.localeCompare(b)),
+    [surfaceRuns],
   )
   const tasks = useMemo(
-    () => [...new Set(runs.map((r) => r.task))].sort((a, b) => a.localeCompare(b)),
-    [runs],
+    () => [...new Set(surfaceRuns.map((r) => r.task))].sort((a, b) => a.localeCompare(b)),
+    [surfaceRuns],
+  )
+  const historyStatuses = useMemo(
+    () => [...new Set(historyRuns.map((r) => r.status))].sort((a, b) => a.localeCompare(b)),
+    [historyRuns],
   )
 
   const filtered = useMemo(
     () =>
-      runs.filter(
+      surfaceRuns.filter(
         (run) =>
           (projectFilter === ALL || run.project === projectFilter) &&
           (taskFilter === ALL || run.task === taskFilter) &&
-          (zoneFilter === null || attentionZone(run.status) === zoneFilter),
+          (surface === 'board' || statusFilter === ALL || run.status === statusFilter),
       ),
-    [runs, projectFilter, taskFilter, zoneFilter],
+    [surfaceRuns, projectFilter, taskFilter, statusFilter, surface],
   )
 
   function handleRefresh() {
     setRefreshKey((key) => key + 1)
   }
 
+  function clearFilters() {
+    setProjectFilter(ALL)
+    setTaskFilter(ALL)
+    setStatusFilter(ALL)
+  }
+
+  function openHistory() {
+    setSurface('history')
+    clearFilters()
+  }
+
   return (
-    <>
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('nav.runs')}</CardTitle>
-          <CardDescription>{canRun ? t('board.description') : t('board.descriptionReadOnly')}</CardDescription>
+    <div className="flex w-full flex-col gap-6" data-testid="runs-page">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-3xl font-semibold tracking-tight">{t('nav.runs')}</h2>
+          <p className="text-sm text-muted-foreground">
+            {canRun ? t('board.subtitle') : t('board.subtitleReadOnly')}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <SurfaceTabs
+            surface={surface}
+            onSurface={(value) => {
+              setSurface(value)
+              clearFilters()
+            }}
+          />
           {canRun && (
-            <CardAction>
-              <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
+            <Button size="sm" className="gap-1.5 rounded-full" onClick={() => setCreating(true)}>
+              <Plus className="size-4" />
+              {t('runs.newRunButton')}
+            </Button>
+          )}
+        </div>
+      </header>
+
+      {isForbidden && (
+        <div
+          data-testid="runs-forbidden"
+          className="rounded-[10px] border border-border bg-card p-3 text-sm text-muted-foreground"
+        >
+          {t('common.requiresRunRankLead')} <span className="font-medium text-foreground">run-rank</span>{' '}
+          {t('common.requiresRunRankTail')}
+        </div>
+      )}
+
+      {!isForbidden && state.status === 'loading' && (
+        <div role="status" className="animate-pulse text-sm text-muted-foreground">
+          {t('common.loading')}
+        </div>
+      )}
+
+      {!isForbidden && state.status === 'error' && (
+        <div
+          role="alert"
+          className="rounded-[10px] border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {describeApiError(state.error)}
+        </div>
+      )}
+
+      {!isForbidden && state.status === 'success' && runs.length === 0 && (
+        <EmptyState
+          data-testid="run-board-empty"
+          title={t('board.noRunsTitle')}
+          body={canRun ? t('board.noRunsBody') : t('board.noRunsBodyReadOnly')}
+          action={
+            canRun ? (
+              <Button size="sm" className="gap-1.5 rounded-full" onClick={() => setCreating(true)}>
                 <Plus className="size-4" />
                 {t('runs.newRunButton')}
               </Button>
-            </CardAction>
-          )}
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {isForbidden && (
-            <div
-              data-testid="runs-forbidden"
-              className="rounded-lg border border-border bg-muted/50 p-3 text-sm text-muted-foreground"
+            ) : undefined
+          }
+          className="max-w-xl"
+        />
+      )}
+
+      {!isForbidden && state.status === 'success' && runs.length > 0 && (
+        <div className="flex flex-col gap-4">
+          {surface === 'board' && historyRuns.length > 0 && (
+            <button
+              type="button"
+              data-testid="runs-done-shortcut"
+              onClick={openHistory}
+              className="self-start text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
             >
-              {t('common.requiresRunRankLead')} <span className="font-medium text-foreground">run-rank</span>{' '}
-              {t('common.requiresRunRankTail')}
-            </div>
+              {t('board.doneShortcut', { count: historyRuns.length })}
+            </button>
           )}
 
-          {!isForbidden && state.status === 'loading' && (
-            <div role="status" className="animate-pulse text-sm text-muted-foreground">
-              {t('common.loading')}
-            </div>
+          {surface === 'history' && (
+            <p data-testid="run-history-caption" className="text-sm text-muted-foreground">
+              {t('board.historyCaption', { count: historyRuns.length })}
+            </p>
           )}
 
-          {!isForbidden && state.status === 'error' && (
-            <div
-              role="alert"
-              className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-            >
-              {describeApiError(state.error)}
-            </div>
-          )}
+          <Toolbar
+            projects={projects}
+            tasks={tasks}
+            statuses={surface === 'history' ? historyStatuses : undefined}
+            project={projectFilter}
+            task={taskFilter}
+            status={surface === 'history' ? statusFilter : undefined}
+            density={surface === 'board' ? density : undefined}
+            shown={filtered.length}
+            total={surfaceRuns.length}
+            onProject={setProjectFilter}
+            onTask={setTaskFilter}
+            onStatus={surface === 'history' ? setStatusFilter : undefined}
+            onDensity={surface === 'board' ? setDensity : undefined}
+            limit={limit}
+            onLimit={setLimit}
+          />
 
-          {!isForbidden && state.status === 'success' && runs.length === 0 && (
+          {surface === 'board' && boardRuns.length > 0 && filtered.length === 0 && (
             <EmptyState
-              data-testid="run-board-empty"
-              title={t('board.noRunsTitle')}
-              body={canRun ? t('board.noRunsBody') : t('board.noRunsBodyReadOnly')}
+              title={t('board.noMatchTitle')}
+              body={t('board.noMatchBody')}
               action={
-                canRun ? (
-                  <Button size="sm" className="gap-1.5" onClick={() => setCreating(true)}>
-                    <Plus className="size-4" />
-                    {t('runs.newRunButton')}
-                  </Button>
-                ) : undefined
+                <Button size="sm" variant="outline" onClick={clearFilters}>
+                  {t('board.clearFilters')}
+                </Button>
               }
               className="max-w-xl"
             />
           )}
 
-          {!isForbidden && state.status === 'success' && runs.length > 0 && (
-            <>
-              <AttentionSummary runs={runs} active={zoneFilter} onSelect={setZoneFilter} />
-              <Toolbar
-                projects={projects}
-                tasks={tasks}
-                project={projectFilter}
-                task={taskFilter}
-                density={density}
-                shown={filtered.length}
-                total={runs.length}
-                onProject={setProjectFilter}
-                onTask={setTaskFilter}
-                onDensity={setDensity}
-                limit={limit}
-                onLimit={setLimit}
-              />
-
-              {filtered.length === 0 ? (
-                <EmptyState
-                  title={t('board.noMatchTitle')}
-                  body={t('board.noMatchBody')}
-                  action={
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => {
-                        setProjectFilter(ALL)
-                        setTaskFilter(ALL)
-                        setZoneFilter(null)
-                      }}
-                    >
-                      {t('board.clearFilters')}
-                    </Button>
-                  }
-                  className="max-w-xl"
-                />
-              ) : (
-                <RunBoard
-                  runs={filtered}
-                  density={density}
-                  canRun={canRun}
-                  onOpenDetail={setSelectedRunId}
-                  onStopped={handleRefresh}
-                />
-              )}
-            </>
+          {surface === 'board' && (boardRuns.length === 0 || filtered.length > 0) && (
+            <RunBoard
+              runs={filtered}
+              density={density}
+              canRun={canRun}
+              onOpenDetail={setSelectedRunId}
+              onStopped={handleRefresh}
+            />
           )}
-        </CardContent>
-      </Card>
 
-      {creating && canRun && (
-        <NewRunDrawer onCreated={handleRefresh} onClose={() => setCreating(false)} />
+          {surface === 'history' && historyRuns.length === 0 && (
+            <p data-testid="run-history-empty" className="text-sm text-muted-foreground">
+              {t('board.historyEmpty')}
+            </p>
+          )}
+
+          {surface === 'history' && historyRuns.length > 0 && filtered.length === 0 && (
+            <EmptyState
+              title={t('board.noMatchTitle')}
+              body={t('board.noMatchBody')}
+              action={
+                <Button size="sm" variant="outline" onClick={clearFilters}>
+                  {t('board.clearFilters')}
+                </Button>
+              }
+              className="max-w-xl"
+            />
+          )}
+
+          {surface === 'history' && filtered.length > 0 && (
+            <HistoryTable runs={filtered} onOpenDetail={setSelectedRunId} />
+          )}
+        </div>
       )}
+
+      {creating && canRun && <NewRunDrawer onCreated={handleRefresh} onClose={() => setCreating(false)} />}
       <RunDetailPanel runId={selectedRunId} onClose={() => setSelectedRunId(null)} />
-    </>
+    </div>
   )
 }

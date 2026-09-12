@@ -1,20 +1,19 @@
 ## Summary
 
-HP-88: Rebuild the Pollen shell to match redesign mock A (web UI only). Inbox is the landing. Sidebar is four doors (Inbox / Approvals / Runs / Alerts) plus a Plus tray (Rooms / Orchestrator / Spend / Memory / System). Everything else stays reachable via ⌘K. Header is search + one issues chip + overflow (theme / language / account). Plugin status pills and the decorative grid are gone. Dark tokens and PWA theme-color follow the mock (`#09090b` / `#111113` / `#38bdf8`). TokenGate copy says “HivePilot token”, not “read token”.
+HP-89: Redesign the Pollen Runs view to match mock B (web UI only). Live work stays on a four-column Board (Queued · Running · Waiting · Failed). Completed runs move to a **History** tab — there is no Done kanban column. Cards are title / project / age; Failed uses a 2px crit left border and no glow. Empty columns stay equal-width rails with an em dash. New run CTA is unchanged. The HP-42 `runColumn` contract is untouched; `boardPlacement` is a presentation overlay (success/complete/cancelled → History; paused/deferred stay visible under Waiting).
 
-Owning issue: [HP-88](https://linear.app/js-workspace/issue/HP-88/pollen-redesign-pr1-shell-inboxapprovalsrunsalerts-plus)
+Owning issue: [HP-89](https://linear.app/js-workspace/issue/HP-89/pollen-redesign-pr2-runs-board-history-done-out-of-kanban)
 
-Replay: `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav/SidebarNav.test.tsx src/components/nav/nav-config.test.ts`
+Replay: `cd web && npm test -- src/components/views/RunBoardView.test.tsx src/lib/i18n/fr.test.ts`
 
 ## Follow-ups (not this PR)
 
-- Runs History board
-- Alerts list surface (this PR ships the door + a stub + the header chip count)
-- Inbox ACTION buttons / KPI bandeau
-- Telegram topics
+- Alerts first-class list / sidepanel (PR3) — the PR1 door stub stays
+- Inbox ACTION buttons / KPI bandeau (PR4)
+- Telegram topics (PR5)
 
 ## Testing
 
-- [x] `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav/SidebarNav.test.tsx src/components/nav/nav-config.test.ts src/components/nav/IssuesChip.test.tsx src/components/nav/OverflowMenu.test.tsx src/components/views/InboxView.test.tsx src/components/views/AlertsView.test.tsx src/lib/shell-issues.test.ts src/components/TokenGate.test.tsx src/lib/i18n/fr.test.ts`
-- [x] `cd web && npm test` — 923 passed
-- [x] `cd web && npm run build` (static `theme-color` `#09090b`; CI `git diff --exit-code hivepilot/webui/static`)
+- [ ] `cd web && npm test -- src/components/views/RunBoardView.test.tsx src/lib/i18n/fr.test.ts`
+- [ ] `cd web && npm test`
+- [ ] `cd web && npm run build`

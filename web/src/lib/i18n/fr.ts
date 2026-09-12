@@ -655,11 +655,23 @@ export const fr: Record<TranslationKey, string> = {
     'Statut en direct de chaque exécution, regroupé par étape — cliquez sur une carte pour le détail.',
   'board.descriptionReadOnly':
     "Statut en direct de chaque exécution, regroupé par étape (lecture seule — un jeton de rang run peut en déclencher de nouvelles).",
+  'board.subtitle': 'Seulement ce qui est vivant.',
+  'board.subtitleReadOnly':
+    'Seulement ce qui est vivant (lecture seule — un jeton de rang run peut en déclencher de nouvelles).',
+  'board.tabBoard': 'Tableau',
+  'board.tabHistory': 'Historique',
+  'board.tabsLabel': 'Surface des exécutions',
+  'board.doneShortcut': 'Terminés ({count})',
+  'board.historyCaption': '{count} terminés. Onglet dédié, plus de colonne Terminé.',
+  'board.historyEmpty': 'Aucune exécution terminée.',
+  'board.historyScrollLabel': 'Faire défiler les exécutions terminées',
+  'board.allStatuses': 'Tous les statuts',
+  'board.age': 'Âge',
   'board.noRunsTitle': 'Aucune exécution pour le moment',
   'board.noRunsBody':
-    'Chaque pipeline que vous déclenchez apparaît ici, regroupé par étape, et se rafraîchit tout seul toutes les quelques secondes. Lancez-en un pour remplir le tableau.',
+    'Les exécutions en cours restent sur le tableau. Les terminées passent dans l’historique. Lancez-en une pour remplir le tableau.',
   'board.noRunsBodyReadOnly':
-    'Chaque pipeline déclenché sur ce tenant apparaît ici, regroupé par étape. Rien n’a encore tourné.',
+    'Les exécutions en cours restent sur le tableau. Les terminées passent dans l’historique. Rien n’a encore tourné.',
   'board.noMatchTitle': 'Aucune exécution ne correspond à ces filtres',
   'board.noMatchBody':
     'Le tableau contient bien des exécutions, mais aucune pour ce couple projet / tâche.',
@@ -685,7 +697,7 @@ export const fr: Record<TranslationKey, string> = {
   'board.reasonDeferred': 'Reportée — nouvelle tentative plus tard.',
   'board.colQueued': 'File',
   'board.colRunning': 'En cours',
-  'board.colWaitingApproval': "Attente d'approbation",
+  'board.colWaitingApproval': 'Attente',
   'board.colFailed': 'Échec',
   'board.colDone': 'Terminé',
   'board.colOther': 'Autre',
