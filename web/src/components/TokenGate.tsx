@@ -71,7 +71,7 @@ export function TokenGate({ children }: TokenGateProps) {
         setStatus('signed-in')
       } catch (err) {
         if (err instanceof ApiAuthError) {
-          setError('Invalid token — check the read token and try again.')
+          setError('Invalid token — check the HivePilot token and try again.')
         } else {
           setError('Could not reach the HivePilot API. Try again.')
         }
@@ -99,7 +99,7 @@ export function TokenGate({ children }: TokenGateProps) {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>Pollen</CardTitle>
-          <CardDescription>Enter your HivePilot read token to continue.</CardDescription>
+          <CardDescription>Enter your HivePilot token to continue.</CardDescription>
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-3" onSubmit={handleSubmit}>
@@ -109,7 +109,7 @@ export function TokenGate({ children }: TokenGateProps) {
               placeholder="hp_..."
               value={inputValue}
               onChange={(event) => setInputValue(event.target.value)}
-              aria-label="HivePilot read token"
+              aria-label="HivePilot token"
             />
             {error && (
               <p role="alert" className="text-sm text-destructive">

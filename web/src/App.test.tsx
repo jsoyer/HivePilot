@@ -26,7 +26,7 @@ describe('App', () => {
       root.render(<App />)
     })
 
-    expect(container.querySelector('input[aria-label="HivePilot read token"]')).not.toBeNull()
+    expect(container.querySelector('input[aria-label="HivePilot token"]')).not.toBeNull()
     expect(container.querySelector('[role="tab"]')).toBeNull()
   })
 })

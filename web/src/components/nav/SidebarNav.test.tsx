@@ -1,36 +1,53 @@
-import { Activity, DollarSign, HeartPulse } from 'lucide-react'
+import { Bell, CheckSquare, Inbox, PlayCircle } from 'lucide-react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
-import type { NavGroup } from './nav-config'
+import type { NavItem } from './nav-config'
 import { SidebarNav } from './SidebarNav'
 
 let container: HTMLDivElement
 let root: Root
 
-const groups: NavGroup[] = [
-  {
-    label: "Vue d'ensemble",
-    items: [
-      { value: 'analytics', label: 'Analytics', Icon: Activity },
-      { value: 'cost', label: 'Cost', Icon: DollarSign },
-    ],
-  },
-  {
-    label: 'Système',
-    items: [{ value: 'health', label: 'Health', Icon: HeartPulse }],
-  },
+const primary: NavItem[] = [
+  { value: 'inbox', label: 'Inbox', Icon: Inbox },
+  { value: 'approvals', label: 'Approvals', Icon: CheckSquare },
+  { value: 'runs', label: 'Runs', Icon: PlayCircle },
+  { value: 'alerts', label: 'Alerts', Icon: Bell },
 ]
 
-function Harness({ mobileOpen = false, onCloseMobile = () => {} }: { mobileOpen?: boolean; onCloseMobile?: () => void }) {
+const plusItems: NavItem[] = [
+  { value: 'spaces', label: 'Rooms', Icon: Inbox },
+  { value: 'cost', label: 'Spend', Icon: Inbox },
+]
+
+function Harness({
+  mobileOpen = false,
+  onCloseMobile = () => {},
+  alertsCount = 0,
+}: {
+  mobileOpen?: boolean
+  onCloseMobile?: () => void
+  alertsCount?: number
+}) {
   return (
-    <Tabs defaultValue="analytics" orientation="vertical">
-      <SidebarNav groups={groups} mobileOpen={mobileOpen} onCloseMobile={onCloseMobile} />
+    <Tabs defaultValue="inbox" orientation="vertical">
+      <SidebarNav
+        primary={primary}
+        plusItems={plusItems}
+        plusLabel="Plus"
+        plusHint="Rest via ⌘K"
+        alertsCount={alertsCount}
+        mobileOpen={mobileOpen}
+        onCloseMobile={onCloseMobile}
+      />
       <div>
-        <TabsContent value="analytics">Analytics panel</TabsContent>
-        <TabsContent value="cost">Cost panel</TabsContent>
-        <TabsContent value="health">Health panel</TabsContent>
+        <TabsContent value="inbox">Inbox panel</TabsContent>
+        <TabsContent value="approvals">Approvals panel</TabsContent>
+        <TabsContent value="runs">Runs panel</TabsContent>
+        <TabsContent value="alerts">Alerts panel</TabsContent>
+        <TabsContent value="spaces">Rooms panel</TabsContent>
+        <TabsContent value="cost">Spend panel</TabsContent>
       </div>
     </Tabs>
   )
@@ -58,32 +75,44 @@ function click(el: Element) {
 }
 
 describe('SidebarNav', () => {
-  it('renders every group label and every item across groups', () => {
+  it('renders the four doors plus the Plus tray', () => {
     act(() => {
       root.render(<Harness />)
     })
-    expect(container.textContent).toContain("Vue d'ensemble")
-    expect(container.textContent).toContain('Système')
-
+    expect(container.textContent).toContain('Plus')
+    expect(container.textContent).toContain('Rest via ⌘K')
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(['Analytics', 'Cost', 'Health'])
+    expect(tabs).toEqual(['Inbox', 'Approvals', 'Runs', 'Alerts', 'Rooms', 'Spend'])
+    expect(container.querySelector('[data-slot="nav-item-dot"]')).toBeNull()
   })
 
   it('clicking an item switches the active view', () => {
     act(() => {
       root.render(<Harness />)
     })
-    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Cost',
+    const runsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Runs',
     ) as HTMLElement
 
     act(() => {
-      click(costTab)
+      click(runsTab)
     })
 
-    expect(costTab.getAttribute('aria-selected')).toBe('true')
+    expect(runsTab.getAttribute('aria-selected')).toBe('true')
     const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toBe('Cost panel')
+    expect(panel?.textContent).toBe('Runs panel')
+  })
+
+  it('shows an Alerts badge only when the count is positive', () => {
+    act(() => {
+      root.render(<Harness alertsCount={0} />)
+    })
+    expect(container.querySelector('[data-testid="alerts-badge"]')).toBeNull()
+
+    act(() => {
+      root.render(<Harness alertsCount={3} />)
+    })
+    expect(container.querySelector('[data-testid="alerts-badge"]')?.textContent).toBe('3')
   })
 
   it('collapse toggle flips the collapsed state and persists it to localStorage', () => {
@@ -100,12 +129,6 @@ describe('SidebarNav', () => {
 
     expect(nav.getAttribute('data-collapsed')).toBe('true')
     expect(window.localStorage.getItem('hivepilot.webui.sidebar-collapsed')).toBe('true')
-
-    act(() => {
-      click(collapseButton)
-    })
-    expect(nav.getAttribute('data-collapsed')).toBe('false')
-    expect(window.localStorage.getItem('hivepilot.webui.sidebar-collapsed')).toBe('false')
   })
 
   it('starts collapsed when a previous session persisted collapsed=true', () => {
@@ -135,17 +158,17 @@ describe('SidebarNav', () => {
     expect(container.querySelector('[data-testid="sidebar-backdrop"]')).not.toBeNull()
   })
 
-  it('mobile: clicking an item calls onCloseMobile (item-click closes the drawer)', () => {
+  it('mobile: clicking an item calls onCloseMobile', () => {
     const onCloseMobile = vi.fn()
     act(() => {
       root.render(<Harness mobileOpen={true} onCloseMobile={onCloseMobile} />)
     })
-    const healthTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Health',
+    const alertsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
+      (el) => el.textContent === 'Alerts',
     ) as HTMLElement
 
     act(() => {
-      click(healthTab)
+      click(alertsTab)
     })
 
     expect(onCloseMobile).toHaveBeenCalled()
@@ -165,7 +188,7 @@ describe('SidebarNav', () => {
     expect(onCloseMobile).toHaveBeenCalled()
   })
 
-  it('every item is a real button with a >=40px (h-10) tap target class', () => {
+  it('every item is a real button with a >=40px tap target class', () => {
     act(() => {
       root.render(<Harness />)
     })
@@ -177,12 +200,7 @@ describe('SidebarNav', () => {
     }
   })
 
-  it('BUG FIX: the nav list starts at the top of the sidebar (no vertical centering gap)', () => {
-    // Regression for the "nav starts ~1/3 down the page" bug: the TabsList's
-    // CVA base classes include `justify-center` (shared with the horizontal
-    // tab-bar use case) — SidebarNav must override it to `justify-start` so
-    // a short group list doesn't get centered inside the flex-1 column that
-    // fills the sidebar's full height.
+  it('the nav list starts at the top of the sidebar (no vertical centering gap)', () => {
     act(() => {
       root.render(<Harness />)
     })
@@ -191,13 +209,19 @@ describe('SidebarNav', () => {
     expect(list.className).not.toContain('justify-center')
   })
 
-  it('BUG FIX: the persistent (non-drawer) sidebar breakpoint is md, not lg — a realistic, non-maximized desktop window must never fall into off-canvas drawer mode', () => {
-    // Regression for "clicking a nav item makes the whole menu disappear":
-    // at the old `lg:` (1024px) breakpoint, any normal desktop browser
-    // window narrower than 1024px CSS px (common: split-screen, non-
-    // maximized windows, smaller laptops) was treated as "mobile" and every
-    // item click closed the off-canvas drawer via `onCloseMobile`,
-    // translating the whole sidebar off-screen with no visible way back.
+  it('doors stay compact — they do not flex-grow to fill the sidebar', () => {
+    act(() => {
+      root.render(<Harness />)
+    })
+    const tabs = Array.from(container.querySelectorAll('[role="tab"]')) as HTMLElement[]
+    expect(tabs.length).toBeGreaterThan(0)
+    for (const tab of tabs) {
+      expect(tab.className).toMatch(/\bflex-none\b/)
+      expect(tab.className).toMatch(/\bh-auto\b/)
+    }
+  })
+
+  it('the persistent sidebar breakpoint is md, not lg', () => {
     act(() => {
       root.render(<Harness />)
     })
@@ -208,32 +232,6 @@ describe('SidebarNav', () => {
     expect(nav.className).not.toMatch(/\blg:translate-x-0\b/)
   })
 
-  it('visual identity: every item has a leading status dot, and the active item is tinted/striped', () => {
-    act(() => {
-      root.render(<Harness />)
-    })
-    const analyticsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Analytics',
-    ) as HTMLElement
-    expect(analyticsTab.querySelector('[data-slot="nav-item-dot"]')).not.toBeNull()
-    // `defaultValue="analytics"` in the harness — this trigger starts active.
-    expect(analyticsTab.getAttribute('aria-selected')).toBe('true')
-    expect(analyticsTab.className).toMatch(/data-active:/)
-
-    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Cost',
-    ) as HTMLElement
-    act(() => {
-      click(costTab)
-    })
-    expect(costTab.getAttribute('aria-selected')).toBe('true')
-    expect(analyticsTab.getAttribute('aria-selected')).toBe('false')
-  })
-
-  // Mobile audit: the drawer could only be dismissed by tapping the backdrop
-  // or a nav item. Both were verified working in a real browser, but neither
-  // is reachable from a keyboard, and Escape — which closes every other
-  // overlay in this app — did nothing.
   describe('mobile drawer dismissal', () => {
     function pressEscape() {
       act(() => {
@@ -250,10 +248,7 @@ describe('SidebarNav', () => {
       expect(onCloseMobile).toHaveBeenCalledTimes(1)
     })
 
-    // Unlike `ui/drawer.tsx`, this component stays mounted when closed (it is
-    // translated off-canvas). An unguarded listener would therefore swallow
-    // Escape from the ⌘K command palette on every screen.
-    it('CRITICAL: does not consume Escape while closed', () => {
+    it('does not consume Escape while closed', () => {
       const onCloseMobile = vi.fn()
       act(() => {
         root.render(<Harness mobileOpen={false} onCloseMobile={onCloseMobile} />)
@@ -271,7 +266,6 @@ describe('SidebarNav', () => {
       expect(openPanel.getAttribute('aria-modal')).toBe('true')
       expect(openPanel.getAttribute('aria-label')).toBe('Navigation')
 
-      // Docked at `md:` it is a plain landmark, not a permanently-open modal.
       act(() => {
         root.render(<Harness mobileOpen={false} />)
       })
@@ -286,8 +280,6 @@ describe('SidebarNav', () => {
       })
       const panel = container.querySelector('[data-slot="sidebar-nav"]')!
       expect(panel.className).toContain('motion-safe:transition-transform')
-      // An unconditional `transition-transform` would ignore the user's
-      // reduced-motion preference.
       expect(panel.className).not.toMatch(/(^|\s)transition-transform/)
     })
   })

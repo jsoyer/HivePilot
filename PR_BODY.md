@@ -1,14 +1,20 @@
 ## Summary
 
-HP-87: OpenCode Go (`https://opencode.ai/zen/go/v1`) returns `400 MissingSessionID` unless the OpenAI-compat request carries `x-opencode-session` (stable per conversation) and a non-generic `User-Agent`. Production noxysdevbot had a temporary hotpatch; this replaces it in-repo.
+HP-88: Rebuild the Pollen shell to match redesign mock A (web UI only). Inbox is the landing. Sidebar is four doors (Inbox / Approvals / Runs / Alerts) plus a Plus tray (Rooms / Orchestrator / Spend / Memory / System). Everything else stays reachable via ⌘K. Header is search + one issues chip + overflow (theme / language / account). Plugin status pills and the decorative grid are gone. Dark tokens and PWA theme-color follow the mock (`#09090b` / `#111113` / `#38bdf8`). TokenGate copy says “HivePilot token”, not “read token”.
 
-`PromptCliRunner._run_api`'s `openai` branch now adds those headers when the base URL contains `opencode.ai`. Session id resolution is env (`HIVEPILOT_OPENCODE_SESSION` / `OPENCODE_SESSION`), then concierge `conversation_id` / payload metadata, then the stable CLI default `hivepilot-concierge`. `concierge_service.route` threads `conversation_id` into `runner_env` when the runner is `openai`. Non-OpenCode endpoints stay Authorization-only.
+Owning issue: [HP-88](https://linear.app/js-workspace/issue/HP-88/pollen-redesign-pr1-shell-inboxapprovalsrunsalerts-plus)
 
-Owning issue: [HP-87](https://linear.app/js-workspace/issue/HP-87/opencode-go-send-x-opencode-session-on-concierge-openai-compat-runner) (follow-up to HP-18).
+Replay: `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav/SidebarNav.test.tsx src/components/nav/nav-config.test.ts`
 
-Replay: `pytest tests/test_prompt_cli_runner.py::TestOpenaiOpencodeGoHeaders tests/test_concierge_service.py::TestConciergeRunnerSelection -q`
+## Follow-ups (not this PR)
+
+- Runs History board
+- Alerts list surface (this PR ships the door + a stub + the header chip count)
+- Inbox ACTION buttons / KPI bandeau
+- Telegram topics
 
 ## Testing
 
-- [x] `pytest tests/test_prompt_cli_runner.py tests/test_openai_runner.py tests/test_concierge_service.py tests/test_role_draft_service.py -q` — 188 passed (174 + 14 role-draft)
-- [x] `hivepilot lint` — pre-existing missing example/acme project paths on this box; no new lint errors from this change
+- [x] `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav/SidebarNav.test.tsx src/components/nav/nav-config.test.ts src/components/nav/IssuesChip.test.tsx src/components/nav/OverflowMenu.test.tsx src/components/views/InboxView.test.tsx src/components/views/AlertsView.test.tsx src/lib/shell-issues.test.ts src/components/TokenGate.test.tsx src/lib/i18n/fr.test.ts`
+- [x] `cd web && npm test` — 923 passed
+- [x] `cd web && npm run build` (static `theme-color` `#09090b`; CI `git diff --exit-code hivepilot/webui/static`)

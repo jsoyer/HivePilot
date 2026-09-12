@@ -1,73 +1,48 @@
 import type { LucideIcon } from 'lucide-react'
 
 /**
- * Grouped sidebar navigation (Pollen dashboard upgrade, P0b).
- * Mirrors the operator's mockup section labels — VUE D'ENSEMBLE / AGENTS /
- * SYSTÈME / MÉMOIRE — mapped onto Pollen's actual built-in tabs (see
- * `Pollen.tsx`'s `BUILTIN_TABS`).
+ * Grouped navigation for the ⌘K palette (and leftover reachability).
+ * The visible sidebar is NOT this table — see `PRIMARY_NAV` / `PLUS_NAV`.
  *
- * FR/EN i18n (P1a): `label` here is a `TranslationKey` (see `@/lib/i18n`),
- * NOT display text — `buildNavGroups` stays language-agnostic, and the
- * caller (`Pollen.tsx`, which has `useT()` in scope) resolves each group's
- * `label` to display text right before rendering. This keeps `SidebarNav`
- * itself free of any i18n dependency.
- *
- * Mirador Operate section sprint (Run Board + run detail, demote the
- * node-graph): the operator's core complaint driving this sprint was "the
- * pipeline graphs are useless" — `GraphView` (plugins/pipeline/skills
- * topology) is kept (never deleted, still fully reachable), but demoted out
- * of a prominent top-level slot. Two changes from the group table below:
- *  1. The former "Agents" group (Approvals/Runs) is renamed "Operate" and
- *     moved to the SECOND position, right after Home — Runs (now a Kanban
- *     Run Board, not a flat table) is the primary Operate experience.
- *  2. "System" (Health/Graph) — Graph's home — moves to the LAST position,
- *     after Memory, so it's still one click away but no longer front-and-
- *     center. Health stays paired with it (unchanged pairing, just demoted
- *     as a unit).
+ * FR/EN i18n: `label` here is a `TranslationKey`, not display text.
+ * `buildNavGroups` stays language-agnostic; the caller resolves labels.
  */
 export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
-  // Mirador Home command-center sprint: Home is the new default landing
-  // view, called out in its own leading group (not folded into "Overview")
-  // so it always renders first, above every other section.
   { label: 'nav.atAGlance', values: ['home'] },
-  // Mirador Operate section sprint: Runs (Kanban Run Board — the operator's
-  // actionable "what's happening right now" view) + Approvals, right after
-  // Home. Replaces the "Agents" group at this same top-adjacent slot -- the
-  // rename better describes what the group is FOR (operating runs), not
-  // just which role triggers them.
-  // Mirador Autopilot view sprint: Autopilot (GET/POST /v1/autopilot — the
-  // guarded objective queue's control surface) joins the same group — it's
-  // an "operate" concern (pause/resume, watch what's queued/dispatched),
-  // not a Spend/Overview/System one.
-  // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions (GET
-  // /v1/partitions + the ratification gate) is an Operate concern — it is
-  // where an operator decides whether N agents start — so it sits next to
-  // Approvals rather than in Overview or System.
-  { label: 'nav.operate', values: ['chat', 'spaces', 'orchestrator', 'runs', 'approvals', 'partitions', 'workshop', 'autopilot'] },
-  // Mirador Spend section sprint: Cost moves out of "Overview" into its own
-  // "Spend" group alongside the two new views (Models/Efficiency) — the
-  // operator's complaint this sprint answers ("la conso marche pas, rien
-  // sur les modèles, rien de headroom/rtk") is specifically about spend
-  // visibility, so it gets a dedicated, discoverable section rather than
-  // being folded into general analytics.
+  {
+    label: 'nav.operate',
+    values: ['inbox', 'spaces', 'orchestrator', 'runs', 'approvals', 'alerts', 'partitions', 'workshop', 'autopilot'],
+  },
   { label: 'nav.spend', values: ['cost', 'models', 'providers', 'efficiency'] },
   { label: 'nav.overview', values: ['analytics'] },
-  // Memory: one nav item for Sources / Knowledge / Quality / Growth
-  // (see `Pollen.tsx` `BUILTIN_TABS`). The mem0 Search tab is retired (HP-53).
   { label: 'nav.memory', values: ['memory'] },
-  // Mirador Operate section sprint: demoted to LAST — Graph (plugins/
-  // pipeline/skills topology) is still fully reachable (sidebar/drawer/⌘K),
-  // just no longer a prominent top-level destination now that the Run Board
-  // is the primary "what's happening" view. Health stays paired with it.
-  // Mirador "Agents" view sprint: Agents (GET /v1/agents+/lessons+/verdicts
-  // — per-role activity/cost/lessons/verdicts) joins this group too — it's
-  // an observability surface over the fleet's roles, same category as
-  // Health (plugin health) and Graph (topology), not a Spend/Operate
-  // concern. Placed before Graph (still fully reachable, just kept last per
-  // its own demotion above).
-  // `conversations` sits beside `agents`: same subject seen two ways -- the
-  // roster of who ran, and the thread of what they actually said.
-  { label: 'nav.system', values: ['health', 'plugins', 'mcp', 'integrations', 'cache', 'agents', 'studio', 'conversations', 'graph'] },
+  {
+    label: 'nav.system',
+    values: ['health', 'plugins', 'mcp', 'integrations', 'cache', 'agents', 'studio', 'conversations', 'graph'],
+  },
+]
+
+/**
+ * The four sidebar doors (redesign mock A). Internal tab values stay stable
+ * (`inbox` is the former `chat` landing) so existing views keep working.
+ */
+export const PRIMARY_NAV: readonly { value: string; labelKey: string }[] = [
+  { value: 'inbox', labelKey: 'nav.inbox' },
+  { value: 'approvals', labelKey: 'nav.approvals' },
+  { value: 'runs', labelKey: 'nav.runs' },
+  { value: 'alerts', labelKey: 'nav.alerts' },
+]
+
+/**
+ * Plus tray at the bottom of the sidebar. Spend → Cost, System → Health;
+ * the rest of each group stays in ⌘K.
+ */
+export const PLUS_NAV: readonly { value: string; labelKey: string }[] = [
+  { value: 'spaces', labelKey: 'nav.rooms' },
+  { value: 'orchestrator', labelKey: 'nav.orchestrator' },
+  { value: 'cost', labelKey: 'nav.spend' },
+  { value: 'memory', labelKey: 'nav.memory' },
+  { value: 'health', labelKey: 'nav.system' },
 ]
 
 export interface NavItem {
@@ -81,20 +56,29 @@ export interface NavGroup {
   items: NavItem[]
 }
 
-/** Translation key for the fallback group holding any item not covered by
- * `NAV_GROUP_ORDER` — dynamic plugin-panel tabs land here by construction
- * (they're never in the static table), and it also protects a future
- * built-in tab added without updating `NAV_GROUP_ORDER` from silently
- * disappearing from the sidebar. */
+/** Translation key for leftover items (plugin panels, or a new built-in). */
 export const FALLBACK_GROUP_LABEL = 'nav.panels'
+
+export function pickNavItems(
+  items: NavItem[],
+  specs: readonly { value: string; labelKey: string }[],
+  labelFor: (labelKey: string) => string,
+): NavItem[] {
+  const itemByValue = new Map(items.map((item) => [item.value, item]))
+  const picked: NavItem[] = []
+  for (const spec of specs) {
+    const item = itemByValue.get(spec.value)
+    if (item) {
+      picked.push({ ...item, label: labelFor(spec.labelKey) })
+    }
+  }
+  return picked
+}
 
 /**
  * Groups a flat list of nav items per `NAV_GROUP_ORDER`, preserving each
- * group's declared value order. Any item whose `value` isn't listed in
- * `NAV_GROUP_ORDER` is appended to a trailing `FALLBACK_GROUP_LABEL` group
- * instead of being dropped — this is what keeps "every existing tab must
- * still be reachable" true even for tabs this static table doesn't know
- * about yet (dynamic plugin panels, or a new built-in tab).
+ * group's declared value order. Leftovers (plugin panels, unknown tabs)
+ * land in a trailing `FALLBACK_GROUP_LABEL` group instead of disappearing.
  */
 export function buildNavGroups(items: NavItem[]): NavGroup[] {
   const itemByValue = new Map(items.map((item) => [item.value, item]))
