@@ -16,5 +16,5 @@ Replay: `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav
 ## Testing
 
 - [x] `cd web && npm test -- src/components/Pollen.test.tsx src/components/nav/SidebarNav.test.tsx src/components/nav/nav-config.test.ts src/components/nav/IssuesChip.test.tsx src/components/nav/OverflowMenu.test.tsx src/components/views/InboxView.test.tsx src/components/views/AlertsView.test.tsx src/lib/shell-issues.test.ts src/components/TokenGate.test.tsx src/lib/i18n/fr.test.ts`
-- [ ] `cd web && npm test` (full suite after PR open)
-- [ ] `cd web && npm run build` (CI static-diff gate)
+- [x] `cd web && npm test` — 923 passed
+- [x] `cd web && npm run build` (static `theme-color` `#09090b`; CI `git diff --exit-code hivepilot/webui/static`)
