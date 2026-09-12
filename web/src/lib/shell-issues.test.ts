@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { countShellIssues } from './shell-issues'
 
-function plugin(status: 'ok' | 'degraded' | 'error', name = status) {
+function plugin(status: 'ok' | 'degraded' | 'error', name: string = status) {
   return { name, status, detail: '', activity: null }
 }
 

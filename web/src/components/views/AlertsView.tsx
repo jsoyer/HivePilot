@@ -1,5 +1,5 @@
 import { describeApiError } from '@/lib/format-error'
-import { EM_DASH, formatAge, formatTimestamp } from '@/lib/format-time'
+import { formatAge, formatTimestamp } from '@/lib/format-time'
 import { useT, type TranslationKey } from '@/lib/i18n'
 import { buildAlertFeed, type AlertItem, type AlertKind } from '@/lib/alert-feed'
 import { ApiForbiddenError } from '@/lib/api'
