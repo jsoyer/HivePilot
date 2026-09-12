@@ -110,6 +110,10 @@ watching /tmp/x/hivepilot.log — does not exist (nothing will appear)
 
 Run the CLI from the same working directory as your services (the units use
 `WorkingDirectory=/`), or set `HIVEPILOT_LOGS_DIR` to an absolute path.
+A login shell from `$HOME` otherwise resolves the default `runs/logs` to
+`~/runs/logs` (often not writable). The CLI then logs to stderr only — it
+must not die on `hivepilot --version`. For `self-update` on the reference
+box: `sudo HIVEPILOT_LOGS_DIR=/runs/logs hivepilot self-update --ref main --yes --restart`.
 
 A `--role` filter drops events with no role. Steps no model performed —
 plain shell commands — carry `role: null` by design, so a pane dedicated to
