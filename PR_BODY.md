@@ -13,6 +13,7 @@ Replay: `cd web && npm test -- src/lib/alert-feed.test.ts src/lib/shell-issues.t
 
 ## Testing
 
-- [ ] `cd web && npm test -- src/lib/alert-feed.test.ts src/lib/shell-issues.test.ts src/components/views/AlertsView.test.tsx src/lib/i18n/fr.test.ts`
-- [ ] `cd web && npm test`
-- [ ] `cd web && npm run build` (refreshes `hivepilot/webui/static`; CI `git diff --exit-code hivepilot/webui/static`)
+- [x] `cd web && npm test -- src/lib/alert-feed.test.ts src/lib/shell-issues.test.ts src/components/views/AlertsView.test.tsx src/lib/i18n/fr.test.ts src/components/Pollen.test.tsx` — 41 passed
+- [x] `cd web && npm test` — 941 passed
+- [x] `cd web && npm run build` (refreshed `hivepilot/webui/static`; CI `git diff --exit-code hivepilot/webui/static`)
+- [x] Browser: populated feed (Failed ×2, Degraded ×2, Classifier healthy) + header **4 issues**; empty feed sober **All clear. Nothing in the feed.**
