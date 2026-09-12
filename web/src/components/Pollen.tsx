@@ -212,7 +212,13 @@ function PollenShell() {
           <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-8">
             {BUILTIN_TABS.map(({ value, Panel }) => (
               <TabsContent key={value} value={value}>
-                {value === 'home' ? <HomeView onNavigate={setActiveView} /> : <Panel />}
+                {value === 'home' ? (
+                  <HomeView onNavigate={setActiveView} />
+                ) : value === 'inbox' ? (
+                  <InboxView onNavigate={setActiveView} />
+                ) : (
+                  <Panel />
+                )}
               </TabsContent>
             ))}
             {pluginPanels.map((panel) => (

@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Send } from 'lucide-react'
+import { IntentConfirmCard } from '@/components/chat/IntentConfirmCard'
 import { Button } from '@/components/ui/button'
-import { RoleAvatar } from '@/components/RoleAvatar'
 import { CallToggle, useVoiceCall } from '@/components/voice/CallToggle'
 import { ComposerMic } from '@/components/voice/ComposerMic'
+import { requiresConfirmation } from '@/lib/concierge-intent'
 import { useLanguage, useT } from '@/lib/i18n'
-import { ApiForbiddenError } from '@/lib/api'
-import { describeApiError } from '@/lib/format-error'
-import { askConcierge, postApproval, type ConciergeDecision } from '@/lib/pollen-api'
-import { useRole } from '@/lib/role-context'
+import { askConcierge, type ConciergeDecision } from '@/lib/pollen-api'
 import { speakReply } from '@/lib/voice-reply'
 
 /**
@@ -16,10 +14,9 @@ import { speakReply } from '@/lib/voice-reply'
  * backed by the SAME concierge brain the Telegram bot uses (`POST /v1/concierge`
  * → `concierge_service.route`).
  *
- * This surface CLASSIFIES only: an `answer` renders as a bubble; a
- * `route`/`action`/`multi_route` is shown as a PROPOSAL card (execution stays
- * behind the existing Approvals/Runs flows), so the panel is safe at the read
- * role and can never dispatch work on its own.
+ * This surface CLASSIFIES only until the operator confirms. An `answer`
+ * renders as a bubble with no keyboard. ACTION / ROUTE / MULTI_ROUTE show
+ * the confirm card (✅ / ❌). Nothing runs without that card.
  */
 
 let counter = 0
@@ -44,7 +41,6 @@ function UserBubble({ text }: { text: string }) {
 }
 
 function ConciergeBubble({ decision }: { decision: ConciergeDecision }) {
-  const t = useT()
   return (
     <div className="flex items-start gap-2" data-testid="chat-message-concierge">
       <span className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -56,144 +52,8 @@ function ConciergeBubble({ decision }: { decision: ConciergeDecision }) {
             {decision.answer_text}
           </div>
         )}
-        {isApprovalAction(decision) ? (
-          <ApprovalActionCard decision={decision} />
-        ) : (
-          decision.kind !== 'answer' && <ProposalCard decision={decision} note={t('chat.proposalNote')} />
-        )}
+        {requiresConfirmation(decision) ? <IntentConfirmCard decision={decision} /> : null}
       </div>
-    </div>
-  )
-}
-
-function isApprovalAction(decision: ConciergeDecision): boolean {
-  const runId = decision.params && typeof decision.params.run_id === 'number' ? decision.params.run_id : null
-  return (
-    decision.kind === 'action' &&
-    (decision.action === 'approve' || decision.action === 'deny') &&
-    runId !== null
-  )
-}
-
-function ApprovalActionCard({ decision }: { decision: ConciergeDecision }) {
-  const t = useT()
-  const { can } = useRole()
-  const runId = Number(decision.params?.run_id)
-  const [denyOpen, setDenyOpen] = useState(false)
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<string | null>(null)
-
-  async function submit(approve: boolean) {
-    setBusy(true)
-    setError(null)
-    try {
-      await postApproval(runId, { approve, reason: approve ? undefined : reason.trim() })
-      setDone(t('chat.approvalDone', { id: String(runId), result: approve ? 'approved' : 'denied' }))
-    } catch (err) {
-      setError(err instanceof ApiForbiddenError ? t('approvals.insufficientRoleApprove') : describeApiError(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div
-      data-testid="chat-approval-card"
-      className="rounded-2xl rounded-bl-sm border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm"
-    >
-      <p className="mb-1 font-medium">{t('chat.approvalTitle')}</p>
-      <p className="mb-2 font-mono text-xs">#{runId}</p>
-      {done ? (
-        <p data-testid="chat-approval-done">{done}</p>
-      ) : (
-        <>
-          {can('approve') ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                data-testid="chat-approval-approve"
-                disabled={busy}
-                onClick={() => void submit(true)}
-              >
-                {t('approvals.approve')}
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                data-testid="chat-approval-deny"
-                disabled={busy}
-                onClick={() => setDenyOpen((open) => !open)}
-              >
-                {t('approvals.deny')}
-              </Button>
-            </div>
-          ) : (
-            <p className="text-muted-foreground text-xs">{t('chat.approvalHint')}</p>
-          )}
-          {denyOpen ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <input
-                className="border-input bg-background rounded-md border px-2 py-1 text-sm"
-                data-testid="chat-approval-reason"
-                disabled={busy}
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-              />
-              <Button
-                size="sm"
-                variant="destructive"
-                data-testid="chat-approval-confirm-deny"
-                disabled={busy || !reason.trim()}
-                onClick={() => void submit(false)}
-              >
-                {t('approvals.confirmDeny')}
-              </Button>
-            </div>
-          ) : null}
-          {error ? <p className="text-destructive mt-2">{error}</p> : null}
-        </>
-      )}
-    </div>
-  )
-}
-
-function ProposalCard({ decision, note }: { decision: ConciergeDecision; note: string }) {
-  const t = useT()
-  const rows =
-    decision.kind === 'multi_route'
-      ? decision.dispatches
-      : decision.role_key
-        ? [{ role_key: decision.role_key, target: decision.target, order: decision.order ?? '' }]
-        : []
-
-  return (
-    <div
-      data-testid="chat-proposal"
-      className="rounded-2xl rounded-bl-sm border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm"
-    >
-      <p className="mb-2 font-medium">{t('chat.proposalTitle')}</p>
-      {rows.length > 0 ? (
-        <ul className="flex flex-col gap-2">
-          {rows.map((r, i) => (
-            <li key={`${r.role_key}-${i}`} className="flex items-center gap-2">
-              <RoleAvatar role={r.role_key} label={r.role_key} size={22} state="thinking" />
-              <span>
-                <span className="font-medium">{r.role_key}</span>
-                {r.target ? ` · ${r.target}` : ''}
-                {r.order ? ` — ${r.order}` : ''}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>
-          {decision.action ?? decision.kind}
-          {decision.target ? ` · ${decision.target}` : ''}
-        </p>
-      )}
-      <p className="mt-2 text-xs text-muted-foreground">{note}</p>
     </div>
   )
 }
