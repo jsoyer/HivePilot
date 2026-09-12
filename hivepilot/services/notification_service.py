@@ -1224,7 +1224,8 @@ def _deliver_threadless(
         )
         return
     logger.info(
-        "stream.topic_self_heal_delivered_inbox" if thread_id is not None
+        "stream.topic_self_heal_delivered_inbox"
+        if thread_id is not None
         else "stream.topic_self_heal_delivered_threadless",
         agent_key=agent_key,
         chat_id=mask_id(chat_id),
@@ -1490,10 +1491,7 @@ def _resolve_stream_topic(
                 )
                 runs_id = door_thread(RUNS)
                 if runs_id is not None:
-                    index = (
-                        f"{speaker_html(actor)}<b>{html.escape(title)}</b>\n"
-                        f"run #{int(run_id)}"
-                    )
+                    index = f"{speaker_html(actor)}<b>{html.escape(title)}</b>\nrun #{int(run_id)}"
                     _send_chunks(
                         index,
                         chat_id=settings.telegram_stream_chat_id,

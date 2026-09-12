@@ -646,9 +646,7 @@ class TestConciergeOnAnswer:
             asyncio.run(telegram_bot._cmd_mention(update, context))
 
         mock_route.assert_called_once()
-        update.message.reply_text.assert_awaited_once_with(
-            "🐝 Nothing is running right now."
-        )
+        update.message.reply_text.assert_awaited_once_with("🐝 Nothing is running right now.")
         context.bot.send_message.assert_not_awaited()
 
 
