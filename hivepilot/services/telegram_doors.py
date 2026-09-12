@@ -175,9 +175,7 @@ def soft_card_from_report(
         )
         if artifact:
             meta = str(artifact)
-    return render_soft_card(
-        actor=actor, target=target, status=status, meta=meta, icon=icon
-    )
+    return render_soft_card(actor=actor, target=target, status=status, meta=meta, icon=icon)
 
 
 def concierge_answer_text(answer: str) -> str:
