@@ -534,9 +534,7 @@ class TestOpenaiOpencodeGoHeaders:
         )
         assert headers["x-opencode-session"] == "env-session"
 
-    def test_session_from_opencode_session_env_when_hivepilot_unset(
-        self, tmp_path: Path
-    ) -> None:
+    def test_session_from_opencode_session_env_when_hivepilot_unset(self, tmp_path: Path) -> None:
         headers = _openai_run_api_headers(
             tmp_path,
             env={

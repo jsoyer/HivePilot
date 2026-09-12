@@ -484,12 +484,12 @@ class PromptCliRunner(BaseRunner):
             api_key = env.get("OPENAI_API_KEY")
             if not api_key:
                 raise RuntimeError("OPENAI_API_KEY missing.")
-            headers = {"Authorization": f"Bearer {api_key}"}
+            openai_headers = {"Authorization": f"Bearer {api_key}"}
             if _is_opencode_compat_endpoint(endpoint):
-                headers.update(_opencode_compat_headers(env, payload))
+                openai_headers.update(_opencode_compat_headers(env, payload))
             return self._post_json(
                 url=f"{endpoint}/chat/completions",
-                headers=headers,
+                headers=openai_headers,
                 payload={"model": model, "messages": [{"role": "user", "content": prompt}]},
                 timeout=timeout,
             )
