@@ -49,8 +49,8 @@ class TestResolveAgentKey:
         every unmatched actor minted one. `Orchestrator._agent_name` falls
         back to `stage.name` for a roleless task, which meant pipeline stages
         grew topics -- `refresh` and `pentest` were found in the live
-        registry. None sends to the General topic instead, which is
-        recoverable; a stray topic has to be deleted by hand.
+        registry. None is routed to a Pollen door instead of minting a
+        topic; a stray topic has to be deleted by hand.
 
         See TestOnlyDeclaredNonRoleStreamsGetATopic in
         test_topic_naming_convention.py for the full behaviour.
@@ -419,7 +419,7 @@ class TestStreamAgentTurnTopics:
         ):
             stream_agent_turn(actor="Blaise (CTO)", stage="planning")
 
-        mock_ensure.assert_called_once()
+        mock_ensure.assert_called_once_with("runs", "Runs")
         assert sent_kwargs["message_thread_id"] == fake_thread_id
 
     def test_topics_disabled_passes_none_thread_id(self):
@@ -435,3 +435,39 @@ class TestStreamAgentTurnTopics:
             stream_agent_turn(actor="Blaise (CTO)", stage="planning")
 
         assert sent_kwargs["message_thread_id"] is None
+
+    def test_run_id_mints_ephemeral_run_topic(self):
+        sent = []
+
+        def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None):
+            sent.append(
+                {
+                    "message_thread_id": message_thread_id,
+                    "msg": message,
+                    "parse_mode": parse_mode,
+                }
+            )
+
+        with (
+            patch("hivepilot.services.notification_service.settings", self._make_settings(True)),
+            patch(
+                "hivepilot.services.notification_service._ensure_topic_thread",
+                return_value=88,
+            ) as mock_ensure,
+            patch(
+                "hivepilot.services.notification_service._load_topics",
+                return_value={},
+            ),
+            patch("hivepilot.services.notification_service._send_telegram", fake_send),
+        ):
+            stream_agent_turn(
+                actor="Blaise (CTO)",
+                stage="planning",
+                run_id=42,
+                run_slug="acme-api",
+            )
+
+        keys = [c.args[0] for c in mock_ensure.call_args_list]
+        assert "run:42" in keys
+        assert "runs" in keys
+        assert any("run #42" in (c["msg"] or "") for c in sent)

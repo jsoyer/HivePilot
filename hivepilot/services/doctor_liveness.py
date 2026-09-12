@@ -414,6 +414,7 @@ def check_orphan_topic_keys() -> list[DoctorFinding]:
         _allowed_non_role_topic_keys,
         _topics_registry_path,
     )
+    from hivepilot.services.telegram_doors import is_run_topic_key
 
     path = _topics_registry_path()
     if not path.exists():
@@ -439,7 +440,14 @@ def check_orphan_topic_keys() -> list[DoctorFinding]:
         return []
 
     allowed = _allowed_non_role_topic_keys()
-    orphans = sorted(k for k in registry if k not in ROLES and k not in allowed)
+    orphans = sorted(
+        k
+        for k in registry
+        if k not in ROLES
+        and k not in allowed
+        and not is_run_topic_key(k)
+        and not str(k).startswith("_")
+    )
     if not orphans:
         return []
 

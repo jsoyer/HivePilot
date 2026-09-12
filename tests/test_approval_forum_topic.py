@@ -94,7 +94,7 @@ class TestApprovalMessageThreadId:
             thread_id = telegram_bot._approval_message_thread_id(-100111)
 
         assert thread_id == 777
-        mock_ensure.assert_called_once_with("approvals", "⛔ Approvals")
+        mock_ensure.assert_called_once_with("approvals", "Approvals")
 
     def test_explicit_approval_chat_different_from_stream_group_no_thread(
         self, monkeypatch: pytest.MonkeyPatch
@@ -388,8 +388,8 @@ class TestNotifyApprovalRequiredRouting:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A CLOSED (not deleted) "Approvals" topic must NOT be recreated —
-        it routes to the group's General topic (no thread id), still the
-        SAME chat, not the DM."""
+        it routes to Inbox when that thread is distinct, otherwise
+        threadless last-resort, still the SAME chat, not the DM."""
         self._patch_settings(
             monkeypatch, stream_topics=True, stream_chat_id=-100111, notification_chat_id=555
         )
@@ -415,7 +415,7 @@ class TestNotifyApprovalRequiredRouting:
             telegram_bot.notify_approval_required(run_id=7, project="acme", task="deploy")
 
         # Only the initial resolve call -- no recreate attempt for a closed topic.
-        mock_ensure.assert_called_once_with("approvals", "⛔ Approvals")
+        mock_ensure.assert_called_once_with("approvals", "Approvals")
         assert len(calls) == 2
         assert calls[0]["chat_id"] == -100111
         assert calls[1]["chat_id"] == -100111  # SAME group, NOT the DM

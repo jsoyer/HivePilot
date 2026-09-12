@@ -7,7 +7,7 @@ export interface InboxViewProps {
 
 /**
  * Inbox landing (redesign PR4) — concierge chat plus the Snapshot bandeau.
- * ACTION / ROUTE confirm lives in the chat. Telegram topics are PR5.
+ * ACTION / ROUTE confirm lives in the chat. Telegram four doors are HP-92.
  */
 export function InboxView({ onNavigate }: InboxViewProps) {
   return (

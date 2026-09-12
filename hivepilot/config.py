@@ -591,8 +591,8 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
-    telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — route each agent's turns to its own forum topic
-    telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — render HTML cards with status badge, bullets, links
+    telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — four Pollen doors (Inbox/Approvals/Runs/Alerts) plus ephemeral RUN topics
+    telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — softer HTML cards (bold title + two meta lines)
     # HP-16: prefix a per-role avatar on Telegram hand-offs. The eight
     # first-class roles always get a Unicode fallback. When this flag is
     # True AND telegram_avatars.yaml maps a role to a custom_emoji_id, HTML
@@ -613,11 +613,11 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_STREAM_TOPIC_EXTRA_KEYS — non-role stream keys allowed to
     # own their own Telegram forum topic, beyond the engine's own
     # (`notification_service._ENGINE_STREAM_TOPIC_KEYS`). Empty by default:
-    # an actor matching no role sends to the group's General topic rather
-    # than minting a topic, because the previous behaviour -- slug the first
-    # word of ANY unmatched actor -- made topic creation unbounded and is
-    # what filled this deployment's group with topics named after pipeline
-    # stages. Which non-role streams deserve a topic is a tenant decision.
+    # an actor matching no role is routed to Inbox/Runs rather than minting
+    # a topic, because the previous behaviour -- slug the first word of ANY
+    # unmatched actor -- made topic creation unbounded and is what filled
+    # this deployment's group with topics named after pipeline stages. Which
+    # extra non-role streams deserve a topic is a tenant decision.
     stream_topic_extra_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
     auditor_auto: bool = (
         True  # run Henri (external auditor) automatically after each pipeline cycle

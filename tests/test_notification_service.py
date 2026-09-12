@@ -400,7 +400,10 @@ def _sequenced_ensure_topic_thread(*values: int | None):
     it = iter(values)
 
     def _fn(agent_key: str, title: str):
-        return next(it)
+        try:
+            return next(it)
+        except StopIteration:
+            return None
 
     return _fn
 
@@ -438,7 +441,7 @@ def test_stale_topic_self_heals_recreates_and_resends(
 
     ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
 
-    assert invalidated == ["developer"]
+    assert invalidated == ["runs"]
     assert len(calls) == 2
     assert calls[0]["message_thread_id"] == 208
     assert calls[1]["message_thread_id"] == 999  # NEW thread id, not the dead one
@@ -470,7 +473,7 @@ def test_stale_topic_recreate_failure_falls_back_to_threadless(
 
     assert len(calls) == 2
     assert calls[0]["message_thread_id"] == 208
-    assert calls[1]["message_thread_id"] is None  # threadless General fallback
+    assert calls[1]["message_thread_id"] is None  # Inbox unavailable → threadless last resort
     assert calls[1]["msg"] == calls[0]["msg"]  # content preserved, never dropped
 
 
@@ -478,8 +481,9 @@ def test_closed_topic_does_not_recreate_sends_to_general(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A CLOSED (not deleted) topic must NOT trigger a recreate — the
-    operator closed it deliberately. The message still reaches the chat's
-    General topic instead."""
+    operator closed it deliberately. The message still reaches Inbox
+    when that thread is distinct; this mock returns the same id so
+    last-resort threadless is used."""
     _stream_topics_settings(monkeypatch)
 
     recreate_calls: list[str] = []
@@ -501,12 +505,11 @@ def test_closed_topic_does_not_recreate_sends_to_general(
 
     ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
 
-    # Only the initial _ensure_topic_thread call (to get 208) -- no second
-    # (recreate) call for a closed topic.
-    assert recreate_calls == ["developer"]
+    # Initial Runs resolve, then Inbox probe (same id → excluded). No recreate.
+    assert recreate_calls == ["runs", "inbox"]
     assert len(calls) == 2
     assert calls[0]["message_thread_id"] == 208
-    assert calls[1]["message_thread_id"] is None  # General, not recreated
+    assert calls[1]["message_thread_id"] is None  # last-resort threadless
     assert calls[1]["msg"] == calls[0]["msg"]
 
 

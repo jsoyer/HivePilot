@@ -86,7 +86,7 @@ class TestOnlyDeclaredNonRoleStreamsGetATopic:
         assert ns._resolve_agent_key("HivePilot") == "hivepilot"
 
     def test_an_undeclared_actor_gets_no_topic(self, fake_roles):
-        """None routes the send to the group's General topic -- recoverable,
+        """None routes the send to a Pollen door -- recoverable,
         unlike a topic that has to be deleted by hand."""
         assert ns._resolve_agent_key("pentest") is None
 
@@ -123,6 +123,14 @@ def test_title_is_derived_from_the_role_not_from_the_caller(fake_roles):
     assert ns._canonical_topic_title("developer", "Gustave") == "Gustave (Developer)"
     assert ns._canonical_topic_title("developer", None) == "Gustave (Developer)"
     assert ns._canonical_topic_title("developer", "something else") == "Gustave (Developer)"
+
+
+def test_pollen_door_titles_are_stable(fake_roles):
+    assert ns._canonical_topic_title("inbox", "ignored") == "Inbox"
+    assert ns._canonical_topic_title("approvals", None) == "Approvals"
+    assert ns._canonical_topic_title("runs", "Runs") == "Runs"
+    assert ns._canonical_topic_title("alerts", None) == "Alerts"
+    assert ns._canonical_topic_title("run:42", "🛠️ acme") == "🛠️ acme"
 
 
 def test_a_non_role_key_keeps_its_supplied_title(fake_roles):

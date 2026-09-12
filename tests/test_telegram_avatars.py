@@ -191,7 +191,7 @@ def test_plain_path_attaches_entities(
     assert calls[0]["entities"][0]["offset"] == tgav.utf16_len(calls[0]["msg"][:emoji_start])
 
 
-def test_unknown_actor_keeps_stream_icon_only(
+def test_unknown_actor_uses_system_bee_not_a_role_glyph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict] = []
@@ -205,7 +205,7 @@ def test_unknown_actor_keeps_stream_icon_only(
 
     ns.stream_agent_turn(actor="refresh", summary="heartbeat")
     msg = calls[0]["msg"]
-    assert "🗣" in msg
+    assert "🐝" in msg
     for glyph in tgav.CANONICAL_ROLE_EMOJI.values():
         assert glyph not in msg
 

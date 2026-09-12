@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING, Any
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
+from hivepilot.services.notification_service import ensure_pollen_doors
+from hivepilot.services.telegram_doors import (
+    APPROVALS,
+    concierge_action_prompt,
+    concierge_answer_text,
+    door_title,
+)
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -163,8 +170,8 @@ def _approval_chat_id() -> int | None:
     return _notification_chat_id()
 
 
-_APPROVALS_TOPIC_KEY = "approvals"
-_APPROVALS_TOPIC_TITLE = "⛔ Approvals"
+_APPROVALS_TOPIC_KEY = APPROVALS
+_APPROVALS_TOPIC_TITLE = door_title(APPROVALS) or "Approvals"
 
 
 def _approval_message_thread_id(chat_id: int | None) -> int | None:
@@ -179,8 +186,8 @@ def _approval_message_thread_id(chat_id: int | None) -> int | None:
     ("approvals") so approvals land in their OWN topic, not mixed into any
     agent's stream topic. Best-effort: `_ensure_topic_thread` never raises —
     any failure (not a forum, missing rights, rate-limited) returns None,
-    which makes the caller send without a thread id (the group's General
-    topic) instead of losing the approval.
+    which makes the caller fall back to Inbox instead of losing the approval
+    in Telegram's built-in General dump.
     """
     if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
         return None
@@ -651,7 +658,12 @@ def _multi_dispatch_lines(decision: "ConciergeDecision") -> list[str]:
 
 
 async def _send_concierge_keyboard_message(
-    bot: Any, *, chat_id: int, token: str, decision: "ConciergeDecision"
+    bot: Any,
+    *,
+    chat_id: int,
+    token: str,
+    decision: "ConciergeDecision",
+    message_thread_id: int | None = None,
 ) -> None:
     """Send a Yes/No inline keyboard for a pending destructive concierge
     decision. *token* is the SAME value the caller already stored in
@@ -690,15 +702,18 @@ async def _send_concierge_keyboard_message(
         lines = _multi_dispatch_lines(decision)
         count = len(decision.dispatches or [])
         body = "\n".join(lines) if lines else "(no valid orders)"
-        text = f"⚠️ This will dispatch {count} orders:\n{body}\n\nConfirm?"
+        text = concierge_action_prompt(f"{count} orders:\n{body}")
     else:
         summary = _summarize_concierge_decision(decision)
-        text = f"⚠️ This will {summary}. Confirm?"
-    await bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=keyboard,
-    )
+        text = concierge_action_prompt(summary)
+    send_kwargs: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": keyboard,
+    }
+    if isinstance(message_thread_id, int):
+        send_kwargs["message_thread_id"] = message_thread_id
+    await bot.send_message(**send_kwargs)
 
 
 async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDecision") -> None:
@@ -866,9 +881,7 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
     )
 
     if decision.kind == "answer":
-        await update.message.reply_text(
-            decision.answer_text or "I'm not sure how to help with that. Try /help."
-        )
+        await update.message.reply_text(concierge_answer_text(decision.answer_text or ""))
         return
 
     if not decision.destructive:
@@ -891,8 +904,13 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
     # anyone.
     token = uuid.uuid4().hex[:8]
     _pending_concierge.store(chat_id, user_id, (token, decision))
+    thread_id = getattr(update.message, "message_thread_id", None)
     await _send_concierge_keyboard_message(
-        context.bot, chat_id=chat_id, token=token, decision=decision
+        context.bot,
+        chat_id=chat_id,
+        token=token,
+        decision=decision,
+        message_thread_id=thread_id if isinstance(thread_id, int) else None,
     )
 
 
@@ -1623,7 +1641,7 @@ async def _send_approval_keyboard_message(
             ],
         ]
     )
-    header = f"Approval required — run #{run_id}\nProject: {project}\nTask: {task}"
+    header = f"Approval required\nrun #{run_id} · {project}\n{task}"
     body = f"\n\n{details}" if details else ""
     text = _truncate_md(header + body)
     send_kwargs: dict[str, Any] = {}
@@ -1639,7 +1657,7 @@ async def _send_approval_keyboard_message(
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.approval_keyboard.send_retry", run_id=run_id, error=str(exc))
         fallback_text = (
-            f"Approval required — run #{run_id}\nProject: {project}\nTask: {task}\n"
+            f"Approval required\nrun #{run_id} · {project}\n{task}\n"
             "(details omitted — see server logs)"
         )
         await bot.send_message(
@@ -1783,9 +1801,9 @@ def notify_approval_required(
     found"/"TOPIC_DELETED"-class error first invalidates the cached
     `approvals` registry entry, recreates the topic, and retries in the SAME
     chat with the fresh thread id — only a second failure (or a plain
-    non-topic error) falls back to the DM as before. A "TOPIC_CLOSED" error
-    routes to the group's General topic (no thread id) instead of recreating
-    — the operator closed it on purpose.
+    non-topic error) falls back to the DM as before.     A "TOPIC_CLOSED" error
+    routes to Inbox instead of recreating — the operator closed Approvals
+    on purpose; Telegram's General dump is not the fallback.
     """
     chat_id = _approval_chat_id()
     if not chat_id:
@@ -1803,6 +1821,7 @@ def notify_approval_required(
             _invalidate_topic,
             _is_closed_topic_error,
             _is_stale_topic_error,
+            inbox_fallback_thread,
         )
 
         async with Bot(token) as bot:
@@ -1824,13 +1843,13 @@ def notify_approval_required(
 
                 if thread_id is not None and _is_closed_topic_error(description):
                     logger.warning(
-                        "stream.topic_closed_fallback_general",
+                        "stream.topic_closed_fallback_inbox",
                         agent_key=_APPROVALS_TOPIC_KEY,
                         chat_id=mask_id(chat_id),
                         message_thread_id=thread_id,
                         description=description,
                     )
-                    thread_id = None
+                    thread_id = inbox_fallback_thread(thread_id)
                     self_healed = True
                 elif thread_id is not None and _is_stale_topic_error(description):
                     dead = _invalidate_topic(_APPROVALS_TOPIC_KEY)
@@ -1866,7 +1885,7 @@ def notify_approval_required(
                             message_thread_id=thread_id,
                         )
                         logger.info(
-                            "stream.topic_self_heal_delivered_general"
+                            "stream.topic_self_heal_delivered_inbox"
                             if thread_id is None
                             else "stream.topic_recreate_resend_succeeded",
                             agent_key=_APPROVALS_TOPIC_KEY,
@@ -2110,6 +2129,10 @@ def _build_application(token: str):
         ) from exc
 
     app = Application.builder().token(token).build()
+    try:
+        ensure_pollen_doors()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("telegram.doors.bootstrap_failed", error=str(exc))
     app.add_handler(CommandHandler("start", _cmd_help))
     app.add_handler(CommandHandler("help", _cmd_help))
     app.add_handler(CommandHandler("run", _cmd_run))
