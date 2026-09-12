@@ -8,8 +8,8 @@ import { ApiForbiddenError } from '@/lib/api'
 // shell (sidebar nav, header, default view, switching) without depending on
 // network behavior. Each view's own loading/error/empty/data states are
 // covered by its dedicated test file. `fetchPluginsHealth` also backs the
-// header's `StatusPills` (P0b) in addition to `HealthView` — one mock, both
-// consumers.
+// header's issues chip (failed runs + degraded plugins) in addition to
+// `HealthView` — one mock, both consumers.
 const mocks = vi.hoisted(() => ({
   fetchAnalyticsSummary: vi.fn().mockResolvedValue({
     total: 0,
@@ -196,66 +196,17 @@ vi.mock('@/lib/pollen-api', async (importOriginal) => {
 import { LANG_STORAGE_KEY } from '@/lib/i18n'
 import { Pollen } from './Pollen'
 
-// The sidebar's grouped nav order (P0b, + Home command-center sprint, +
-// Mirador Spend section sprint, + Mirador Operate section sprint, +
-// Mirador Memory unification sprint) — see `./nav/nav-config.ts`'s
-// `NAV_GROUP_ORDER`: At a glance (Home), Operate (Runs/Approvals —
-// renamed from "Agents", moved right after Home so the Run Board is the
-// primary "what's happening" destination), Spend (Cost/Models/Efficiency),
-// Overview (Analytics), Memory (ONE unified tab — see below), System
-// (Health/Graph — demoted to LAST: the node-graph is no longer a prominent
-// top-level destination, still fully reachable). Every built-in tab is
-// still reachable, just reordered by group instead of the old flat
-// declaration order.
-//
-// Memory unification sprint: the formerly-separate "Mem0" and "Memory > Quality"
-// top-level tabs merged into ONE "Memory" tab, which itself has internal
-// Quality/Growth/Search tabs (see `MemoryView.test.tsx` for coverage of
-// that inner tab switching) — this shell-level list only asserts the ONE
-// outer "Memory" entry is reachable, same as every other built-in.
-//
-// Group/tab labels below are the ENGLISH default (P1a: FR/EN i18n — see the
-// "language toggle" describe block for the French-language assertions of
-// the same shell).
-const GROUPED_TAB_ORDER = [
-  'Home',
-  // HP-22: the natural-language agent chat leads the Operate group.
-  'Chat',
-  // Espaces (HP-45) and Orchestrator (HP-49 / HP-69) stay in Operate.
-  'Spaces',
-  'Orchestrator',
-  'Runs',
+/** Visible sidebar: four doors + Plus destinations (English default). */
+const SIDEBAR_TAB_ORDER = [
+  'Inbox',
   'Approvals',
-  // Propose -> ratify -> dispatch PRD, Sprint 4: Partitions joins the Operate
-  // group, between Approvals and Autopilot (see nav-config.ts).
-  'Partitions',
-  'Skills',
-  'Autopilot',
-  'Cost',
-  'Models',
-  // Providers panel (HP-73) sits in the Spend group next to Models.
-  'Providers',
-  'Efficiency',
-  'Analytics',
+  'Runs',
+  'Alerts',
+  'Rooms',
+  'Orchestrator',
+  'Spend',
   'Memory',
-  'Health',
-  // One card per curated plugin (GET /v1/plugins/catalog) — grouped under
-  // System beside Health, which is where plugin state already lived.
-  'Plugins',
-  // MCP command center (HP-76) sits next to Plugins under System.
-  'MCP',
-  // HP-60 tool-source hub, next to MCP.
-  'Integrations',
-  // Prompt-cache economics, beside Plugins under System. Separate from
-  // Analytics on purpose: those aggregate, and an aggregate is what hid
-  // 1.7M tokens of unread cache creation behind an 85% hit rate.
-  'Cache',
-  'Agents',
-  // Agent Studio (HP-66) sits beside the Agents roster under System.
-  'Studio',
-  // The agents' exchanges as threads, beside the roster of who ran.
-  'Conversations',
-  'Graph',
+  'System',
 ]
 
 let container: HTMLDivElement
@@ -264,6 +215,9 @@ let root: Root
 beforeEach(() => {
   window.localStorage.clear()
   for (const mock of Object.values(mocks)) mock.mockClear()
+  mocks.fetchPluginsHealth.mockResolvedValue({ plugins: [], disabled: [] })
+  mocks.fetchRuns.mockResolvedValue([])
+  mocks.fetchPanels.mockResolvedValue({ panels: [] })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -286,180 +240,110 @@ function click(el: Element) {
   el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
 }
 
+async function flush() {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+function tab(label: string): HTMLElement {
+  return Array.from(container.querySelectorAll('[role="tab"]')).find((el) => el.textContent === label) as HTMLElement
+}
+
+async function runPaletteCommand(label: string) {
+  const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
+  await act(async () => {
+    click(searchButton)
+    await Promise.resolve()
+  })
+  const input = document.body.querySelector('input') as HTMLInputElement
+  const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    nativeSetter?.call(input, label)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await Promise.resolve()
+  })
+  const option = Array.from(document.body.querySelectorAll('[role="option"]')).find(
+    (el) => el.textContent === label,
+  ) as HTMLElement
+  await act(async () => {
+    click(option)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 describe('Pollen', () => {
-  it('renders the Pollen title and subtitle, and every tab reachable via the sidebar', () => {
+  it('renders the four doors + Plus tray, not the old grouped nav', () => {
     expect(container.textContent).toContain('Pollen')
-    expect(container.textContent).toContain('HivePilot dashboard')
-    // visual identity: the brand mark next to the wordmark.
     expect(container.querySelector('[data-slot="brand-mark"]')).not.toBeNull()
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(GROUPED_TAB_ORDER)
+    expect(tabs).toEqual(SIDEBAR_TAB_ORDER)
+    expect(container.querySelector('[data-testid="sidebar-plus"]')).not.toBeNull()
+    expect(container.textContent).toContain('Rest via ⌘K')
+    expect(container.textContent).not.toContain('At a glance')
+    expect(container.textContent).not.toContain('HivePilot dashboard')
   })
 
-  it('groups the sidebar into labelled sections (English default)', () => {
-    expect(container.textContent).toContain('At a glance')
-    expect(container.textContent).toContain('Operate')
-    expect(container.textContent).toContain('Spend')
-    expect(container.textContent).toContain('Overview')
-    expect(container.textContent).toContain('System')
-    expect(container.textContent).toContain('Memory')
+  it('lands on Inbox, not the Home command-center', async () => {
+    await flush()
+    expect(container.querySelector('[data-testid="inbox-page"]')).not.toBeNull()
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Talk to the agents')
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).not.toContain('Your fleet at a glance')
+    expect(tab('Inbox').getAttribute('aria-selected')).toBe('true')
   })
 
-  it('CRITICAL: demotes the node-graph — "System" (Graph) is the LAST sidebar group, "Operate" (Runs) is right after Home', () => {
-    const groupLabels = Array.from(container.querySelectorAll('[data-slot="sidebar-nav"] span.uppercase')).map(
-      (el) => el.textContent,
-    )
-    expect(groupLabels[0]).toBe('At a glance')
-    expect(groupLabels[1]).toBe('Operate')
-    expect(groupLabels[groupLabels.length - 1]).toBe('System')
-
-    // Graph is still fully reachable — just not prominent.
-    const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toContain('Graph')
-  })
-
-  it('shows the real Home view by default', async () => {
+  it('switches to Approvals, Runs, and the Alerts stub from the sidebar', async () => {
     await act(async () => {
-      await Promise.resolve()
+      click(tab('Approvals'))
       await Promise.resolve()
     })
-    expect(container.textContent).toContain('Your fleet at a glance')
-    const homeTab = container.querySelector('[role="tab"]')
-    expect(homeTab?.textContent).toBe('Home')
-    expect(homeTab?.getAttribute('aria-selected')).toBe('true')
-  })
-
-  it('switches to the real Analytics view when the Analytics item is clicked', async () => {
-    const analyticsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Analytics',
-    ) as HTMLElement
+    expect(tab('Approvals').getAttribute('aria-selected')).toBe('true')
 
     await act(async () => {
-      click(analyticsTab)
+      click(tab('Runs'))
       await Promise.resolve()
     })
-
-    expect(analyticsTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Volume & outcomes')
-  })
-
-  it('switches to the real Autopilot view when the Autopilot item is clicked (reachable via the sidebar)', async () => {
-    const autopilotTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Autopilot',
-    ) as HTMLElement
-    expect(autopilotTab).not.toBeUndefined()
+    expect(tab('Runs').getAttribute('aria-selected')).toBe('true')
 
     await act(async () => {
-      click(autopilotTab)
-      await Promise.resolve()
+      click(tab('Alerts'))
       await Promise.resolve()
     })
-
-    expect(autopilotTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Active')
+    expect(container.querySelector('[data-testid="alerts-page"]')).not.toBeNull()
   })
 
-  it('switches to the real Cost view when the Cost item is clicked', async () => {
-    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Cost',
-    ) as HTMLElement
-
+  it('Plus Spend opens Cost; Plus System opens Health; Plus Memory opens Memory', async () => {
     await act(async () => {
-      click(costTab)
+      click(tab('Spend'))
       await Promise.resolve()
     })
-
-    expect(costTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Cost & tokens')
-  })
-
-  it('switches to the real Models view when the Models item is clicked', async () => {
-    const modelsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Models',
-    ) as HTMLElement
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Cost & tokens')
 
     await act(async () => {
-      click(modelsTab)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(modelsTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Models')
-    expect(panel?.textContent).toMatch(/no model data yet/i)
-  })
-
-  it('switches to the real Efficiency view when the Efficiency item is clicked', async () => {
-    const efficiencyTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Efficiency',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(efficiencyTab)
-      await Promise.resolve()
+      click(tab('System'))
       await Promise.resolve()
     })
-
-    expect(efficiencyTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Headroom')
-  })
-
-  it('switches to the real Health view when the Health item is clicked', async () => {
-    const healthTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Health',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(healthTab)
-      await Promise.resolve()
-    })
-
     expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('System probes')
-  })
-
-  it('switches to the real Agents view when the Agents item is clicked (reachable via the sidebar)', async () => {
-    const agentsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Agents',
-    ) as HTMLElement
-    expect(agentsTab).not.toBeUndefined()
 
     await act(async () => {
-      click(agentsTab)
+      click(tab('Memory'))
       await Promise.resolve()
       await Promise.resolve()
     })
-
-    expect(agentsTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Agents')
-    expect(mocks.fetchAgents).toHaveBeenCalled()
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).toMatch(/no memory activity recorded yet/i)
   })
 
-  it('switches to the real Memory view when the Memory item is clicked, defaulting to its Quality tab', async () => {
-    const memoryTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Memory',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(memoryTab)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    expect(memoryTab.getAttribute('aria-selected')).toBe('true')
-    // Default inner tab is Quality (the moved-in MemoryQualityView content) — its
-    // own Quality/Growth/Search switching behavior is unit-tested in
-    // MemoryView.test.tsx, this only proves the shell wiring.
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toMatch(/no memory activity recorded yet/i)
+  it('keeps Home and other lab views reachable via ⌘K only', async () => {
+    expect(tab('Home')).toBeUndefined()
+    expect(tab('Analytics')).toBeUndefined()
+    expect(tab('Graph')).toBeUndefined()
+    await runPaletteCommand('Home')
+    expect(container.textContent).toContain('Your fleet at a glance')
   })
 
-  it('BUG FIX: the header hamburger and the sidebar drawer share the SAME breakpoint (md, not lg) — otherwise a realistic desktop window between 768-1023px would show a hidden hamburger to open the drawer but the sidebar itself could never dock statically', () => {
+  it('the header hamburger and the sidebar drawer share the md breakpoint', () => {
     const hamburger = container.querySelector('[data-testid="mobile-nav-trigger"]') as HTMLElement
     expect(hamburger.className).toContain('md:hidden')
     expect(hamburger.className).not.toMatch(/\blg:hidden\b/)
@@ -477,21 +361,32 @@ describe('Pollen', () => {
     expect(nav.getAttribute('data-mobile-open')).toBe('true')
     expect(container.querySelector('[data-testid="sidebar-backdrop"]')).not.toBeNull()
 
-    const runsTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Runs',
-    ) as HTMLElement
     await act(async () => {
-      click(runsTab)
+      click(tab('Runs'))
       await Promise.resolve()
     })
     expect(nav.getAttribute('data-mobile-open')).toBe('false')
   })
 
-  it('renders header status pills once plugin health resolves', async () => {
+  it('replaces plugin pills with a single issues chip', async () => {
+    expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
+    await flush()
+    expect(container.querySelector('[data-testid="issues-chip"]')?.textContent).toBe('All clear')
+  })
+
+  it('counts failed runs + degraded plugins on the chip and Alerts badge', async () => {
     mocks.fetchPluginsHealth.mockResolvedValue({
-      plugins: [{ name: 'store', status: 'ok', detail: '' }],
+      plugins: [
+        { name: 'store', status: 'ok', detail: '', activity_available: false, activity: null },
+        { name: 'headroom', status: 'degraded', detail: 'slow', activity_available: false, activity: null },
+      ],
       disabled: [],
     })
+    mocks.fetchRuns.mockResolvedValue([
+      { id: 1, project: 'p', task: 't', status: 'failed', started_at: '2026-01-01T00:00:00Z' },
+      { id: 2, project: 'p', task: 't', status: 'failed', started_at: '2026-01-01T00:00:00Z' },
+      { id: 3, project: 'p', task: 't', status: 'succeeded', started_at: '2026-01-01T00:00:00Z' },
+    ])
 
     act(() => {
       root.unmount()
@@ -506,13 +401,14 @@ describe('Pollen', () => {
       await Promise.resolve()
     })
 
-    const pills = container.querySelector('[data-testid="status-pills"]')
-    expect(pills).not.toBeNull()
-    expect(pills?.textContent).toContain('store')
+    expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
+    expect(container.querySelector('[data-testid="issues-chip"]')?.textContent).toBe('3 issues')
+    expect(container.querySelector('[data-testid="alerts-badge"]')?.textContent).toBe('3')
   })
 
   it('never crashes the header when plugin health fails to load', async () => {
     mocks.fetchPluginsHealth.mockRejectedValue(new Error('boom'))
+    mocks.fetchRuns.mockResolvedValue([])
 
     act(() => {
       root.unmount()
@@ -529,13 +425,15 @@ describe('Pollen', () => {
 
     expect(container.textContent).toContain('Pollen')
     expect(container.querySelector('[data-testid="status-pills"]')).toBeNull()
+    expect(container.querySelector('[data-testid="issues-chip"]')?.textContent).toBe('All clear')
   })
 
-  it('renders a theme toggle in the header that flips the .dark class', async () => {
-    // No persisted theme and no pre-existing `.dark` class at mount time
-    // (this file's top-level `beforeEach` clears both) — `useTheme` starts
-    // from 'light' in that case (see `use-theme.test.tsx`), so the first
-    // click flips to dark.
+  it('theme and language live in the overflow menu', async () => {
+    expect(container.querySelector('[aria-label*="theme"]')).toBeNull()
+    await act(async () => {
+      click(container.querySelector('[data-testid="header-overflow"]') as HTMLElement)
+      await Promise.resolve()
+    })
     const toggle = container.querySelector('[aria-label*="theme"]') as HTMLElement
     expect(toggle).not.toBeNull()
     expect(document.documentElement.classList.contains('dark')).toBe(false)
@@ -546,36 +444,17 @@ describe('Pollen', () => {
     })
     expect(document.documentElement.classList.contains('dark')).toBe(true)
 
-    await act(async () => {
-      click(toggle)
-      await Promise.resolve()
-    })
-    expect(document.documentElement.classList.contains('dark')).toBe(false)
-  })
-
-  it('renders a language toggle in the header that switches the shell to French live and persists it', async () => {
     const langToggle = container.querySelector('[aria-label*="French"]') as HTMLElement
-    expect(langToggle).not.toBeNull()
-    expect(container.textContent).toContain('Overview')
-    expect(container.textContent).not.toContain("Vue d'ensemble")
-
     await act(async () => {
       click(langToggle)
       await Promise.resolve()
     })
-
-    expect(container.textContent).toContain("Vue d'ensemble")
-    expect(container.textContent).toContain('Système')
-    expect(container.textContent).toContain('Mémoire')
-    expect(container.textContent).toContain('tableau de bord HivePilot')
+    expect(container.textContent).toContain('Alertes')
+    expect(container.textContent).toContain('Salles')
+    expect(container.textContent).toContain('Le lab est à portée')
     expect(window.localStorage.getItem(LANG_STORAGE_KEY)).toBe(JSON.stringify('fr'))
   })
 
-  // Command palette (P1b): CommandPalette.test.tsx unit-tests the palette's
-  // own filtering/keyboard/i18n/focus behavior in isolation — these two
-  // tests only prove the SHELL wiring: the header affordance opens the real
-  // palette, and a real nav command actually flips `Pollen`'s (now
-  // controlled) `Tabs` state and renders the target view.
   it('opens the command palette from the header search button', async () => {
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
@@ -587,38 +466,14 @@ describe('Pollen', () => {
     })
     expect(document.body.querySelector('[role="dialog"]')).not.toBeNull()
     expect(document.body.textContent).toContain('Cost')
+    expect(document.body.textContent).toContain('Home')
   })
 
   it('switches the active view when a nav command is run from the command palette', async () => {
-    const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
-    await act(async () => {
-      click(searchButton)
-      await Promise.resolve()
-    })
-
-    const input = document.body.querySelector('input') as HTMLInputElement
-    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
-    await act(async () => {
-      nativeSetter?.call(input, 'Cost')
-      input.dispatchEvent(new Event('input', { bubbles: true }))
-      await Promise.resolve()
-    })
-
-    const costOption = Array.from(document.body.querySelectorAll('[role="option"]')).find(
-      (el) => el.textContent === 'Cost',
-    ) as HTMLElement
-    await act(async () => {
-      click(costOption)
-      await Promise.resolve()
-    })
-
+    await runPaletteCommand('Cost')
     expect(document.body.querySelector('[role="dialog"]')).toBeNull()
-    const costTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Cost',
-    ) as HTMLElement
-    expect(costTab.getAttribute('aria-selected')).toBe('true')
-    const panel = container.querySelector('[role="tabpanel"]')
-    expect(panel?.textContent).toContain('Cost & tokens')
+    expect(tab('Spend').getAttribute('aria-selected')).toBe('true')
+    expect(container.querySelector('[role="tabpanel"]')?.textContent).toContain('Cost & tokens')
   })
 })
 
@@ -654,11 +509,20 @@ describe('Pollen — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual([...GROUPED_TAB_ORDER, 'RTK Status', 'Secure Panel'])
-    expect(container.textContent).toContain('Panels')
+    expect(tabs).toEqual(SIDEBAR_TAB_ORDER)
+    expect(tabs).not.toContain('RTK Status')
+
+    const searchButton = container.querySelector('[aria-label="Search"]') as HTMLElement
+    await act(async () => {
+      click(searchButton)
+      await Promise.resolve()
+    })
+    expect(document.body.textContent).toContain('RTK Status')
+    expect(document.body.textContent).toContain('Secure Panel')
+    expect(document.body.textContent).toContain('Panels')
   })
 
-  it('switches to a dynamic panel tab and renders its data via PanelRenderer', async () => {
+  it('opens a dynamic panel from the command palette and renders its data', async () => {
     for (const mock of Object.values(mocks)) mock.mockClear()
     mocks.fetchPanels.mockResolvedValue({
       panels: [{ name: 'rtk-status', title: 'RTK Status', min_role: 'read' }],
@@ -676,23 +540,14 @@ describe('Pollen — dynamic plugin panel tabs', () => {
       await Promise.resolve()
     })
 
-    const panelTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'RTK Status',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(panelTab)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
+    await runPaletteCommand('RTK Status')
     expect(mocks.fetchPanel).toHaveBeenCalledWith('rtk-status')
     const panel = container.querySelector('[role="tabpanel"]')
     expect(panel?.textContent).toContain('Queue depth')
     expect(panel?.textContent).toContain('4')
   })
 
-  it('shows a graceful requires-token message for a 403 on an under-role panel tab', async () => {
+  it('shows a graceful requires-token message for a 403 on an under-role panel', async () => {
     for (const mock of Object.values(mocks)) mock.mockClear()
     mocks.fetchPanels.mockResolvedValue({
       panels: [{ name: 'secure-panel', title: 'Secure Panel', min_role: 'admin' }],
@@ -708,23 +563,14 @@ describe('Pollen — dynamic plugin panel tabs', () => {
       await Promise.resolve()
     })
 
-    const panelTab = Array.from(container.querySelectorAll('[role="tab"]')).find(
-      (el) => el.textContent === 'Secure Panel',
-    ) as HTMLElement
-
-    await act(async () => {
-      click(panelTab)
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
+    await runPaletteCommand('Secure Panel')
     const forbidden = container.querySelector('[data-testid="panel-forbidden"]')
     expect(forbidden).not.toBeNull()
     expect(forbidden?.textContent).toMatch(/admin/i)
     expect(container.querySelector('[role="alert"]')).toBeNull()
   })
 
-  it('renders no extra items when fetchPanels resolves with an empty list', async () => {
+  it('renders no extra sidebar items when fetchPanels resolves with an empty list', async () => {
     for (const mock of Object.values(mocks)) mock.mockClear()
     mocks.fetchPanels.mockResolvedValue({ panels: [] })
 
@@ -738,6 +584,6 @@ describe('Pollen — dynamic plugin panel tabs', () => {
     })
 
     const tabs = Array.from(container.querySelectorAll('[role="tab"]')).map((el) => el.textContent)
-    expect(tabs).toEqual(GROUPED_TAB_ORDER)
+    expect(tabs).toEqual(SIDEBAR_TAB_ORDER)
   })
 })

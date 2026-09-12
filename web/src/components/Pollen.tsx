@@ -1,5 +1,6 @@
 import {
   Activity,
+  Bell,
   Bot,
   CheckSquare,
   Cpu,
@@ -7,6 +8,7 @@ import {
   DollarSign,
   Blocks,
   HeartPulse,
+  Inbox,
   LayoutDashboard,
   LayoutGrid,
   Menu,
@@ -19,7 +21,6 @@ import {
   Zap,
   Gauge,
   MessagesSquare,
-  MessageCircle,
   Boxes,
   Waypoints,
   ServerCog,
@@ -27,26 +28,25 @@ import {
   Sparkles,
   Cable,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { ApiForbiddenError } from '@/lib/api'
 import { LanguageProvider, useT } from '@/lib/i18n'
-import { fetchPanels } from '@/lib/pollen-api'
+import { fetchPanels, fetchPluginsHealth, fetchRuns } from '@/lib/pollen-api'
 import { RoleProvider } from '@/lib/role-context'
+import { countShellIssues } from '@/lib/shell-issues'
 import { useAsyncData } from '@/lib/use-async-data'
 import { CommandPalette } from './CommandPalette'
-import { buildNavGroups, type NavItem } from './nav/nav-config'
-import { LanguageToggle } from './nav/LanguageToggle'
+import { buildNavGroups, pickNavItems, PLUS_NAV, PRIMARY_NAV, type NavItem } from './nav/nav-config'
+import { IssuesChip } from './nav/IssuesChip'
+import { OverflowMenu } from './nav/OverflowMenu'
 import { SidebarNav } from './nav/SidebarNav'
-import { StatusPills } from './nav/StatusPills'
-import { ThemeToggle } from './nav/ThemeToggle'
-import { InstallPrompt } from './pwa/InstallPrompt'
-import { PushToggle } from './pwa/PushToggle'
-import { ChatView } from './views/ChatView'
 import { ConversationsView } from './views/ConversationsView'
 import { EspacesView } from './views/EspacesView'
 import { AgentStudioView } from './views/AgentStudioView'
 import { AgentsView } from './views/AgentsView'
+import { AlertsView } from './views/AlertsView'
 import { AnalyticsView } from './views/AnalyticsView'
 import { ApprovalsView } from './views/ApprovalsView'
 import { AutopilotView } from './views/AutopilotView'
@@ -55,6 +55,7 @@ import { EfficiencyView } from './views/EfficiencyView'
 import { GraphView } from './views/GraphView'
 import { HealthView } from './views/HealthView'
 import { HomeView } from './views/HomeView'
+import { InboxView } from './views/InboxView'
 import { MemoryView } from './views/MemoryView'
 import { ModelsView } from './views/ModelsView'
 import { CacheView } from './views/CacheView'
@@ -68,197 +69,83 @@ import { PartitionsView } from './views/PartitionsView'
 import { RunBoardView } from './views/RunBoardView'
 import { SkillsWorkshopView } from './views/SkillsWorkshopView'
 
-// FR/EN i18n (P1a): `labelKey` is a `TranslationKey` (see `@/lib/i18n`), NOT
-// display text — resolved to the current language via `t()` where
-// `navItems` is built below, in `PollenShell` (which has `useT()` in
-// scope, unlike this module-level constant).
-// Mirador Home command-center sprint: Home is the FIRST built-in tab and
-// the default landing view (`activeView` below). Its `Panel` here (`() =>
-// <HomeView onNavigate={...} />`) is a thin wrapper only used by the
-// generic `BUILTIN_TABS.map` render loop below — the wrapper is defined
-// inline per-render (see `PollenShell`) so it can close over the real
-// `setActiveView`, keeping `HomeView` itself a plain, directly-testable
-// component that takes `onNavigate` as an explicit prop rather than reading
-// shell state from context.
 const BUILTIN_TABS = [
   { value: 'home', labelKey: 'nav.home', Panel: HomeView, Icon: LayoutDashboard },
   { value: 'analytics', labelKey: 'nav.analytics', Panel: AnalyticsView, Icon: Activity },
   { value: 'cost', labelKey: 'nav.cost', Panel: CostView, Icon: DollarSign },
-  // Mirador Spend section sprint: Models (per-model cost/tokens/success
-  // rate, GET /v1/models) and Efficiency (Headroom + rtk token-savings
-  // signals, GET /v1/efficiency) — grouped with Cost under "Spend" in
-  // nav-config.ts's NAV_GROUP_ORDER.
   { value: 'models', labelKey: 'nav.models', Panel: ModelsView, Icon: Cpu },
-  // Providers panel (HP-73): real per-provider spend + HP-70 fallback
-  // visibility. Grouped under "Spend" next to Cost/Models/Efficiency.
   { value: 'providers', labelKey: 'nav.providers', Panel: ProvidersView, Icon: ServerCog },
   { value: 'efficiency', labelKey: 'nav.efficiency', Panel: EfficiencyView, Icon: Zap },
   { value: 'health', labelKey: 'nav.health', Panel: HealthView, Icon: HeartPulse },
-  // One card per curated plugin: description, on/off switch, and what it
-  // needs. Built on GET /v1/plugins/catalog rather than /plugins/health --
-  // health reports what LOADED, so the ~23 plugins that are written and not
-  // installed (the interesting set) would be invisible. Read-only for any
-  // token; the switches gate themselves on useRole().can('admin').
   { value: 'plugins', labelKey: 'nav.plugins', Panel: PluginsView, Icon: Blocks },
-  // MCP command center (HP-76): servers + catalog + paste-anything import.
   { value: 'mcp', labelKey: 'nav.mcp', Panel: McpView, Icon: Plug },
-  // HP-60: tool-source hub (OpenAPI + MCP sync + packs). MCP tab stays.
   { value: 'integrations', labelKey: 'nav.integrations', Panel: IntegrationsView, Icon: Cable },
-  // Prompt-cache economics. Separate from the analytics screens on purpose:
-  // those aggregate, and an aggregate is exactly what hid 1.7M tokens of
-  // cache creation nobody ever read back behind an 85% hit rate.
   { value: 'cache', labelKey: 'nav.cache', Panel: CacheView, Icon: Gauge },
-  // Mirador "Agents" view sprint: per-role activity roster + lessons +
-  // verdicts (GET /v1/agents, /v1/lessons, /v1/verdicts) — read-only for any
-  // token, grouped with Health/Graph under "System" in nav-config.ts's
-  // NAV_GROUP_ORDER (an observability surface over the fleet's roles).
   { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
-  // Agent Studio (HP-66): store-backed role CRUD on GET/POST/PUT/DELETE
-  // /v1/roles. Reads for any token; writes gate on useRole().can('admin').
   { value: 'studio', labelKey: 'nav.studio', Panel: AgentStudioView, Icon: UserRoundCog },
-  // The agents' exchanges, read as conversations. Adds no capture: every
-  // stage's output has been persisted as an `interactions` row carrying its
-  // role key all along, and nothing ever presented it as a thread. Replying
-  // addresses the ROLE, not the finished run -- see ConversationsView.
   { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
-  // HP-22: talk to the agents in natural language — the same concierge brain
-  // as the Telegram bot, exposed as a Grok-Bot-style chat (POST /v1/concierge).
-  { value: 'chat', labelKey: 'nav.chat', Panel: ChatView, Icon: MessageCircle },
-  // Memory unification: Sources / Knowledge / Quality / Growth under one
-  // nav item (`/v1/memory/*` + `/v1/hindsight/*`). The mem0 Search tab is
-  // retired (HP-53). Read-only for any token; individual endpoints gate
-  // themselves.
+  { value: 'inbox', labelKey: 'nav.inbox', Panel: InboxView, Icon: Inbox },
   { value: 'memory', labelKey: 'nav.memory', Panel: MemoryView, Icon: Database },
-  // Mirador actionable dashboard PRD, Sprint 2: read-only for any token,
-  // Approve/Deny controls inside gate themselves on useRole().can('approve')
-  // — see ApprovalsView.
   { value: 'approvals', labelKey: 'nav.approvals', Panel: ApprovalsView, Icon: CheckSquare },
-  // Mirador Operate section PRD: Run Board (Kanban of runs, GET /v1/runs +
-  // GET /v1/runs/{id} drill-down) — read-only for any token, the New Run
-  // form and Stop controls inside gate themselves on useRole().can('run')
-  // — see RunBoardView. Supersedes the old flat-table RunsView.
   { value: 'runs', labelKey: 'nav.runs', Panel: RunBoardView, Icon: PlayCircle },
-  // Espaces (HP-45): conversation rooms — talk to an agent, or watch two
-  // agents talk. `run`-gated posting (composer hides for a read-only token);
-  // list/read for any token. Grouped under "Operate" (nav-config.ts).
   { value: 'spaces', labelKey: 'nav.spaces', Panel: EspacesView, Icon: Boxes },
-  // Orchestrator decomposition panel (HP-49 / HP-69): a goal → a MissionPlan
-  // preview + the five strategy mode cards (execution & merge), then launch.
-  // `run`-gated actions (hide for a read-only token); grouped under "Operate".
   { value: 'orchestrator', labelKey: 'nav.orchestrator', Panel: OrchestratorView, Icon: Waypoints },
-  // Mirador Autopilot view sprint: GET /v1/autopilot (guarded objective
-  // queue state — real-or-honest-empty, tenant-locked) + POST /v1/autopilot/
-  // pause|resume — read-only for any token, the Pause/Resume control inside
-  // gates itself on useRole().can('run') — see AutopilotView.
   { value: 'autopilot', labelKey: 'nav.autopilot', Panel: AutopilotView, Icon: Bot },
-  // Propose -> ratify -> dispatch PRD, Sprint 4: GET /v1/partitions (run
-  // floor) + the ratification gate (POST /v1/partitions/{id}/preview|ratify,
-  // approve floor) — read-only for any token that can see the list; the
-  // Review control and the whole ratification drawer inside gate themselves
-  // on useRole().can('approve') — see PartitionsView.
   { value: 'partitions', labelKey: 'nav.partitions', Panel: PartitionsView, Icon: Split },
   { value: 'workshop', labelKey: 'nav.workshop', Panel: SkillsWorkshopView, Icon: Sparkles },
-  // Mirador Graph View PRD, Sprint 3: read-only for any token; a graph
-  // source's own min_role (data-dependent, GET /v1/graph/{source}) gates
-  // itself inside GraphView, exactly like PanelView's per-panel min_role.
   { value: 'graph', labelKey: 'nav.graph', Panel: GraphView, Icon: Workflow },
+  { value: 'alerts', labelKey: 'nav.alerts', Panel: AlertsView, Icon: Bell },
 ] as const
 
-/** A dynamic panel tab's `value` — prefixed so it can never collide with a
- * built-in tab's static `value` above. */
 function panelTabValue(name: string): string {
   return `panel-${name}`
 }
 
-/**
- * The Pollen app shell — dark, grouped-sidebar insight dashboard (P0b:
- * sidebar nav + enriched header, upgrading the original flat top tab bar).
- * Built-in items (Home / Analytics / Cost / Health / Memory /
- * Approvals / Runs / Graph, wired to real HivePilot API data — `/v1/models`,
- * `/v1/efficiency`, `/v1/analytics/*`, `/v1/plugins/health`,
- * `/v1/memory/*`, `/v1/hindsight/*`, `/v1/approvals`, `/v1/runs`, `/v1/graph/*`,
- * see `./views/*` and `@/lib/pollen-api`) — Memory is Sources / Knowledge /
- * Quality / Growth (mem0 Search retired, HP-53) — grouped by
- * `./nav/nav-config`'s `buildNavGroups`, plus one DYNAMIC item per
- * plugin-contributed `panel` (Sprint 3 web surface, `GET /v1/panels`) —
- * ungrouped panels fall into a trailing "Panels" group automatically (see
- * `buildNavGroups`'s fallback). Each plugin panel lazy-fetches its own data
- * (`GET /v1/panels/{name}`) via `PanelView`, which handles its own
- * loading/error/empty/403 states — a panel that fails to load (or 403s for
- * the caller's role) never breaks the rest of the shell.
- *
- * The nav restructure (flat tabs -> grouped sidebar) is a UI change only —
- * `Tabs`'s uncontrolled `value` state (`defaultValue="analytics"`) is
- * exactly what it always was; `SidebarNav` renders the same
- * `TabsList`/`TabsTrigger` primitives, just grouped and styled as an
- * aside/drawer instead of a horizontal strip. See `SidebarNav`'s docstring
- * for why that's a single `TabsList`, not one per group.
- *
- * FR/EN i18n (P1a): the exported `Pollen` is just a `LanguageProvider`
- * wrap around the actual shell (`PollenShell`) — `useT()` needs a provider
- * ABOVE it in the tree, so it can't be called from the same component that
- * defines the provider.
- *
- * ⌘K command palette (P1b): the `Tabs` root below is now CONTROLLED
- * (`value`/`onValueChange` instead of `defaultValue`) — `activeView` is
- * lifted up here so `CommandPalette`'s nav commands (rendered as a header
- * sibling, outside the `Tabs` tree) can set the SAME state `SidebarNav`'s
- * `TabsTrigger`s set, without needing access to Base UI's internal Tabs
- * context. This is a UI-state-plumbing change only — the sidebar's own
- * click-to-switch behavior is unchanged, it now just flows through
- * `onValueChange` instead of Base UI's uncontrolled default.
- *
- * Home command-center sprint: `activeView`'s initial value is now `'home'`
- * (was `'analytics'`) — Home is the default landing view, first in both
- * `BUILTIN_TABS` and `nav-config.ts`'s `NAV_GROUP_ORDER`.
- */
 function PollenShell() {
   const t = useT()
   const panelsState = useAsyncData(() => fetchPanels(), [])
   const pluginPanels = panelsState.status === 'success' ? panelsState.data.panels : []
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
-  // Mirador Home command-center sprint: Home is the default landing view
-  // (was 'analytics').
-  const [activeView, setActiveView] = useState('home')
+  const [activeView, setActiveView] = useState('inbox')
   const [paletteOpen, setPaletteOpen] = useState(false)
+
+  const health = useAsyncData(() => fetchPluginsHealth(), [])
+  const runs = useAsyncData(async () => {
+    try {
+      return await fetchRuns(50)
+    } catch (error) {
+      if (error instanceof ApiForbiddenError) {
+        return []
+      }
+      throw error
+    }
+  }, [])
+  const issuesReady = health.status !== 'loading' && runs.status !== 'loading'
+  const issueCount = countShellIssues(
+    health.status === 'success' ? health.data.plugins : [],
+    runs.status === 'success' ? runs.data : [],
+  )
 
   const navItems: NavItem[] = [
     ...BUILTIN_TABS.map((tab) => ({ value: tab.value, label: t(tab.labelKey), Icon: tab.Icon })),
     ...pluginPanels.map((panel) => ({
       value: panelTabValue(panel.name),
       label: panel.title,
-      // Dynamic plugin panels have no fixed icon of their own (unlike the
-      // built-ins above) — a generic grid glyph distinguishes them as
-      // "extra" without implying a category `LayoutGrid` doesn't own.
       Icon: LayoutGrid,
     })),
   ]
   const navGroups = buildNavGroups(navItems).map((group) => ({ ...group, label: t(group.label) }))
+  const primaryItems = useMemo(() => pickNavItems(navItems, PRIMARY_NAV, t), [navItems, t])
+  const plusItems = useMemo(() => pickNavItems(navItems, PLUS_NAV, t), [navItems, t])
 
   return (
-    // Mirador actionable dashboard PRD, Sprint 1: RoleProvider fetches the
-    // caller's own RBAC role (GET /v1/whoami) once on mount and exposes it
-    // app-wide via useRole() — see @/lib/role-context. Provider wrap only;
-    // no other logic changes here.
     <RoleProvider>
-      {/* visual identity: `bg-grid` paints the faint tech-grid + soft
-       * radial glow across the whole shell (see `src/index.css`) — a
-       * background-image only, so it never affects layout/scroll behavior.
-       * The header stays a "glass panel" (semi-transparent + backdrop-blur,
-       * unchanged from before this sprint) floating over that texture. */}
-      <div className="bg-grid flex min-h-screen flex-col text-foreground">
-        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/80 py-3 pr-[max(0.75rem,env(safe-area-inset-right))] pb-3 pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.75rem,env(safe-area-inset-top))] backdrop-blur-md sm:px-6">
+      <div className="flex min-h-screen flex-col bg-background text-foreground">
+        <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background py-3 pr-[max(0.75rem,env(safe-area-inset-right))] pb-3 pl-[max(0.75rem,env(safe-area-inset-left))] pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-6">
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            // Bug fix ("the whole menu disappears"): must match
-            // `SidebarNav`'s own persistent-vs-drawer breakpoint (`md:`,
-            // not the old `lg:`) — otherwise a window between 768-1023px
-            // hides this hamburger (assuming the sidebar docks statically)
-            // while `SidebarNav` still treats that same width as an
-            // off-canvas drawer that closes on every click, with no
-            // hamburger left to reopen it.
             className="touch-target md:hidden"
             data-testid="mobile-nav-trigger"
             aria-label={t('common.openNavigation')}
@@ -266,32 +153,20 @@ function PollenShell() {
           >
             <Menu className="size-4" />
           </Button>
-          {/* Brand block (mirrors the reference mockup's `.brand` layout —
-           * a conic-gradient logo mark + wordmark + a lowercase eyebrow
-           * subtitle, now reading "Pollen") instead of a plain wordmark. */}
           <div className="flex min-w-0 items-center gap-2.5">
             <span
               data-slot="brand-mark"
               aria-hidden="true"
-              className="relative size-7 shrink-0 rounded-lg shadow-[0_0_16px_-4px_var(--color-good)]"
-              style={{
-                backgroundImage:
-                  'conic-gradient(from 210deg, var(--color-good), var(--primary), var(--violet), var(--color-good))',
-              }}
-            >
-              <span className="absolute inset-[3px] rounded-[5px] bg-background" />
-            </span>
-            <div className="flex min-w-0 flex-col">
-              <h1 className="truncate text-base font-bold tracking-wide uppercase">Pollen</h1>
-              <span className="eyebrow truncate">{t('header.subtitle')}</span>
-            </div>
+              className="size-7 shrink-0 rounded-full bg-primary"
+            />
+            <h1 className="truncate text-base font-semibold">Pollen</h1>
           </div>
-          <div className="ml-auto flex flex-wrap items-center gap-3">
+          <div className="ml-auto flex items-center gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="touch-target gap-2 text-muted-foreground"
+              className="touch-target h-8 gap-2 rounded-full text-muted-foreground"
               onClick={() => setPaletteOpen(true)}
               aria-label={t('header.search')}
             >
@@ -301,11 +176,8 @@ function PollenShell() {
                 ⌘K
               </kbd>
             </Button>
-            <StatusPills />
-            <InstallPrompt />
-            <PushToggle />
-            <LanguageToggle />
-            <ThemeToggle />
+            <IssuesChip count={issueCount} ready={issuesReady} onClick={() => setActiveView('alerts')} />
+            <OverflowMenu />
           </div>
         </header>
         <CommandPalette
@@ -321,18 +193,17 @@ function PollenShell() {
           className="min-h-0 flex-1 items-stretch"
         >
           <SidebarNav
-            groups={navGroups}
+            primary={primaryItems}
+            plusItems={plusItems}
+            plusLabel={t('nav.plus')}
+            plusHint={t('nav.plusHint')}
+            alertsCount={issueCount}
             mobileOpen={mobileNavOpen}
             onCloseMobile={() => setMobileNavOpen(false)}
           />
-          <main className="min-w-0 flex-1 overflow-x-hidden p-3 sm:p-6">
+          <main className="min-w-0 flex-1 overflow-x-hidden p-4 sm:p-8">
             {BUILTIN_TABS.map(({ value, Panel }) => (
               <TabsContent key={value} value={value}>
-                {/* HomeView is the one built-in tab that takes a prop
-                 * (`onNavigate`, wired to the SAME `setActiveView` the
-                 * sidebar/palette use, so its hero KPI deep links behave
-                 * identically to clicking a nav item) — every other
-                 * built-in Panel is prop-less. */}
                 {value === 'home' ? <HomeView onNavigate={setActiveView} /> : <Panel />}
               </TabsContent>
             ))}

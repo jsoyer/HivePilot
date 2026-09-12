@@ -55,7 +55,7 @@ describe('TokenGate', () => {
     mount()
     // No stored token — no validation call, no "checking" flash.
     expect(apiFetchMock).not.toHaveBeenCalled()
-    expect(container.querySelector('input[aria-label="HivePilot read token"]')).not.toBeNull()
+    expect(container.querySelector('input[aria-label="HivePilot token"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="protected-content"]')).toBeNull()
   })
 
@@ -86,7 +86,7 @@ describe('TokenGate', () => {
       mount()
     })
 
-    expect(container.querySelector('input[aria-label="HivePilot read token"]')).not.toBeNull()
+    expect(container.querySelector('input[aria-label="HivePilot token"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="protected-content"]')).toBeNull()
   })
 
@@ -97,7 +97,7 @@ describe('TokenGate', () => {
       mount()
     })
 
-    const input = container.querySelector('input[aria-label="HivePilot read token"]') as HTMLInputElement
+    const input = container.querySelector('input[aria-label="HivePilot token"]') as HTMLInputElement
     const form = container.querySelector('form') as HTMLFormElement
 
     await act(async () => {
@@ -125,7 +125,7 @@ describe('TokenGate', () => {
       mount()
     })
 
-    const input = container.querySelector('input[aria-label="HivePilot read token"]') as HTMLInputElement
+    const input = container.querySelector('input[aria-label="HivePilot token"]') as HTMLInputElement
     const form = container.querySelector('form') as HTMLFormElement
     const nativeSetter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype,
@@ -165,7 +165,7 @@ describe('TokenGate', () => {
       clearToken()
     })
 
-    expect(container.querySelector('input[aria-label="HivePilot read token"]')).not.toBeNull()
+    expect(container.querySelector('input[aria-label="HivePilot token"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="protected-content"]')).toBeNull()
   })
 })
