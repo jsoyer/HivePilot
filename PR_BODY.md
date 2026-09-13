@@ -24,4 +24,5 @@ Replay: `pytest tests/test_skill_events.py tests/test_skill_events_panel.py test
 
 - [x] `pytest tests/test_skill_events.py tests/test_skill_events_panel.py` — 21 passed
 - [x] `pytest tests/test_skill_orchestrator_wiring.py tests/test_actionable_events.py tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag` — 104 passed
+- [x] `pytest tests/test_plugin_installer.py` — classify `skill_events_panel` in `KNOWN_EXAMPLE_PLUGINS` (CI `Test (pytest)` on #679)
 - [x] `ruff check` + `ruff format --check` clean on touched Python
