@@ -37,6 +37,17 @@ message directly to a specific agent. Exact command names are chat commands the 
 for running a pipeline, listing steps/interactions, and approving gated actions — check
 `telegram info` or the bot's own help output for the current set.
 
+### Four doors (HP-92)
+
+When `HIVEPILOT_TELEGRAM_STREAM_TOPICS=true` in a forum group, HivePilot uses the same
+four persistent topics as the Pollen web doors — **Inbox**, **Approvals**, **Runs**,
+**Alerts**. Inbox holds talk / classify / confirm (pinned welcome; not a General dump).
+Approvals holds ✅/❌ gates. Runs is the run index; a live run may also get an ephemeral
+topic titled `{emoji} {slug}` with the run id in the first message. Alerts is
+failed + degraded + classifier. System/concierge messages use 🐝; hand-offs use the
+role-charte emojis below. Telegram still creates a built-in General topic — HivePilot
+does not use it as a catch-all.
+
 ### Role avatars on hand-offs (HP-16)
 
 Each streamed hand-off prefixes the actor with a per-role emoji (the same eight

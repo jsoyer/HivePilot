@@ -646,7 +646,8 @@ class TestConciergeOnAnswer:
             asyncio.run(telegram_bot._cmd_mention(update, context))
 
         mock_route.assert_called_once()
-        update.message.reply_text.assert_awaited_once_with("Nothing is running right now.")
+        update.message.reply_text.assert_awaited_once_with("🐝 Nothing is running right now.")
+        context.bot.send_message.assert_not_awaited()
 
 
 class TestConciergeOnDestructive:
@@ -689,6 +690,8 @@ class TestConciergeOnDestructive:
         keyboard = call_kwargs["reply_markup"]
         yes_button = keyboard.inline_keyboard[0][0]
         assert yes_button.callback_data == f"concierge:yes:{stored_token}"
+        assert call_kwargs["text"].startswith("🐝 Confirm")
+        assert "Yes runs it" in call_kwargs["text"]
 
     def test_confirmation_sent_as_plain_text_not_markdown(
         self, monkeypatch: pytest.MonkeyPatch

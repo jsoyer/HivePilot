@@ -335,7 +335,11 @@ class TestOrphanTopicKeys:
         import hivepilot.roles
 
         monkeypatch.setattr(hivepilot.roles, "ROLES", {"developer": object()})
-        self._registry(tmp_path, monkeypatch, {"hivepilot": 328})
+        self._registry(
+            tmp_path,
+            monkeypatch,
+            {"hivepilot": 328, "inbox": 1, "runs": 2, "alerts": 3, "run:42": 4},
+        )
 
         assert dl.check_orphan_topic_keys() == []
 

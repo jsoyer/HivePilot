@@ -28,9 +28,9 @@ from hivepilot.services.notification_service import (
     NOTIFIER_MAP,
     NotifierKindCollisionError,
     NotifierRegistry,
+    _notify_telegram,
     _send_discord,
     _send_slack,
-    _send_telegram,
     send_notification,
 )
 
@@ -51,7 +51,7 @@ class TestBuiltinNonRegression:
     def test_builtin_channels_registered_at_import(self) -> None:
         assert NOTIFIER_MAP["slack"] is _send_slack
         assert NOTIFIER_MAP["discord"] is _send_discord
-        assert NOTIFIER_MAP["telegram"] is _send_telegram
+        assert NOTIFIER_MAP["telegram"] is _notify_telegram
 
 
 class TestRegisterAndDispatch:

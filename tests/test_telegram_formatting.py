@@ -68,8 +68,7 @@ def rich_capture(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
 
 
 def test_stream_agent_turn_no_tables_in_card(rich_capture: list[dict]) -> None:
-    """Rich card strips markdown tables, heading markers, and caps at 5 bullets."""
-    # Build a summary with a markdown table, heading, and 10 bullet points
+    """Softer card: bold title + two meta lines; no table dump, no bullet list."""
     summary = (
         "## status\n"
         "PASS\n"
@@ -80,10 +79,6 @@ def test_stream_agent_turn_no_tables_in_card(rich_capture: list[dict]) -> None:
         "- Bullet point four\n"
         "- Bullet point five\n"
         "- Bullet point six (should be dropped)\n"
-        "- Bullet point seven (should be dropped)\n"
-        "- Bullet point eight (should be dropped)\n"
-        "- Bullet point nine (should be dropped)\n"
-        "- Bullet point ten (should be dropped)\n"
         "## decisions\n"
         "| file | action |\n"
         "|------|--------|\n"
@@ -95,15 +90,14 @@ def test_stream_agent_turn_no_tables_in_card(rich_capture: list[dict]) -> None:
     assert len(rich_capture) == 1
     msg = rich_capture[0]["msg"]
 
-    # No pipe characters from table rows
     assert "|" not in msg, f"Table pipe found in card: {msg!r}"
-
-    # At most 5 bullets (count '•' characters)
-    bullet_count = msg.count("•")
-    assert bullet_count <= 5, f"Too many bullets ({bullet_count}): {msg!r}"
-
-    # Total length reasonable
-    assert len(msg) <= 800, f"Card too long ({len(msg)}): {msg!r}"
+    assert msg.count("\n") == 2, f"Expected title + 2 meta lines: {msg!r}"
+    assert "<b>Developer</b>" in msg
+    assert "PASS" in msg
+    assert "Bullet point one" in msg
+    assert "Bullet point two" not in msg
+    assert "•" not in msg
+    assert len(msg) <= 400, f"Card too long ({len(msg)}): {msg!r}"
 
 
 def test_stream_agent_turn_artifact_link_in_card(rich_capture: list[dict]) -> None:
@@ -123,5 +117,8 @@ def test_stream_agent_turn_artifact_link_in_card(rich_capture: list[dict]) -> No
     assert len(rich_capture) == 1
     msg = rich_capture[0]["msg"]
 
-    # The artifact path should appear in the card
-    assert "artifact.md" in msg, f"Artifact link not found in card: {msg!r}"
+    # Soft card: title + status + first summary. Vault links stay in the
+    # artifact, not a third chrome line, unless there is no summary.
+    assert "<b>Developer</b>" in msg
+    assert "Implementation complete" in msg
+    assert msg.count("\n") == 2

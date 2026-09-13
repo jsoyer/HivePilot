@@ -15,6 +15,24 @@ import requests
 from hivepilot import outward
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
+from hivepilot.services.telegram_avatars import custom_emoji_entities, role_key_from_actor
+from hivepilot.services.telegram_doors import (
+    INBOX,
+    INBOX_WELCOME_HTML,
+    PERSISTENT_DOORS,
+    RUNS,
+    SEMANTIC_TURN_ICONS,
+    classify_notification_door,
+    door_title,
+    is_run_topic_key,
+    run_first_message_html,
+    run_topic_key,
+    run_topic_title,
+    slugify,
+    soft_card_from_report,
+    speaker_html,
+    speaker_plain,
+)
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -260,6 +278,21 @@ def _send_telegram(
         )
 
 
+def _notify_telegram(message: str) -> None:
+    """Plain ``send_notification`` path — door-routed when forum topics are on.
+
+    Failed / degraded / classifier → Alerts; otherwise Inbox. Does not dump
+    into Telegram's built-in General topic. ``_send_telegram`` stays the
+    low-level send used by streams and tests.
+    """
+    chat_id: int | str | None = None
+    thread_id: int | None = None
+    if settings.telegram_stream_topics is True and settings.telegram_stream_chat_id:
+        chat_id = settings.telegram_stream_chat_id
+        thread_id = door_thread(classify_notification_door(message))
+    _send_telegram(message, chat_id=chat_id, message_thread_id=thread_id)
+
+
 def _send_web_push(message: str) -> None:
     from hivepilot.services.web_push_service import WebPushNotConfigured, send_web_push_notification
 
@@ -271,7 +304,7 @@ def _send_web_push(message: str) -> None:
 
 NotifierRegistry.register("slack", _send_slack)
 NotifierRegistry.register("discord", _send_discord)
-NotifierRegistry.register("telegram", _send_telegram)
+NotifierRegistry.register("telegram", _notify_telegram)
 NotifierRegistry.register("webpush", _send_web_push)
 
 
@@ -290,7 +323,7 @@ NotifierRegistry.register("webpush", _send_web_push)
 # A *closed* (not deleted) topic is a DIFFERENT error class
 # (e.g. "TOPIC_CLOSED") and must NOT be treated the same way: the operator
 # closed it deliberately, so recreating it would defeat that decision —
-# route to the chat's General topic instead (see `_send_one_chunk`).
+# route to Inbox (not Telegram's built-in General dump) — see `_send_one_chunk`.
 # ---------------------------------------------------------------------------
 
 # Non-role stream keys the ENGINE itself emits and which legitimately own a
@@ -316,7 +349,11 @@ NotifierRegistry.register("webpush", _send_web_push)
 # this set -- without it, the live approvals topic is reported as belonging
 # to no role, and acting on that advice deletes the topic approvals are sent
 # to. A cleanup suggestion that breaks a working feature is worse than none.
-_ENGINE_STREAM_TOPIC_KEYS: frozenset[str] = frozenset({"hivepilot", "approvals"})
+# Pollen doors (inbox/approvals/runs/alerts) plus the orchestrator's own
+# `hivepilot` actor key. Doors are persistent topics; `hivepilot` is a
+# declared stream key so the doctor does not flag it, but Telegram routing
+# no longer mints a dedicated HivePilot topic — those turns go to Runs.
+_ENGINE_STREAM_TOPIC_KEYS: frozenset[str] = frozenset({"hivepilot", *PERSISTENT_DOORS})
 
 _STALE_TOPIC_MARKERS: tuple[str, ...] = (
     "message thread not found",
@@ -616,9 +653,10 @@ def _resolve_agent_key(actor: str) -> str | None:
     in that window — a duplicate topic under a name that also loses the
     "Firstname (Role)" convention, because the title comes from the raw actor
     string. Roles are reloaded continuously, so the window is real: two such
-    'Gustave' topics were created in production. A caller receiving ``None``
-    must NOT create a topic; it sends to the group's General topic instead,
-    which is recoverable — a wrongly-named topic is not.
+    'Gustave' topics were created in production.     A caller receiving ``None``
+    must NOT create a topic; Telegram routing sends to Inbox (or Runs)
+    instead of minting a slug topic — recoverable, unlike a wrongly-named
+    topic.
     """
     from hivepilot.roles import ROLES
 
@@ -644,7 +682,7 @@ def _resolve_agent_key(actor: str) -> str | None:
         actor=actor,
         slug=slug or None,
         detail="actor matched no role and is not a declared stream key; "
-        "sending to the group's General topic instead of minting a topic",
+        "sending to a Pollen door (Inbox/Runs) instead of minting a topic",
     )
     return None
 
@@ -661,15 +699,19 @@ def _allowed_non_role_topic_keys() -> frozenset[str]:
 
 
 def _canonical_topic_title(agent_key: str, fallback: str | None = None) -> str:
-    """The topic name for *agent_key* — always "Firstname (Role)" for a role.
+    """Topic name for *agent_key*.
 
-    Derived from ROLES rather than from whatever string the call site happened
-    to pass, so the naming convention cannot drift between callers: one path
-    passed a bare display name (producing a topic called "Gustave") and
-    another passed nothing at all, falling back to the raw key (producing a
-    topic called "pentest"). Both bypassed the convention that
-    `Gustave (Developer)` follows.
+    Persistent Pollen doors use the door title (Inbox / Approvals / Runs /
+    Alerts). Ephemeral run keys keep the supplied ``{emoji} {slug}`` title.
+    A role key still uses "Firstname (Role)" — leftover per-role registry
+    entries and the Slack/Discord generic path.
     """
+    titled = door_title(agent_key)
+    if titled:
+        return titled
+    if is_run_topic_key(agent_key):
+        return fallback or agent_key
+
     from hivepilot.roles import ROLES
 
     role = ROLES.get(agent_key)
@@ -736,9 +778,9 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
         logger.warning(
             "topics.creation_capped",
             agent_key=agent_key,
-            detail="already created a topic for this role in this process and the "
+            detail="already created a topic for this key in this process and the "
             "registry still does not resolve it; refusing to create another. "
-            "Messages fall back to the general thread.",
+            "Messages fall back to Inbox.",
             registry_path=str(_topics_registry_path()),
         )
         return None
@@ -770,6 +812,76 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
     return None
 
 
+_WELCOME_REGISTRY_KEY = "_inbox_welcome"
+
+
+def door_thread(door: str) -> int | None:
+    """Ensure a persistent Pollen door and return its thread id."""
+    title = door_title(door) or door
+    return _ensure_topic_thread(door, title)
+
+
+def inbox_fallback_thread(exclude: int | None = None) -> int | None:
+    """Inbox thread id, or ``None`` when it is missing or *exclude* (same closed id)."""
+    thread_id = door_thread(INBOX)
+    if thread_id is None or thread_id == exclude:
+        return None
+    return thread_id
+
+
+def ensure_pollen_doors() -> dict[str, int]:
+    """Create the four persistent doors. Best-effort; never raises."""
+    landed: dict[str, int] = {}
+    if not (settings.telegram_stream_topics is True and settings.telegram_stream_chat_id):
+        return landed
+    for key in PERSISTENT_DOORS:
+        thread_id = door_thread(key)
+        if thread_id is not None:
+            landed[key] = thread_id
+    inbox_id = landed.get(INBOX)
+    if inbox_id is not None:
+        _ensure_inbox_welcome(inbox_id)
+    return landed
+
+
+def _ensure_inbox_welcome(inbox_thread_id: int) -> None:
+    """Pin a welcome card on Inbox once. Not a fifth Welcome topic."""
+    token = settings.telegram_bot_token
+    chat_id = settings.telegram_stream_chat_id
+    if not token or not chat_id:
+        return
+    registry = _load_topics()
+    if _WELCOME_REGISTRY_KEY in registry:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(
+            url,
+            json={
+                "chat_id": chat_id,
+                "message_thread_id": inbox_thread_id,
+                "text": INBOX_WELCOME_HTML,
+                "parse_mode": "HTML",
+            },
+            timeout=5,
+        )
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning("stream.inbox_welcome.send_failed", response=data)
+            return
+        message_id = data["result"]["message_id"]
+        pin_url = f"https://api.telegram.org/bot{token}/pinChatMessage"
+        requests.post(
+            pin_url,
+            json={"chat_id": chat_id, "message_id": message_id, "disable_notification": True},
+            timeout=5,
+        )
+        _register_topic(_WELCOME_REGISTRY_KEY, int(message_id))
+        logger.info("stream.inbox_welcome.pinned", message_id=message_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.inbox_welcome.error", error=str(exc))
+
+
 def _render_rich_card(
     *,
     icon: str,
@@ -780,71 +892,10 @@ def _render_rich_card(
     """Render an HTML card for Telegram's HTML parse mode.
 
     Returns a string ready for ``parse_mode="HTML"``. All user-derived text
-    is escaped via ``html.escape``. The card is never truncated here — a
-    card longer than Telegram's message cap is split into multiple ordered
-    messages by :func:`_split_for_telegram` at the call site.
+    is escaped via ``html.escape``. Softer Pollen card: bold title plus two
+    meta lines (target/status, then first summary or next/confidence).
     """
-    lines: list[str] = []
-
-    # Header: icon [role-avatar] <b>Actor</b> → <i>Target</i>
-    from hivepilot.services.telegram_avatars import html_mark, role_key_from_actor
-
-    avatar = html_mark(role_key_from_actor(actor))
-    header = f"{icon} {avatar}<b>{html.escape(actor)}</b>"
-    if target:
-        header += f" → <i>{html.escape(target)}</i>"
-    lines.append(header)
-
-    # Status badge
-    if report.status:
-        badge = _STATUS_BADGES.get(report.status.upper(), f"📋 {html.escape(report.status)}")
-        lines.append(badge)
-
-    # Summary bullets — max 5 items shown inline (a deliberate curation
-    # choice, not a character-length truncation); each bullet is rendered in
-    # FULL, never clipped. If there are more than 5, a count-based notice
-    # (with a link to the full artifact when available) explains the rest —
-    # the content itself is never cut off mid-sentence.
-    from hivepilot.services.agent_report import to_telegram_text
-
-    # Find vault artifact link (any .md path in report.links)
-    artifact_link: str | None = next(
-        (lnk for lnk in report.links if lnk.endswith(".md") and not lnk.startswith("http")),
-        None,
-    )
-
-    shown = report.summary[:5]
-    bullet_lines = [
-        f"• {html.escape(clean)}" for bullet in shown if (clean := to_telegram_text(bullet).strip())
-    ]
-
-    if len(report.summary) > len(shown):
-        more = len(report.summary) - len(shown)
-        notice = f"… (+{more} more — full details in the vault artifact)"
-        if artifact_link:
-            safe = html.escape(artifact_link)
-            notice += f' <a href="file://{safe}">{safe}</a>'
-        bullet_lines.append(notice)
-
-    lines.extend(bullet_lines)
-
-    # Next handoff
-    if report.next_handoff:
-        lines.append(f"↪ next: {html.escape(report.next_handoff)}")
-
-    # Confidence
-    if report.confidence:
-        lines.append(f"confidence: {html.escape(report.confidence)}")
-
-    # Links (as <a> tags)
-    for link in report.links:
-        safe = html.escape(link)
-        if link.startswith("http"):
-            lines.append(f'<a href="{safe}">{safe}</a>')
-        else:
-            lines.append(f'<a href="file://{safe}">{safe}</a>')
-
-    return "\n".join(lines)
+    return soft_card_from_report(actor=actor, target=target, report=report, icon=icon)
 
 
 # ---------------------------------------------------------------------------
@@ -1122,42 +1173,64 @@ def _deliver_threadless(
     parse_mode: str | None,
     agent_key: str | None,
     entities: list[dict[str, Any]] | None = None,
+    exclude_thread_id: int | None = None,
 ) -> None:
-    """Last-resort send with NO ``message_thread_id`` (the chat's General
-    topic) — used once a topic is confirmed dead/closed and recreation
-    either isn't attempted (closed) or failed (dead, recreate/resend both
-    failed). Tries the original *parse_mode* first so formatting survives
-    when the only problem was the topic, then degrades to plain text.
-    Content must always reach the operator — this is the final line of
-    defense against ever silently dropping a message.
+    """Fallback send after a dead/closed topic.
+
+    Prefer Inbox (not Telegram's built-in General dump). Only send
+    threadless when Inbox is unavailable or is the same closed id.
+    Content must always reach the operator.
     """
+    inbox_id = inbox_fallback_thread(exclude_thread_id)
+    thread_id = inbox_id
     try:
         _telegram_send(
             chunk,
             chat_id=chat_id,
-            message_thread_id=None,
+            message_thread_id=thread_id,
             parse_mode=parse_mode,
             entities=entities if parse_mode is None else None,
         )
     except _NotConfigured:
         raise
     except Exception as exc:  # noqa: BLE001
+        if thread_id is not None:
+            try:
+                _telegram_send(
+                    chunk,
+                    chat_id=chat_id,
+                    message_thread_id=None,
+                    parse_mode=parse_mode,
+                    entities=entities if parse_mode is None else None,
+                )
+                logger.info(
+                    "stream.topic_self_heal_delivered_inbox_failed_threadless",
+                    agent_key=agent_key,
+                    chat_id=mask_id(chat_id),
+                    error=str(exc),
+                )
+                return
+            except Exception:
+                pass
         plain = _strip_html(chunk) if parse_mode else chunk
         _telegram_send(
             plain, chat_id=chat_id, message_thread_id=None, parse_mode=None, entities=None
         )
         logger.info(
-            "stream.topic_self_heal_delivered_general_plain",
+            "stream.topic_self_heal_delivered_threadless_plain",
             agent_key=agent_key,
             chat_id=mask_id(chat_id),
             error=str(exc),
         )
         return
     logger.info(
-        "stream.topic_self_heal_delivered_general",
+        "stream.topic_self_heal_delivered_inbox"
+        if thread_id is not None
+        else "stream.topic_self_heal_delivered_threadless",
         agent_key=agent_key,
         chat_id=mask_id(chat_id),
         parse_mode=parse_mode,
+        message_thread_id=thread_id,
     )
 
 
@@ -1208,9 +1281,9 @@ def _send_one_chunk(
             and _is_closed_topic_error(description)
         ):
             # Operator closed this topic deliberately -- do NOT recreate it,
-            # route to General instead.
+            # route to Inbox instead of Telegram's General dump.
             logger.warning(
-                "stream.topic_closed_fallback_general",
+                "stream.topic_closed_fallback_inbox",
                 agent_key=agent_key,
                 chat_id=mask_id(chat_id),
                 message_thread_id=message_thread_id,
@@ -1222,6 +1295,7 @@ def _send_one_chunk(
                 parse_mode=parse_mode,
                 agent_key=agent_key,
                 entities=entities if parse_mode is None else None,
+                exclude_thread_id=message_thread_id,
             )
             return None
 
@@ -1273,6 +1347,7 @@ def _send_one_chunk(
                 parse_mode=parse_mode,
                 agent_key=agent_key,
                 entities=entities if parse_mode is None else None,
+                exclude_thread_id=message_thread_id,
             )
             return None
 
@@ -1364,8 +1439,8 @@ def _send_chunks(
     self-heals: the dead registry entry is invalidated, a fresh topic is
     created via `_ensure_topic_thread`, and every remaining chunk (including
     the one that failed) is sent to the NEW thread id — see
-    `_send_one_chunk`. A "TOPIC_CLOSED" error instead routes to the chat's
-    General topic without recreating (the operator closed it on purpose).
+    `_send_one_chunk`. A "TOPIC_CLOSED" error instead routes to Inbox
+    without recreating (the operator closed the original topic on purpose).
     """
     thread_id = message_thread_id
     first = True
@@ -1385,6 +1460,53 @@ def _send_chunks(
         )
 
 
+def _resolve_stream_topic(
+    *,
+    actor: str,
+    run_id: int | None,
+    run_slug: str | None,
+    target: str | None,
+) -> tuple[str | None, str | None, int | None]:
+    """Pick a Pollen door or ephemeral RUN topic. Never General, never a role topic."""
+    if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
+        return None, None, None
+    role_key = role_key_from_actor(actor)
+    if run_id is not None:
+        slug = slugify(run_slug or target or actor)
+        key = run_topic_key(run_id)
+        title = run_topic_title(role_key, slug)
+        registry = _load_topics()
+        existed = key in registry
+        thread_id = _ensure_topic_thread(key, title)
+        if thread_id is not None and not existed:
+            try:
+                _send_chunks(
+                    run_first_message_html(run_id, slug),
+                    chat_id=settings.telegram_stream_chat_id,
+                    message_thread_id=thread_id,
+                    parse_mode="HTML",
+                    html_aware=True,
+                    agent_key=key,
+                    topic_title=title,
+                )
+                runs_id = door_thread(RUNS)
+                if runs_id is not None:
+                    index = f"{speaker_html(actor)}<b>{html.escape(title)}</b>\nrun #{int(run_id)}"
+                    _send_chunks(
+                        index,
+                        chat_id=settings.telegram_stream_chat_id,
+                        message_thread_id=runs_id,
+                        parse_mode="HTML",
+                        html_aware=True,
+                        agent_key=RUNS,
+                        topic_title=door_title(RUNS),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("stream.run_topic.seed_failed", run_id=run_id, error=str(exc))
+        return key, title, thread_id
+    return RUNS, door_title(RUNS), door_thread(RUNS)
+
+
 def _stream_agent_turn_telegram(
     *,
     actor: str,
@@ -1392,6 +1514,8 @@ def _stream_agent_turn_telegram(
     target: str | None = None,
     summary: str | None = None,
     icon: str = "🗣",
+    run_id: int | None = None,
+    run_slug: str | None = None,
 ) -> None:
     """Live-stream a single agent's turn to Telegram (outbound ``sendMessage`` only).
 
@@ -1429,31 +1553,17 @@ def _stream_agent_turn_telegram(
 
     summary = redact_text(summary) if summary is not None else summary
 
-    message_thread_id: int | None = None
-    stream_agent_key: str | None = None
-    stream_topic_title: str | None = None
-    if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
-        stream_agent_key = _resolve_agent_key(actor)
-        if stream_agent_key is not None:
-            # Canonical, role-derived name — never the raw actor string, which
-            # varies by call site and produced bare "Gustave" topics.
-            stream_topic_title = _canonical_topic_title(stream_agent_key, actor)
-            message_thread_id = _ensure_topic_thread(stream_agent_key, stream_topic_title)
+    stream_agent_key, stream_topic_title, message_thread_id = _resolve_stream_topic(
+        actor=actor, run_id=run_id, run_slug=run_slug, target=target
+    )
 
     use_rich = getattr(settings, "telegram_stream_rich", True)
     chat_id = settings.telegram_stream_chat_id
-    label = _ICON_LABELS.get(icon)
-    tag = f"{icon} ({label})" if label else icon
-    from hivepilot.services.telegram_avatars import (
-        custom_emoji_entities,
-        html_mark,
-        plain_mark,
-        role_key_from_actor,
-    )
 
     avatar_key = role_key_from_actor(actor)
-    avatar_html = html_mark(avatar_key)
-    avatar_plain = plain_mark(avatar_key)
+    avatar_html = speaker_html(actor, icon=icon)
+    avatar_plain = speaker_plain(actor, icon=icon)
+    use_semantic_mark = icon in SEMANTIC_TURN_ICONS
 
     message_text: str | None = None
     parse_mode: str | None = None
@@ -1479,12 +1589,11 @@ def _stream_agent_turn_telegram(
                 # Long, unstructured hand-off/stage output — the case that
                 # used to get clipped at _STREAM_MAX_CHARS. Render readable
                 # HTML instead of a plain, collapsed-whitespace snippet.
-                header_html = f"<b>{html.escape(tag)} {avatar_html}{html.escape(actor)}</b>"
-                if stage:
-                    header_html += f" — {html.escape(stage)}"
+                header_html = f"{avatar_html}<b>{html.escape(actor)}</b>"
+                meta = " · ".join(p for p in (stage, target) if p)
                 body_lines = [header_html]
-                if target:
-                    body_lines.append(f"   ↳ {html.escape(target)}")
+                if meta:
+                    body_lines.append(html.escape(meta))
                 body_lines.append(_format_for_telegram_html(summary))
                 message_text = "\n".join(body_lines)
                 parse_mode = "HTML"
@@ -1500,19 +1609,20 @@ def _stream_agent_turn_telegram(
     # rich render above raised) — same legacy rendering as before, minus the
     # hard truncation: full content, split into multiple messages if long. ---
     if message_text is None:
-        header = f"{tag} {avatar_plain}{actor}" + (f" — {stage}" if stage else "")
+        header = f"{avatar_plain}{actor}"
         plain_lines = [header]
-        if target:
-            plain_lines.append(f"   ↳ {target}")
+        meta = " · ".join(p for p in (stage, target) if p)
+        if meta:
+            plain_lines.append(meta)
         if summary:
             snippet = " ".join(summary.split())
             if snippet:
-                plain_lines.append(f"   {snippet}")
-        message_text = "\n".join(plain_lines)
+                plain_lines.append(snippet)
+        message_text = "\n".join(plain_lines[:3] if not summary else plain_lines)
         parse_mode = None
         html_aware = False
-        if avatar_plain:
-            stream_entities = custom_emoji_entities(avatar_key, prefix=f"{tag} ")
+        if avatar_key and not use_semantic_mark:
+            stream_entities = custom_emoji_entities(avatar_key, prefix="")
 
     try:
         # Live agent stream goes to its dedicated channel when set, else
@@ -1631,6 +1741,8 @@ def stream_agent_turn(
     target: str | None = None,
     summary: str | None = None,
     icon: str = "🗣",
+    run_id: int | None = None,
+    run_slug: str | None = None,
 ) -> None:
     """Live-stream a single agent's turn to every ENABLED stream channel --
     Telegram, Slack, Discord, or a plugin-registered channel (see
@@ -1659,7 +1771,13 @@ def stream_agent_turn(
 
     try:
         _stream_agent_turn_telegram(
-            actor=actor, stage=stage, target=target, summary=summary, icon=icon
+            actor=actor,
+            stage=stage,
+            target=target,
+            summary=summary,
+            icon=icon,
+            run_id=run_id,
+            run_slug=run_slug,
         )
     except Exception as exc:  # noqa: BLE001 -- extra safety net; the callee already never raises
         logger.warning("stream.telegram_failed", error=str(exc))

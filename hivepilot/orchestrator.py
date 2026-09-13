@@ -5184,6 +5184,8 @@ class Orchestrator:
                 stage=stage.name,
                 target=next_target,
                 summary=stage_output,
+                run_id=run_id,
+                run_slug=(project_names[0] if project_names else pipeline_name),
             )
 
             # Surface inter-agent challenges (⚔️) and bounded rebuttal (🛡️/⚖️/🙋)
