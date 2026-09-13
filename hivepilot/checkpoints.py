@@ -8,8 +8,9 @@ that same key. The effect runs at most once; a crash mid-approval cannot
 produce a second execution.
 
 HP-95 ``volatile`` tools skip the effect cache (see ``side_effects``).
-This module does not implement memory proposals, presenter parity, skill
-doctrine, or trust (HP-101 / HP-102 / HP-103 / HP-105).
+Presenter parity (HP-102) calls ``approve_and_resume`` / ``resume`` through
+``decide_approval``. This module does not implement skill doctrine or trust
+(HP-103 / HP-105).
 """
 
 from __future__ import annotations
@@ -189,6 +190,26 @@ def get_checkpoint_by_id(checkpoint_id: str) -> ToolCheckpoint | None:
         row = conn.execute(
             db.ph("SELECT * FROM checkpoints WHERE id=?"),
             (checkpoint_id,),
+        ).fetchone()
+    return _row(row) if row else None
+
+
+def get_checkpoint_by_proposal(proposal_id: str) -> ToolCheckpoint | None:
+    """Latest ``pending_tool`` row for a PASS proposal, if any."""
+    cleaned = (proposal_id or "").strip()
+    if not cleaned:
+        return None
+    _ensure_table()
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph(
+                """
+                SELECT * FROM checkpoints
+                WHERE proposal_id=?
+                ORDER BY created_at DESC, id DESC
+                """
+            ),
+            (cleaned,),
         ).fetchone()
     return _row(row) if row else None
 

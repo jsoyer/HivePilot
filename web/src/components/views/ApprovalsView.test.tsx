@@ -2,18 +2,22 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
-import type { Approval } from '@/lib/pollen-api'
+import type { Approval, PassApproval } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchApprovals, postApproval, useRoleMock } = vi.hoisted(() => ({
-  fetchApprovals: vi.fn(),
-  postApproval: vi.fn(),
-  useRoleMock: vi.fn(),
-}))
+const { fetchApprovals, fetchPassApprovals, postApproval, postPassApproval, useRoleMock } = vi.hoisted(
+  () => ({
+    fetchApprovals: vi.fn(),
+    fetchPassApprovals: vi.fn(),
+    postApproval: vi.fn(),
+    postPassApproval: vi.fn(),
+    useRoleMock: vi.fn(),
+  }),
+)
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchApprovals, postApproval }
+  return { ...actual, fetchApprovals, fetchPassApprovals, postApproval, postPassApproval }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -35,6 +39,20 @@ const SAMPLE_APPROVAL: Approval = {
   task: 'deploy',
   status: 'pending',
   requested_at: '2026-07-18T10:00:00Z',
+}
+
+const SAMPLE_PASS: PassApproval = {
+  approval_id: 'abc123def',
+  kind: 'memory',
+  status: 'PENDING',
+  project: 'example-api',
+  task: 'docs',
+  action: 'memory.write',
+  title: 'Memory write',
+  summary: 'json_memory prefs',
+  owner_id: 'jerome',
+  door: 'approvals',
+  surfaces: ['pollen', 'telegram'],
 }
 
 function mockRole(role: Role, rank: number) {
@@ -59,8 +77,11 @@ function mount() {
 
 beforeEach(() => {
   fetchApprovals.mockReset()
+  fetchPassApprovals.mockReset()
   postApproval.mockReset()
+  postPassApproval.mockReset()
   useRoleMock.mockReset()
+  fetchPassApprovals.mockResolvedValue([])
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -368,5 +389,36 @@ describe('ApprovalsView', () => {
     })
 
     expect(container.textContent).toContain('Aucune approbation en attente.')
+  })
+
+  it('approves a PASS card by approval_id (same id Telegram uses)', async () => {
+    fetchApprovals.mockResolvedValue([])
+    fetchPassApprovals.mockResolvedValue([SAMPLE_PASS])
+    postPassApproval.mockResolvedValue({
+      approval_id: SAMPLE_PASS.approval_id,
+      decision: 'approve',
+      surface: 'pollen',
+      proposal: { status: 'APPROVED' },
+    })
+    mockRole('approve', 2)
+
+    await act(async () => {
+      mount()
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector(`[data-approval-id="${SAMPLE_PASS.approval_id}"]`)).not.toBeNull()
+    const approveButton = container.querySelector(
+      `[aria-label="Approve ${SAMPLE_PASS.approval_id}"]`,
+    ) as HTMLButtonElement
+    expect(approveButton).not.toBeNull()
+
+    await act(async () => {
+      approveButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(postPassApproval).toHaveBeenCalledWith(SAMPLE_PASS.approval_id, { decision: 'approve' })
   })
 })

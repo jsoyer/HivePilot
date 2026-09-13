@@ -655,6 +655,13 @@ export const fr: Record<TranslationKey, string> = {
   'approvals.confirmDeny': 'Confirmer le refus',
   'approvals.insufficientRoleApprove':
     'Rôle insuffisant — votre jeton ne peut plus approuver/refuser cette exécution.',
+  'approvals.passTitle': 'Boîte PASS',
+  'approvals.passDescription':
+    'Cartes outil, mémoire et skill — le même identifiant que le topic Telegram Approvals.',
+  'approvals.noPassPending': 'Aucune carte PASS en attente.',
+  'approvals.kind': 'Type',
+  'approvals.approvePassAriaLabel': 'Approuver {id}',
+  'approvals.denyPassAriaLabel': 'Refuser {id}',
 
   // ---- Runs view -----------------------------------------------------------
   'runs.descriptionCanRun': 'Déclenchez une nouvelle exécution et suivez son statut en direct.',

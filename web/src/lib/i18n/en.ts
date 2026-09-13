@@ -657,6 +657,12 @@ export const en = {
   'approvals.confirmDeny': 'Confirm deny',
   'approvals.insufficientRoleApprove':
     'Insufficient role — your token can no longer approve/deny this run.',
+  'approvals.passTitle': 'PASS inbox',
+  'approvals.passDescription': 'Tool, memory, and skill cards — same id as the Telegram Approvals topic.',
+  'approvals.noPassPending': 'No pending PASS cards.',
+  'approvals.kind': 'Kind',
+  'approvals.approvePassAriaLabel': 'Approve {id}',
+  'approvals.denyPassAriaLabel': 'Deny {id}',
 
   // ---- Runs view -----------------------------------------------------------
   'runs.descriptionCanRun': 'Trigger a new run and watch its status update live.',

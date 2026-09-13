@@ -29,6 +29,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from hivepilot import roles
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
+from hivepilot.pass_store import PassStoreError
+from hivepilot.presenters import (
+    POLLEN,
+    PresenterError,
+    decide_approval,
+    memory_corpus,
+    pollen_card,
+    present_pending,
+)
 from hivepilot.services import (
     analytics_service,
     async_run_service,
@@ -1215,6 +1224,21 @@ class ApprovalAction(BaseModel):
     reason: str | None = None
 
 
+class PassApprovalAction(BaseModel):
+    """Pollen Approvals-door decide — same approval_id as Telegram."""
+
+    decision: str = "approve"
+    reason: str | None = None
+    edited_payload: dict[str, Any] | None = None
+
+
+def _pass_owner(caller: token_service.TokenEntry) -> str:
+    note = (caller.note or "").strip()
+    if note:
+        return note
+    return f"{caller.tenant}:{caller.role}"
+
+
 class ApprovalRuleIn(BaseModel):
     id: str | None = None
     project: str = ""
@@ -1365,6 +1389,39 @@ def handle_approval(
             detail=f"Approval processing failed for run {run_id}: {exc}",
         ) from exc
     return {"result": result.__dict__}
+
+
+@v1.get("/pass-approvals")
+def list_pass_approvals(caller: token_service.TokenEntry = Depends(require_role("run"))):
+    """Pollen Approvals-door cards. Same approval_id as the Telegram keyboard."""
+    tenant = None if caller.role == "admin" else caller.tenant
+    cards = present_pending(owner_id=_pass_owner(caller), tenant=tenant)
+    return [pollen_card(card) for card in cards]
+
+
+@v1.post("/pass-approvals/{approval_id}")
+def handle_pass_approval(
+    approval_id: str,
+    action: PassApprovalAction,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+):
+    """Decide a presented PASS card — shared ``decide_approval()`` with Telegram."""
+    try:
+        result = decide_approval(
+            approval_id,
+            action.decision,
+            owner_id=_pass_owner(caller),
+            surface=POLLEN,
+            actor=f"pollen:{_pass_owner(caller)}",
+            reason=action.reason or "",
+            corpus=memory_corpus(),
+            edited_payload=action.edited_payload,
+        )
+    except PresenterError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except PassStoreError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return result.to_dict()
 
 
 # ---------------------------------------------------------------------------

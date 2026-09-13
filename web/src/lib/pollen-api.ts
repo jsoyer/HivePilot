@@ -1212,6 +1212,45 @@ export function postApproval(runId: number, action: ApprovalActionInput): Promis
   return postJson<ApprovalActionResult>(`/v1/approvals/${runId}`, body)
 }
 
+/** HP-102 PASS inbox card — same `approval_id` Telegram keyboards use. */
+export interface PassApproval {
+  approval_id: string
+  kind: string
+  status: string
+  project: string
+  task: string
+  action: string
+  title: string
+  summary: string
+  owner_id: string
+  door: 'approvals'
+  surfaces: string[]
+  surface?: string
+}
+
+export function fetchPassApprovals(): Promise<PassApproval[]> {
+  return apiFetch<PassApproval[]>('/v1/pass-approvals', { on403: 'forbidden' })
+}
+
+export interface PassApprovalActionInput {
+  decision: 'approve' | 'reject' | 'edit'
+  reason?: string
+}
+
+export interface PassApprovalActionResult {
+  approval_id: string
+  decision: string
+  surface: string
+  proposal: { status: string }
+}
+
+export function postPassApproval(
+  approvalId: string,
+  action: PassApprovalActionInput,
+): Promise<PassApprovalActionResult> {
+  return postJson<PassApprovalActionResult>(`/v1/pass-approvals/${approvalId}`, action)
+}
+
 export interface ApprovalRule {
   id: string
   project: string
