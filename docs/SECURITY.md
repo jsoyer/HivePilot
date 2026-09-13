@@ -105,6 +105,9 @@ Rules:
 - Crash mid-approval → exactly one resume executes the effect.
 
 Applying skill-doctrine / trust is HP-103 / HP-105. Presenter parity is HP-102.
+HP-104 skill-cycle events (`hivepilot/skill_events.py`) are a local
+idempotent log (OpenSpace `record_skill_event` pattern, rewritten; no
+cloud, no pickle). Absence of a measurement is not stored as zero.
 
 ### Memory proposals HITL (HP-101)
 

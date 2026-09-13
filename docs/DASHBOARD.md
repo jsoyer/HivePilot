@@ -174,7 +174,9 @@ The `panel` plugin type contributes renderer-agnostic tabs to Pollen. A plugin
 registers a `PanelSpec` with a `fetch` function and an optional `min_role`; an
 invalid `min_role` is a fail-closed registration error (the panel won't load). This
 is how plugins — for example the Hindsight Knowledge panel — surface their own tab inside
-the dashboard instead of requiring a separate UI. See
+the dashboard instead of requiring a separate UI. The opt-in HP-104
+`skill-cycle` panel ranks top/bottom **measured** skills (completed /
+selected); unmeasured skills are omitted, not shown as 0%. See
 [PLUGINS.md](PLUGINS.md) for the full plugin type reference.
 
 ## Access control

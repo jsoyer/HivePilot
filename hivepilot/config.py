@@ -986,6 +986,12 @@ class Settings(BaseSettings):
     # tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag.
     # env: HIVEPILOT_HEADROOM_PANEL_ENABLED
     headroom_panel_enabled: bool = False
+    # HP-104 skill-cycle ranking panel — opt-IN, dormant by default, same
+    # pattern as headroom_panel_enabled. `skill_events_panel` renders
+    # top/bottom measured skills; unmeasured skills are omitted (absence ≠
+    # zero). Required by TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED
+    skill_events_panel_enabled: bool = False
     # Two more opt-in `skill`-type plugins -- dormant by default, same
     # pattern as sample_skill_enabled above. `shadcn` (plugins/shadcn.py)
     # is a Pollen web accelerator (shadcn/ui + Tailwind conventions for

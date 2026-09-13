@@ -270,6 +270,17 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
             "it renders an empty summary rather than an error"
         ),
     ),
+    "skill_events_panel": ExamplePluginSpec(
+        name="skill_events_panel",
+        description=("A Pollen panel ranking measured skill-cycle success (HP-104)."),
+        env_flag="HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED",
+        prereq_kind="config",
+        prereq_detail=(
+            "rows in state.db's `skill_cycle_events` table -- this panel only "
+            "READS it, so an empty or unmeasured store is omitted rather than "
+            "shown as 0%"
+        ),
+    ),
     "improve": ExamplePluginSpec(
         name="improve",
         description=(

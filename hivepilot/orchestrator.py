@@ -115,6 +115,7 @@ from hivepilot.services.project_service import (
 from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
+from hivepilot.skill_events import record_cycle_safe
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
 
@@ -6991,6 +6992,7 @@ class Orchestrator:
                         # when no skills are declared, which keeps that path a
                         # no-op -- byte-identical to before this fix.
                         _resolved_skills = []
+                        _excluded_skills: list[str] = []
                         if _skill_names:
                             for _skill_name in _skill_names:
                                 _skill_spec = self.plugins.get_skill(_skill_name)
@@ -7004,8 +7006,21 @@ class Orchestrator:
                                         step=step.name,
                                         skill=_skill_name,
                                     )
+                                    _excluded_skills.append(_skill_name)
                                     continue
                                 _resolved_skills.append(_skill_spec)
+                            record_cycle_safe(
+                                _resolved_skills,
+                                event_type="selected",
+                                run_id=run_id,
+                                step=step.name,
+                            )
+                            record_cycle_safe(
+                                _excluded_skills,
+                                event_type="excluded",
+                                run_id=run_id,
+                                step=step.name,
+                            )
 
                         # Per-attempt payload preparation (mode resolution/
                         # validation/injection + skill re-materialisation),
@@ -7074,6 +7089,12 @@ class Orchestrator:
                                     )
                                     _prepared = _dc_replace(_prepared, step=_mode_step)
                             if _resolved_skills:
+                                record_cycle_safe(
+                                    _resolved_skills,
+                                    event_type="invoked",
+                                    run_id=run_id,
+                                    step=step.name,
+                                )
                                 _skill_runner_cls = resolve_runner_class(_rd.kind)
                                 _skill_runner = _skill_runner_cls(_rd, settings)
                                 _prepared = apply_skill_if_supported(
@@ -7090,6 +7111,12 @@ class Orchestrator:
                                 run_id=run_id,
                                 step=step.name,
                                 runner_kind=str(runner_def.kind),
+                            )
+                            record_cycle_safe(
+                                _resolved_skills,
+                                event_type="applied",
+                                run_id=run_id,
+                                step=step.name,
                             )
                         if payload.step is not step:
                             # Keep the outer `step` variable in sync with the
@@ -7339,6 +7366,16 @@ class Orchestrator:
                                             "run_id": run_id,
                                         },
                                     )
+                                    record_cycle_safe(
+                                        _resolved_skills,
+                                        event_type="fallback",
+                                        run_id=run_id,
+                                        step=step.name,
+                                        extra={
+                                            "from": _runner_def_to_try.kind,
+                                            "to": _next_kind,
+                                        },
+                                    )
                                     # Derived from the runner this step
                                     # actually resolved to, swapping the
                                     # kind and (HP-71) the profile model so
@@ -7448,6 +7485,12 @@ class Orchestrator:
                                 _usage,
                                 role=task.role,
                                 resolved_model=pop_last_resolved_model(),
+                            )
+                            record_cycle_safe(
+                                _resolved_skills,
+                                event_type="completed",
+                                run_id=run_id,
+                                step=step.name,
                             )
                         # Observability-only signal (does NOT fail the step —
                         # some legit steps write nothing, e.g. a pure review):

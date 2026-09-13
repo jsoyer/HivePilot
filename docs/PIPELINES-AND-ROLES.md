@@ -127,6 +127,7 @@ fires unbidden and needs no pipeline-level opt-out.
 | `hindsight`, `obsidian` | `before_step` / `after_step` | **yes** |
 | `rtk`, `gh`, `herdr`, `hugo` | runners | no — a task names the runner it wants |
 | `headroom_panel` | panel | no |
+| `skill_events_panel` | panel | no |
 | any | health check | no — health must report on everything installed |
 
 Naming a plugin that contributes no hooks has no effect, and `hivepilot lint`

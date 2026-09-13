@@ -152,6 +152,11 @@ class TestZeroTokenClassification:
             "skill.applied",
             "skill.proposal",
             "skill.proposal.decided",
+            "skill.selected",
+            "skill.invoked",
+            "skill.completed",
+            "skill.fallback",
+            "skill.excluded",
         ):
             assert classify({"id": 7, "kind": kind}).action == "sleep", kind
 
