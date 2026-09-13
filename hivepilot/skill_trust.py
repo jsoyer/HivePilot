@@ -27,6 +27,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from hivepilot.pass_store import (
@@ -159,9 +160,7 @@ def classify_attribution(
 def _trust_state(value: str) -> str:
     cleaned = (value or "").strip().lower()
     if cleaned not in TRUST_STATES:
-        raise SkillTrustError(
-            f"unknown trust state {value!r}; must be one of {list(TRUST_STATES)}"
-        )
+        raise SkillTrustError(f"unknown trust state {value!r}; must be one of {list(TRUST_STATES)}")
     return cleaned
 
 
@@ -200,16 +199,11 @@ def get(
     tenant_key = (tenant or "default").strip() or "default"
     with db.connect() as conn:
         row = conn.execute(
-            db.ph(
-                "SELECT * FROM skill_trust_states "
-                "WHERE tenant = ? AND revision_id = ?"
-            ),
+            db.ph("SELECT * FROM skill_trust_states WHERE tenant = ? AND revision_id = ?"),
             (tenant_key, rev),
         ).fetchone()
     if row is None:
-        return _unknown(
-            rev, logical_id=logical_id, skill_name=skill_name, tenant=tenant_key
-        )
+        return _unknown(rev, logical_id=logical_id, skill_name=skill_name, tenant=tenant_key)
     return _row_to_trust(row)
 
 
@@ -278,9 +272,7 @@ def set_enabled(
     """Flip availability. Refuses unknown revisions (they stay disabled)."""
     current = get(revision_id, tenant=tenant)
     if not current.known:
-        raise SkillTrustError(
-            f"unknown revision {revision_id!r} is not implicitly enabled"
-        )
+        raise SkillTrustError(f"unknown revision {revision_id!r} is not implicitly enabled")
     if current.enabled is bool(enabled):
         return current
     state_service.init_db()
@@ -323,13 +315,8 @@ def evaluate_promotion(
     _sync_completed_events(current)
     needed = promotion_threshold(threshold)
     counts = _observation_counts(current.revision_id, current.tenant)
-    next_state = current.trust_state
     action = "hold"
-    if (
-        current.trust_state == PROVISIONAL
-        and counts["successes_since_failure"] >= needed
-    ):
-        next_state = TRUSTED
+    if current.trust_state == PROVISIONAL and counts["successes_since_failure"] >= needed:
         action = "promote"
         _set_trust_state(current.revision_id, current.tenant, TRUSTED)
         events.emit(
@@ -502,13 +489,15 @@ def _insert_observation(
 ) -> None:
     state_service.init_db()
     body = dict(extra or {})
+    created_ts = datetime.now(timezone.utc).isoformat()
     with db.connect() as conn:
         conn.execute(
             db.ph(
                 """
                 INSERT INTO skill_trust_observations
-                    (id, revision_id, tenant, run_id, outcome, attribution, source, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, revision_id, tenant, run_id, outcome, attribution,
+                     source, payload, created_ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(tenant, revision_id, run_id, outcome) DO NOTHING
                 """
             ),
@@ -521,6 +510,7 @@ def _insert_observation(
                 attribution,
                 source,
                 json.dumps(body, sort_keys=True, ensure_ascii=False),
+                created_ts,
             ),
         )
 
@@ -558,9 +548,7 @@ def _open_review(
         "attribution": AMBIGUOUS,
         **dict(payload or {}),
     }
-    for proposal in inbox(
-        kind=SKILL_EVOLUTION_KIND, status=PENDING, tenant=trust.tenant
-    ):
+    for proposal in inbox(kind=SKILL_EVOLUTION_KIND, status=PENDING, tenant=trust.tenant):
         if (
             proposal.action == TRUST_REVIEW_ACTION
             and str(proposal.payload.get("revision_id") or "") == trust.revision_id

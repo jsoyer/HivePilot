@@ -21,6 +21,6 @@ Replay: `pytest tests/test_skill_trust.py tests/test_skill_events.py tests/test_
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_trust.py`
-- [ ] `pytest tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_skill_trust.py tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py` — 65 passed
+- [x] `pytest tests/test_skill_orchestrator_wiring.py tests/test_skill_events_panel.py` — 15 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python

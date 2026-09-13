@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hivepilot.pass_store import PENDING, inbox
+from hivepilot.pass_store import inbox
 from hivepilot.skill_catalog import logical_skill_id
 from hivepilot.skill_events import record_skill_event, revision_for_skill
 from hivepilot.skill_trust import (
@@ -11,8 +11,8 @@ from hivepilot.skill_trust import (
     DEFAULT_PROMOTION_THRESHOLD,
     NOT_SKILL,
     PROVISIONAL,
-    TRUSTED,
     TRUST_REVIEW_ACTION,
+    TRUSTED,
     SkillTrustError,
     classify_attribution,
     evaluate_promotion,
@@ -28,9 +28,7 @@ from hivepilot.skill_trust import (
 
 def _register(name: str = "review", files: dict[str, str] | None = None):
     logical, rev = revision_for_skill(name, files or {"SKILL.md": name})
-    trust = register_revision(
-        revision_id=rev, skill_name=name, logical_id=logical
-    )
+    trust = register_revision(revision_id=rev, skill_name=name, logical_id=logical)
     return trust, logical, rev
 
 
@@ -70,9 +68,7 @@ class TestDefaults:
         _complete("stable", 2)
         evaluate_promotion(rev)
         assert get(rev).trusted is True
-        again = register_revision(
-            revision_id=rev, skill_name="stable", logical_id=first.logical_id
-        )
+        again = register_revision(revision_id=rev, skill_name="stable", logical_id=first.logical_id)
         assert again.trusted is True
         assert again.trust_state == TRUSTED
 
@@ -220,7 +216,7 @@ class TestDemoteAndReview:
         assert decision.proposal_id
         assert get(rev).trusted is True
         assert get(rev).trust_failures == 0
-        cards = inbox(kind="skill_evolution", status=PENDING)
+        cards = inbox(kind="skill_evolution")
         match = [row for row in cards if row.id == decision.proposal_id]
         assert len(match) == 1
         assert match[0].action == TRUST_REVIEW_ACTION
@@ -234,9 +230,8 @@ class TestDemoteAndReview:
         assert first.proposal_id == second.proposal_id
         cards = [
             row
-            for row in inbox(kind="skill_evolution", status=PENDING)
-            if row.action == TRUST_REVIEW_ACTION
-            and row.payload.get("revision_id") == rev
+            for row in inbox(kind="skill_evolution")
+            if row.action == TRUST_REVIEW_ACTION and row.payload.get("revision_id") == rev
         ]
         assert len(cards) == 1
 
@@ -252,7 +247,7 @@ class TestDemoteAndReview:
         assert decision.attribution == NOT_SKILL
         assert get(rev).trusted is True
         assert get(rev).trust_failures == 0
-        assert inbox(kind="skill_evolution", status=PENDING) == []
+        assert inbox(kind="skill_evolution") == []
 
     def test_phase_failed_payload_is_attributed(self) -> None:
         assert classify_attribution(payload={"phase_failed": True}) == ATTRIBUTED
@@ -268,9 +263,7 @@ class TestDemoteAndReview:
 
     def test_repromotion_needs_fresh_successes_after_failure(self) -> None:
         rev = self._trusted("recover")
-        report_failure(
-            revision_id=rev, run_id="fail", skill_name="recover", attribution="skill"
-        )
+        report_failure(revision_id=rev, run_id="fail", skill_name="recover", attribution="skill")
         assert get(rev).trust_state == PROVISIONAL
         _complete("recover", 3)
         still = evaluate_promotion(rev)
