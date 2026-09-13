@@ -108,7 +108,7 @@ See [DASHBOARD.md](./DASHBOARD.md) for the Pollen dashboard (TUI and web) and [D
 
 ## Extensibility
 
-The plugin system is the primary extension surface: new runners, notifiers, lifecycle hooks, secrets backends, dashboard panels, and skills all load the same way, from entry-points or local `plugins/*.py`, under a fail-closed trust model. See [PLUGINS.md](./PLUGINS.md). Directory and plugin skills can also be scanned read-only into an in-memory revision DAG (`hivepilot/skill_catalog.py`, HP-98) — no `.skill_id` sidecars, no OpenSpace cloud. See [SKILLS.md](./SKILLS.md). Skill-evolution claims must cite HP-99 evidence refs. Workspace documents use exact text edits with a required revision lock (`hivepilot/workspace_text.py`, HP-96); isolated memory is JSON **data**, never instructions. Model writes to that corpus go through HP-101 memory proposals.
+The plugin system is the primary extension surface: new runners, notifiers, lifecycle hooks, secrets backends, dashboard panels, and skills all load the same way, from entry-points or local `plugins/*.py`, under a fail-closed trust model. See [PLUGINS.md](./PLUGINS.md). Directory and plugin skills can also be scanned read-only into an in-memory revision DAG (`hivepilot/skill_catalog.py`, HP-98) — no `.skill_id` sidecars, no OpenSpace cloud. Local retrieval is deterministic BM25 (`hivepilot/skill_ranker.py`, HP-107) over HP-105-enabled active revisions; the skill body is disclosed after selection. See [SKILLS.md](./SKILLS.md). Skill-evolution claims must cite HP-99 evidence refs. Workspace documents use exact text edits with a required revision lock (`hivepilot/workspace_text.py`, HP-96); isolated memory is JSON **data**, never instructions. Model writes to that corpus go through HP-101 memory proposals.
 
 Config itself is extensible via GitOps: `hivepilot config sync` and `hivepilot config push` synchronize the YAML config tree with a separate config repo, so role/policy/pipeline changes go through the same review process as code.
 
@@ -117,7 +117,7 @@ Config itself is extensible via GitOps: `hivepilot config sync` and `hivepilot c
 - [PIPELINES-AND-ROLES.md](./PIPELINES-AND-ROLES.md) — pipeline/stage/role schema and precedence rules
 - [RUNNERS.md](./RUNNERS.md) — built-in and plugin runner reference
 - [PLUGINS.md](./PLUGINS.md) — plugin contribution types and loading
-- [SKILLS.md](./SKILLS.md) — skill sources, HP-98 catalog / revision DAG, workshop
+- [SKILLS.md](./SKILLS.md) — skill sources, HP-98 catalog, HP-107 BM25 retrieval, workshop
 - [adr/2026-09-13-skills-first.md](./adr/2026-09-13-skills-first.md) — HP-103: capability = `SKILL.md` + scripts; runtime = confine / approve / audit
 - [SECURITY.md](./SECURITY.md) — threat model, approval gates, secrets handling, HP-96 memory isolation
 - [DASHBOARD.md](./DASHBOARD.md) — Pollen TUI/web dashboard
