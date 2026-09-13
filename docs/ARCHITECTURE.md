@@ -118,6 +118,7 @@ Config itself is extensible via GitOps: `hivepilot config sync` and `hivepilot c
 - [RUNNERS.md](./RUNNERS.md) — built-in and plugin runner reference
 - [PLUGINS.md](./PLUGINS.md) — plugin contribution types and loading
 - [SKILLS.md](./SKILLS.md) — skill sources, HP-98 catalog / revision DAG, workshop
+- [adr/2026-09-13-skills-first.md](./adr/2026-09-13-skills-first.md) — HP-103: capability = `SKILL.md` + scripts; runtime = confine / approve / audit
 - [SECURITY.md](./SECURITY.md) — threat model, approval gates, secrets handling, HP-96 memory isolation
 - [DASHBOARD.md](./DASHBOARD.md) — Pollen TUI/web dashboard
 - [DEPLOYMENT.md](./DEPLOYMENT.md) — running the API and scheduler in production

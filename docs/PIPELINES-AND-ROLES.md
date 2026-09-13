@@ -80,7 +80,10 @@ A `PipelineStage` has:
 - `commits_vault` — whether this stage's output commits to the vault
 - `only_components` / `only_tags` — scope this stage to a subset of a group's components
 - `continue_on_failure` — don't fail-fast the run if this stage fails
-- `skills` — skill(s) attached to this stage
+- `skills` — skill(s) attached to this stage. This explicit attach list
+  (`hivepilot stage attach-skill` / `detach-skill`) is the only way a
+  pipeline stage opts into a skill. HP-103 records skills-first doctrine
+  and does **not** change this path (no keyword force-load; HP-108 is later).
 - `debate` — per-stage debate override
 
 Example `pipelines.yaml`:
@@ -310,3 +313,4 @@ but is not one of the pipeline roles above.
 - [DEBATE-AND-LESSONS.md](./DEBATE-AND-LESSONS.md) — debate judge/arbiter and the lessons-injection loop
 - [SECURITY.md](./SECURITY.md) — approval gates, policy, destructive-op auto-gating
 - [CLI-REFERENCE.md](./CLI-REFERENCE.md) — full command reference
+- [SKILLS.md](./SKILLS.md) — skill sources and HP-103 skills-first doctrine
