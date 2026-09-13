@@ -77,7 +77,7 @@ Do not fold those axes into risk tiers. HP-58 `GET /v1/tools` stays a typed-tool
 - `expected_revision` is required; mismatch → stale refuse
 - a result over `max_bytes` → overflow refuse
 
-Isolated memory is JSON **data** (`role=data`), never system/instruction text and never merged into `extra_prompt`. A payload that *looks* like an instruction stays inside the data envelope. HITL memory proposals are HP-101.
+Isolated memory is JSON **data** (`role=data`), never system/instruction text and never merged into `extra_prompt`. A payload that *looks* like an instruction stays inside the data envelope. HITL memory proposals are HP-101 (`hivepilot/memory_proposals.py`).
 
 ### PASS store (HP-97) — one inbox, decide before side-effect
 
@@ -90,7 +90,7 @@ Isolated memory is JSON **data** (`role=data`), never system/instruction text an
 
 Rules:
 
-1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying memory / tools / skill promotions is HP-100 / HP-101 / HP-105.
+1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying tools / skill promotions is HP-100 / HP-105. Memory apply-after-approve is HP-101.
 2. **Edit cannot retarget.** `path`, `revision`, and `expected_revision` stay frozen. Body text / args may change.
 3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
 4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
@@ -104,7 +104,20 @@ Rules:
 - HP-95 ``volatile`` tools complete without an effect cache.
 - Crash mid-approval → exactly one resume executes the effect.
 
-Applying memory / presenter / skill-doctrine / trust is HP-101 / HP-102 / HP-103 / HP-105.
+Applying presenter / skill-doctrine / trust is HP-102 / HP-103 / HP-105.
+
+### Memory proposals HITL (HP-101)
+
+`hivepilot/memory_proposals.py` (Coworker memory HITL pattern, rewritten; no vendored TS):
+
+- Every **model** write is a PASS proposal (`kind=memory`). Never silent. No Always-allow (`submit` / `match_auto` are not used on this path).
+- `pending` / `reject` leave IsolatedJsonMemory and workspace text unchanged.
+- `edit` stages user text on the PENDING card (`pass_store.stage_edit`; `decide('edit')` stays terminal and is not an apply signal). `approve` then applies that user text.
+- Apply runs only after APPROVED is persisted. The reserved HP-100 `idempotency_key` completes the write at most once.
+- **Recall** does not create or require a proposal.
+- User **Pollen / vault** writes call `user_write` and mutate the corpus directly (no inbox row).
+
+Presenter parity (Pollen ↔ Telegram cards) is HP-102.
 
 ### Evidence refs (HP-99) — tenant-scoped, redacted, watermarked
 
@@ -335,6 +348,10 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - An ``idempotency_key`` is unique; resume reuses it (HP-100).
 - A ``pending_tool`` checkpoint around PASS executes the effect at most once (HP-100).
 - A volatile catalog tool does not cache its effect (HP-100).
+- A model memory write is always a PASS `kind=memory` proposal; Always-allow is refused (HP-101).
+- A pending or rejected memory proposal does not mutate IsolatedJsonMemory / workspace text (HP-101).
+- Memory apply runs only after APPROVED; edit+approve applies the user text (HP-101).
+- Memory recall and user Pollen/vault writes do not go through PASS (HP-101).
 
 ## See also
 

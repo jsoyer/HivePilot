@@ -12,7 +12,7 @@ Exact text edit:
 Memory isolation: stored values are JSON **data**, never instructions.
 Recall returns a data envelope (``role=data``). There is no path that
 concatenates memory into ``extra_prompt`` / system text. HP-101 HITL
-proposals and HP-97 PASS stay out of scope.
+proposals live in ``hivepilot.memory_proposals`` (PASS ``kind=memory``).
 
 Orthogonal to ``hivepilot.tool_catalog`` and ``hivepilot.skill_catalog`` —
 this module does not import or mutate either catalog.
