@@ -18,8 +18,10 @@ Statuses: PENDING | APPROVED | REJECTED | EDITED | EXPIRED.
 ``decide`` persists the status **before** any ``side_effect`` callback.
 ``submit(kind=skill_evolution)`` rejects a claim that is not HP-99
 admissible (missing or foreign-tenant evidence refs). This module does
-not apply memory writes, tool calls, skill promotions, or idempotent
-side-effect tables (HP-100 / HP-101 / HP-105 / HP-109).
+not apply memory writes, tool calls, or skill promotions
+(HP-101 / HP-105 / HP-109). Idempotent ``side_effects`` +
+``pending_tool`` resume live in ``hivepilot.side_effects`` /
+``hivepilot.checkpoints`` (HP-100).
 """
 
 from __future__ import annotations

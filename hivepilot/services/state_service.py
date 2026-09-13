@@ -512,6 +512,43 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_evidence_refs_tenant_watermark "
             "ON evidence_refs (tenant, last_seen_watermark)"
         )
+        # HP-100 unique idempotency keys. Volatile tools complete without
+        # caching an effect payload. Resume reuses the same key.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS side_effects (
+                idempotency_key TEXT PRIMARY KEY,
+                token TEXT NOT NULL DEFAULT '',
+                proposal_id TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                result TEXT NOT NULL DEFAULT '',
+                volatile INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+            """
+        )
+        # HP-100 pending_tool checkpoint around PASS/approval. Crash
+        # mid-approval resumes once against the reserved key.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                proposal_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                tenant TEXT NOT NULL DEFAULT 'default',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                resumed_at TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status ON checkpoints (kind, status)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

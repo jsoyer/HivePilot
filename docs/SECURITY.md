@@ -95,6 +95,17 @@ Rules:
 3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
 4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
 
+### Idempotency + checkpoint resume (HP-100)
+
+`hivepilot/side_effects.py` + `hivepilot/checkpoints.py` (Coworker tool-gateway / checkpoint pattern, rewritten; no vendored TS):
+
+- ``idempotency_key`` is unique on table ``side_effects``. Resume reuses the same key.
+- A tool that needs PASS parks checkpoint ``kind=pending_tool`` **before** the effect.
+- HP-95 ``volatile`` tools complete without an effect cache.
+- Crash mid-approval → exactly one resume executes the effect.
+
+Applying memory / presenter / skill-doctrine / trust is HP-101 / HP-102 / HP-103 / HP-105.
+
 ### Evidence refs (HP-99) — tenant-scoped, redacted, watermarked
 
 `hivepilot/evidence.py` is a local evidence registry (OpenSpace `evidence/*` pattern, rewritten; no cloud, no pickle):
@@ -321,6 +332,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - A PASS `match_auto` approve requires HP-86 `mechanical`; non-mechanical never auto (HP-97).
 - A PASS edit cannot retarget `path` / `revision` (HP-97).
 - A PASS decision is persisted before any side-effect callback (HP-97).
+- An ``idempotency_key`` is unique; resume reuses it (HP-100).
+- A ``pending_tool`` checkpoint around PASS executes the effect at most once (HP-100).
+- A volatile catalog tool does not cache its effect (HP-100).
 
 ## See also
 
