@@ -465,6 +465,30 @@ def init_db() -> None:
         _add_column_if_missing(
             conn, "approval_action_rules", "change_class TEXT NOT NULL DEFAULT ''"
         )
+        # HP-97 PASS inbox. The `approvals` table above is PRIMARY KEY(run_id)
+        # and cannot hold tool / memory / skill_evolution proposals that
+        # precede a run. `kind` here is the HP-94 discriminant; HP-61 still
+        # uses metadata `kind` as an action token (partitioned in pass_store).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pass_proposals (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                project TEXT NOT NULL DEFAULT '',
+                task TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                change_class TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                tenant TEXT NOT NULL DEFAULT 'default',
+                decided_at TIMESTAMP,
+                decided_by TEXT NOT NULL DEFAULT '',
+                reason TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (
