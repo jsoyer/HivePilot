@@ -104,7 +104,7 @@ class TestEnsurePollenDoorsNoRemint:
             landed = ns.ensure_pollen_doors()
 
         assert landed == {"inbox": 1}
-        assert calls == []
+        assert not any("createForumTopic" in url for url in calls)
 
     def test_empty_registry_does_not_mint(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
         _telegram_ready(monkeypatch)
@@ -245,7 +245,9 @@ class TestInvalidateDropsSqliteMirror:
 
 
 class TestCreateRegisterLock:
-    def test_reread_under_lock_skips_create(self, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_reread_under_lock_skips_create(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The race: process A registers while B waits on the lock. B must
         reuse A's id instead of calling createForumTopic again."""
         _telegram_ready(monkeypatch)

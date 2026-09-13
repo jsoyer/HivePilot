@@ -214,9 +214,7 @@ def events_classify(
 
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
-topics_app = typer.Typer(
-    help="Telegram forum topics: list, prune, wipe-sync, bootstrap doors"
-)
+topics_app = typer.Typer(help="Telegram forum topics: list, prune, wipe-sync, bootstrap doors")
 app.add_typer(config_app, name="config")
 app.add_typer(corrections_app, name="corrections")
 app.add_typer(topics_app, name="topics")
@@ -1567,7 +1565,9 @@ def topics_wipe_sync(
     if result.dry_run:
         typer.echo(f"\nDry run. {len(result.cleared)} id(s) would be forgotten. Re-run with --yes.")
         return
-    typer.echo(f"\n{len(result.cleared)} id(s) forgotten. Mint doors with `topics bootstrap --yes`.")
+    typer.echo(
+        f"\n{len(result.cleared)} id(s) forgotten. Mint doors with `topics bootstrap --yes`."
+    )
 
 
 @topics_app.command("bootstrap")

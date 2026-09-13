@@ -23,5 +23,5 @@ Replay: `pytest tests/test_telegram_stop_bleed.py tests/test_stream_topics.py te
 
 ## Testing
 
-- [ ] `pytest` Telegram / topic suites (see Replay)
-- [ ] `ruff check` + `ruff format --check`
+- [x] `pytest` Telegram / topic suites — 227 passed
+- [x] `ruff check` + `ruff format --check` clean

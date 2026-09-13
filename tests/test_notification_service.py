@@ -278,7 +278,7 @@ def test_message_thread_id_preserved_across_all_chunks(
         thread_ids.append(message_thread_id)
 
     monkeypatch.setattr(ns, "_send_telegram", _fake)
-    monkeypatch.setattr(ns, "_ensure_topic_thread", lambda agent_key, title: 777)
+    monkeypatch.setattr(ns, "_load_topics", lambda: {"runs": 777, "inbox": 11})
     monkeypatch.setattr(ns.settings, "telegram_stream_live", True, raising=False)
     monkeypatch.setattr(ns.settings, "telegram_stream_rich", False, raising=False)
     monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
@@ -507,7 +507,7 @@ def test_normal_400_error_unchanged_registry_untouched(
     never touched."""
     _stream_topics_settings(monkeypatch)
     monkeypatch.setattr(ns.settings, "telegram_stream_rich", True, raising=False)
-    monkeypatch.setattr(ns, "_ensure_topic_thread", lambda agent_key, title: 208)
+    monkeypatch.setattr(ns, "_load_topics", lambda: {"runs": 208, "inbox": 11})
 
     invalidate_calls: list[str] = []
     monkeypatch.setattr(
