@@ -9,6 +9,15 @@ Skills reach the engine from **two sources**:
 
 Both land in the same registry, are referenced the same way from config, and are listed by the same `hivepilot skills list`.
 
+**Skills-first (HP-103).** A capability is the skill: `SKILL.md` plus optional
+scripts and references. The HivePilot runtime is confinement, approvals, and
+audit — not a second place to encode domain playbooks as Python prompt
+constants. See [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md)
+and the read-only [runtime-to-skill audit](runtime-to-skill-audit.md).
+Pipeline stage-attach (`PipelineStage.skills` /
+`hivepilot stage attach-skill`) is unchanged; HP-108 (skill→tools gate) is a
+later ticket.
+
 For the general plugin loading and trust model, see [PLUGINS.md](PLUGINS.md).
 
 ## The SkillSpec contract
@@ -176,3 +185,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - [PLUGINS.md](PLUGINS.md) — general plugin model, loading, and trust
 - [CONFIGURATION.md](CONFIGURATION.md) — full config file reference
 - [PIPELINES-AND-ROLES.md](PIPELINES-AND-ROLES.md) — pipeline stages, task steps, and roles
+- [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md) — HP-103 doctrine (capability vs runtime)
+- [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine

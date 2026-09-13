@@ -1,26 +1,32 @@
 ## Summary
 
-HP-100: unique `idempotency_key` on table `side_effects`, plus a `pending_tool` checkpoint around PASS/approval. Resume reuses the same key. Volatile catalog tools skip the effect cache. Crash mid-approval executes the effect exactly once.
+HP-103 (Linear acceptance): skills-first doctrine — capability = `SKILL.md` + scripts; runtime = confinement / approvals / audit — plus a read-only audit of the top 5 domain procedures still encoded in the engine.
 
-Owning issue: [HP-100](https://linear.app/js-workspace/issue/HP-100/u-06-idempotency-checkpoint-resume)
+Owning issue: [HP-103](https://linear.app/js-workspace/issue/HP-103/u-09-doctrine-skills-first-audit-top-5-runtimeskill)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS + HP-95 tool catalog.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`.
 
-Replay: `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py`
+Replay: inspect `docs/adr/2026-09-13-skills-first.md` and `docs/runtime-to-skill-audit.md`. Docs-only; `hivepilot stage --help` still lists `attach-skill` / `detach-skill`.
 
 ## What changed
 
-1. **`hivepilot/side_effects.py`** — unique `idempotency_key`; persist `side_effects`; volatile rows complete without caching a payload.
-2. **`hivepilot/checkpoints.py`** — `kind=pending_tool` around PASS `submit`/`decide`; `resume` reuses the reserved key and CAS-claims so the effect runs at most once.
-3. **State store** — `side_effects` + `checkpoints` tables in `init_db` (same CREATE IF NOT EXISTS pattern as HP-97 / HP-99).
+1. **`docs/adr/2026-09-13-skills-first.md`** — Coworker AGENTS.md / repo-contracts **patterns** (skills are the capability SSOT; runtime is not a skill discovery root), rewritten. Status `proposed` until Jerome accepts (same path as HP-94). **Do not flip to accepted in this merge.**
+2. **`docs/runtime-to-skill-audit.md`** — read-only top 5 (adversarial review, lessons distill, debate judge, rebuttal protocol, concierge classifier) with file pointers and what the runtime must keep. Implements nothing.
+3. **Cross-links** — `docs/SKILLS.md`, `docs/adr/README.md`, `docs/ARCHITECTURE.md`, `docs/PIPELINES-AND-ROLES.md`, README docs table.
+
+Pipeline `stage attach-skill` / `PipelineStage.skills` unchanged. Rebased onto `main` after HP-100 #675; no HP-100 code paths edited.
 
 ## Out of scope
 
-- HP-101 memory proposals HITL
-- HP-102 presenter parity, HP-103 skill doctrine, HP-105 trust
-- WhatsApp, HP-67 sandbox, vendored TS / Electron / pickle
+- HP-108 skill→tools gate
+- HP-100 / HP-101 / HP-102 / HP-105 code paths (cite only)
+- WhatsApp
+- HP-67 desktop-per-agent
+- Extracting any of the five audit items into `skills/`
 
 ## Testing
 
-- [x] `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py` — 54 passed
-- [x] `ruff check` + `ruff format --check` clean
+- [x] Docs-only: no Python / YAML config modules added
+- [x] `hivepilot stage --help` still lists `attach-skill` / `detach-skill` (CLI text unchanged)
+- [x] ADR frontmatter `status: proposed` left unchanged
+- [x] Rebased onto `origin/main` (HP-100 #675); `PR_BODY.md` conflict resolved to this HP-103 body
