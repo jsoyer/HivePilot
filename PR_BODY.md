@@ -22,5 +22,5 @@ Replay: `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_
 
 ## Testing
 
-- [ ] `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py`
-- [ ] `ruff check` + `ruff format --check` clean
+- [x] `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py` — 54 passed
+- [x] `ruff check` + `ruff format --check` clean
