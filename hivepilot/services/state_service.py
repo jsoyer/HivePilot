@@ -573,6 +573,47 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_skill_cycle_tenant_skill "
             "ON skill_cycle_events (tenant, skill_name, event_type)"
         )
+        # HP-105 trust ladder. New revisions are provisional; enabled is
+        # orthogonal. Unknown revisions have no row (not trusted, not enabled).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_trust_states (
+                revision_id TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                logical_id TEXT NOT NULL,
+                skill_name TEXT NOT NULL DEFAULT '',
+                trust_state TEXT NOT NULL DEFAULT 'provisional',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant, revision_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_trust_state "
+            "ON skill_trust_states (tenant, trust_state, enabled)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_trust_observations (
+                id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                run_id TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                attribution TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (tenant, revision_id, run_id, outcome)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_trust_obs_rev "
+            "ON skill_trust_observations (tenant, revision_id, outcome)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

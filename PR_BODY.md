@@ -1,28 +1,26 @@
 ## Summary
 
-HP-104: skill-cycle event store + Pollen top/bottom panel. Six event types, idempotent per `(revision, run, step, type)`. Absence of a measurement is not zero.
+HP-105: local skill trust ladder. New revisions are **provisional**; `enabled` is orthogonal. Unknown revisions are not implicitly trusted or enabled. Promotion after N distinct successful inter-runs; attributed failure demotes; ambiguous failure opens a PASS review (no auto-demote).
 
-Owning issue: [HP-104](https://linear.app/js-workspace/issue/HP-104/u-10-events-skill-cycle-panneau-pollen)
+Owning issue: [HP-105](https://linear.app/js-workspace/issue/HP-105/u-11-trust-provisionaltrusted-enabled-orthogonal)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-98 skill catalog + HP-99 evidence.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-104 skill events, HP-98 catalog, HP-97 PASS.
 
-Replay: `pytest tests/test_skill_events.py tests/test_skill_events_panel.py tests/test_skill_orchestrator_wiring.py tests/test_skill_catalog.py tests/test_actionable_events.py`
+Replay: `pytest tests/test_skill_trust.py tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py`
 
 ## What changed
 
-1. **`hivepilot/skill_events.py`** — `record_skill_event` / `record_cycle` with types `selected`, `invoked`, `applied`, `completed`, `fallback`, `excluded`. Unique key `(revision_id, run_id, step, event_type)`. `rank_skills()` omits unmeasured skills (`rate is None` when `selected == 0`).
-2. **State store** — `skill_cycle_events` table in `init_db`.
-3. **Orchestrator** — fail-safe cycle writes at resolve / apply / fallback / step success. HP-79 `skill_usage_events` unchanged.
-4. **Pollen panel** — opt-in `skill-cycle` (`HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`) shows top/bottom measured skills.
+1. **`hivepilot/skill_trust.py`** — `register_revision` (provisional + enabled), `set_enabled`, `evaluate_promotion` (distinct HP-104 `completed` runs; default N=2 via `HIVEPILOT_SKILL_TRUST_PROMOTION`), `report_failure` (attributed → demote; ambiguous → PASS `kind=skill_evolution` / `action=trust_review`; `not_skill` ignored). HP-106 attribution is a closed-vocab stub.
+2. **State store** — `skill_trust_states` + `skill_trust_observations` in `init_db`.
+3. **Docs** — SKILLS / SECURITY / ARCHITECTURE note the ladder. Catalog and events stay free of OpenSpace cloud / pickle.
 
 ## Out of scope
 
-- HP-105 trust ladder, HP-106 signals, HP-108 skill→tools
+- HP-106 full signals/attribution, HP-107 BM25, HP-108 skill→tools, HP-109 apply
 - WhatsApp, HP-67 sandbox, vendored OpenSpace / pickle / cloud
 
 ## Testing
 
-- [x] `pytest tests/test_skill_events.py tests/test_skill_events_panel.py` — 21 passed
-- [x] `pytest tests/test_skill_orchestrator_wiring.py tests/test_actionable_events.py tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag` — 104 passed
-- [x] `pytest tests/test_plugin_installer.py` — classify `skill_events_panel` in `KNOWN_EXAMPLE_PLUGINS` (CI `Test (pytest)` on #679)
-- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [ ] `pytest tests/test_skill_trust.py`
+- [ ] `pytest tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py`
+- [ ] `ruff check` + `ruff format --check` on touched Python
