@@ -83,7 +83,7 @@ Already-correct pattern (not in the top 5):
 | **Encoded** | ANSWER vs ROUTE vs ACTION vs MULTI_ROUTE, JSON schema, `follow_up` rules, grounding against roster/history. Packaged markdown is already a skill-shaped file sitting outside `skills/`. |
 | **Why a skill** | Operational know-how for “what happens next.” Fail-closed parse, no-tools invariant, and confirmation gating stay runtime. |
 | **Later skill** | `concierge-classifier` |
-| **Runtime keeps** | `chatops_concierge_enabled`, classifier no-tools / timeout, `_clamp()` against known roles/projects, never trust model `destructive`, pending-offer resolution. **HP-108** later maps skill → tool tokens for concierge/chat only. |
+| **Runtime keeps** | `chatops_concierge_enabled`, classifier no-tools / timeout, `_clamp()` against known roles/projects, never trust model `destructive`, pending-offer resolution. **HP-108** maps skill → tool tokens for concierge/chat only (`hivepilot/skill_capabilities.py`). |
 | **Confidence** | High |
 
 ## Rejected (look movable, stay runtime)
@@ -99,7 +99,7 @@ Already-correct pattern (not in the top 5):
 
 ## Out of scope (do not treat as extract work here)
 
-- HP-108 skill→tools gate (blocked on this doctrine; pipelines stage-attach still unchanged there too)
+- HP-108 skill→tools gate (landed for concierge/chat; pipelines stage-attach still unchanged)
 - HP-100 / HP-101 / HP-102 / HP-105 code paths
 - WhatsApp; HP-67 desktop-per-agent sandbox
 - Role `prompt_file` roster (`prompts/agents/*.md`) — already markdown, not Python; attach-via-skills is a later choice, not this audit’s top 5

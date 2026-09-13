@@ -9,6 +9,7 @@ from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
 from hivepilot.services import state_service, token_service
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
+from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils import display_time
 from hivepilot.utils.logging import get_logger
 
@@ -128,7 +129,8 @@ def _execute_concierge_decision(
         if not task_name:
             return f"{decision.role_key} has no direct-command task configured."
         target = decision.target or settings.default_target
-        orch.run_task(
+        on_chat_surface(
+            orch.run_task,
             project_names=[target],
             task_name=task_name,
             extra_prompt=decision.order or None,
@@ -146,14 +148,21 @@ def _execute_concierge_decision(
                 return "Missing task name — cannot run."
             target = decision.target or settings.default_target
             extra = params.get("order") or params.get("extra_prompt")
-            orch.run_task(project_names=[target], task_name=task, extra_prompt=extra, auto_git=True)
+            on_chat_surface(
+                orch.run_task,
+                project_names=[target],
+                task_name=task,
+                extra_prompt=extra,
+                auto_git=True,
+            )
             return f"Triggered {task} on {target}"
 
         if decision.action == "run_pipeline":
             _verify("run")
             target = decision.target or settings.default_target
             pipeline = params.get("pipeline") or settings.default_pipeline
-            orch.run_pipeline(
+            on_chat_surface(
+                orch.run_pipeline,
                 project_names=[target],
                 pipeline_name=pipeline,
                 extra_prompt=params.get("order"),
@@ -245,7 +254,13 @@ def _dispatch(command: str, args: list[str], source: str, requester_id: str | No
             return "Usage: run <project> <task>"
         project, task = args[0], args[1]
         extra = " ".join(args[2:]) if len(args) > 2 else None
-        orch.run_task(project_names=[project], task_name=task, extra_prompt=extra, auto_git=True)
+        on_chat_surface(
+            orch.run_task,
+            project_names=[project],
+            task_name=task,
+            extra_prompt=extra,
+            auto_git=True,
+        )
         return f"Triggered {task} on {project}"
 
     if command == "approvals":

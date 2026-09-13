@@ -47,7 +47,8 @@ HP-61 / HP-97 PASS inbox, HP-40 `change_log`, HP-95 tool catalog, HP-99
 evidence, secrets masking.
 
 HP-108 (skill→tools gate for concierge/chat) depends on this doctrine
-and is **out of scope**. Pipeline stage-attach stays the attach surface.
+and is implemented as a chat-only capability map. Pipeline stage-attach
+stays the attach surface.
 
 ## Options:
 
@@ -88,9 +89,9 @@ Rules:
    “runtime ≠ discovery root” are rewritten here. No vendored TS,
    Electron, or pickle (HP-94 licences).
 5. **Follow-ups stay tickets.** HP-108 maps skill → tool tokens for
-   concierge/chat. HP-105 trust, HP-104 skill-cycle events, HP-100
-   idempotency, HP-101 memory HITL, HP-102 presenter parity are cited
-   only.
+   concierge/chat (`hivepilot/skill_capabilities.py`). HP-105 trust,
+   HP-104 skill-cycle events, HP-100 idempotency, HP-101 memory HITL,
+   HP-102 presenter parity are cited only.
 
 Read-only evidence of today’s debt:
 [runtime-to-skill audit](../runtime-to-skill-audit.md) (top 5). That
@@ -103,8 +104,8 @@ Positive:
 - One sentence operators and later tickets can point at: capability vs
   runtime.
 - Stage-attach and the four Telegram doors stay where HP-94 left them.
-- HP-108 has a doctrine to gate against (skill off → tools absent on
-  concierge/chat only).
+- HP-108 gates concierge/chat tool tokens against this doctrine
+  (skill off → tools absent on that surface only).
 
 Negative / follow-up:
 
@@ -123,7 +124,7 @@ Negative / follow-up:
 - Extract debate-judge / challenge-arbiter prompts (audit #3)
 - Extract challenge-rebuttal protocol (audit #4)
 - Extract concierge-classifier instructions (audit #5); HP-108 owns
-  the later skill→tools gate
+  the skill→tools gate (classifier stays no-tools)
 
 ## Security Impact:
 

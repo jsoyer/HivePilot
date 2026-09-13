@@ -115,6 +115,7 @@ from hivepilot.services.project_service import (
 from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
+from hivepilot.skill_capabilities import gate_chat_allowed_tools
 from hivepilot.skill_events import record_cycle_safe
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
@@ -769,7 +770,7 @@ def _role_runner_options(role_name: str) -> dict[str, Any]:
     if role.permission_mode:
         options["permission_mode"] = role.permission_mode
     if role.allowed_tools:
-        options["allowed_tools"] = list(role.allowed_tools)
+        options["allowed_tools"] = gate_chat_allowed_tools(list(role.allowed_tools))
     return options
 
 
@@ -831,7 +832,7 @@ def resolve_step_runner(
     # noxys config declare it. Passing it through honours what the config
     # already states; it does not widen it.
     if _role.allowed_tools:
-        role_options["allowed_tools"] = list(_role.allowed_tools)
+        role_options["allowed_tools"] = gate_chat_allowed_tools(list(_role.allowed_tools))
     # The `surface:` axis — WHERE this task can be watched. A TASK property
     # rather than a role one, so it rides alongside the role options rather
     # than inside `_role_runner_options`.
@@ -3624,7 +3625,9 @@ class Orchestrator:
                 # cross-agent request needs its tools too, or it replies asking
                 # for approval and the step is failed as "produced no work".
                 if target_role.allowed_tools:
-                    role_options["allowed_tools"] = list(target_role.allowed_tools)
+                    role_options["allowed_tools"] = gate_chat_allowed_tools(
+                        list(target_role.allowed_tools)
+                    )
                 req_runner_def = RunnerDefinition(
                     name=f"request:{target_role_key}",
                     kind=cast(RunnerKind, runner_kind),

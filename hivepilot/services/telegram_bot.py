@@ -25,6 +25,7 @@ from hivepilot.services.telegram_doors import (
     concierge_action_prompt,
     concierge_answer_text,
 )
+from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -591,7 +592,8 @@ async def _run_agent_order(update: Any, role_key: str, target: str, order: str) 
     loop = asyncio.get_event_loop()
     future = loop.run_in_executor(
         None,
-        lambda: _get_orch().run_task(
+        lambda: on_chat_surface(
+            _get_orch().run_task,
             project_names=[target],
             task_name=task_name,
             extra_prompt=order or None,
@@ -773,7 +775,8 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
                 extra = params.get("order") or params.get("extra_prompt")
                 results = await loop.run_in_executor(
                     None,
-                    lambda: _get_orch().run_task(
+                    lambda: on_chat_surface(
+                        _get_orch().run_task,
                         project_names=[target],
                         task_name=task,
                         extra_prompt=extra,
@@ -784,7 +787,8 @@ async def _execute_concierge_decision(update_like: Any, decision: "ConciergeDeci
                 pipeline = params.get("pipeline") or settings.default_pipeline
                 results = await loop.run_in_executor(
                     None,
-                    lambda: _get_orch().run_pipeline(
+                    lambda: on_chat_surface(
+                        _get_orch().run_pipeline,
                         project_names=[target],
                         pipeline_name=pipeline,
                         extra_prompt=params.get("order"),
@@ -1180,7 +1184,8 @@ async def _cmd_mention(update: Any, context: Any) -> None:
         hub = grp.hub or name
         future = loop.run_in_executor(
             None,
-            lambda: _get_orch().run_pipeline(
+            lambda: on_chat_surface(
+                _get_orch().run_pipeline,
                 project_names=[hub],
                 pipeline_name=settings.default_pipeline,
                 extra_prompt=rest,
@@ -1193,7 +1198,8 @@ async def _cmd_mention(update: Any, context: Any) -> None:
     else:  # project
         future = loop.run_in_executor(
             None,
-            lambda: _get_orch().run_pipeline(
+            lambda: on_chat_surface(
+                _get_orch().run_pipeline,
                 project_names=[name],
                 pipeline_name=settings.default_pipeline,
                 extra_prompt=rest,
@@ -1343,7 +1349,8 @@ async def _cmd_run(update, context) -> None:
     loop = asyncio.get_event_loop()
     future = loop.run_in_executor(
         None,
-        lambda: _get_orch().run_task(
+        lambda: on_chat_surface(
+            _get_orch().run_task,
             project_names=[project],
             task_name=task,
             extra_prompt=extra,
@@ -2113,7 +2120,8 @@ async def _cmd_run_pipeline(update, context) -> None:
     loop = asyncio.get_event_loop()
     future = loop.run_in_executor(
         None,
-        lambda: _get_orch().run_pipeline(
+        lambda: on_chat_surface(
+            _get_orch().run_pipeline,
             project_names=[project],
             pipeline_name=pipeline,
             extra_prompt=None,

@@ -2,7 +2,8 @@
 
 OpenSpace ``store.record_skill_event`` pattern, rewritten in Python. This
 module does **not** vendor OpenSpace, talk to OpenSpace cloud, persist
-pickle embeddings, or implement HP-107 BM25 / HP-108 skill→tools.
+pickle embeddings, or implement HP-107 BM25. HP-108 skill→tools lives
+in ``hivepilot.skill_capabilities``.
 HP-105 trust (provisional↔trusted, ``enabled`` orthogonal) lives in
 ``hivepilot.skill_trust`` and reads ``completed`` events for promotion.
 HP-106 causal attribution lives in ``hivepilot.skill_signals`` and
