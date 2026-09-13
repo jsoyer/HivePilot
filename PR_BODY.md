@@ -21,6 +21,7 @@ Replay: `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py t
 
 ## Testing
 
-- [ ] `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py`
-- [ ] `ruff check` + `ruff format --check` clean
-- [ ] Pollen unit tests for pass-approvals fetch/decide
+- [x] `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py` — 99 passed
+- [x] `pytest tests/test_telegram_bot.py tests/test_approval_forum_topic.py` — 103 passed (no regression)
+- [x] `ruff check` + `ruff format --check` clean
+- [x] Pollen Vitest: `pollen-api.test.ts` + `ApprovalsView.test.tsx` + i18n — 96 passed
