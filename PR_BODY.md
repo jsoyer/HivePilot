@@ -6,7 +6,7 @@ Owning issue: [HP-101](https://linear.app/js-workspace/issue/HP-101/u-07-memory-
 
 ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-96 isolated memory, HP-97 PASS, HP-100 side_effects for apply-once.
 
-Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py`
+Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py`
 
 ## What changed
 
@@ -23,3 +23,4 @@ Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/te
 
 - [x] `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py` — 82 passed
 - [x] `ruff check` + `ruff format --check` clean
+- [x] GitHub CI — 8/8 green (ruff, mypy, pytest, postgres dialect, Pollen build, OpenAPI drift, Helm, public-safe prompts)

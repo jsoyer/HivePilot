@@ -66,7 +66,7 @@ hivepilot interactive
 | [docs/PIPELINES-AND-ROLES.md](docs/PIPELINES-AND-ROLES.md) | The agent "company", roles, pipeline stages, groups/multi-repo |
 | [docs/RUNNERS.md](docs/RUNNERS.md) | Agent runners (Claude/Codex/…), CLI vs API mode, IaC (terraform/pulumi) and kubectl runners |
 | [docs/PLUGINS.md](docs/PLUGINS.md) | The plugin system (runners/notifiers/hooks/secrets/panels/skills) |
-| [docs/SKILLS.md](docs/SKILLS.md) | Plugin-contributed skills |
+| [docs/SKILLS.md](docs/SKILLS.md) | Skills, catalog, skills-first doctrine (HP-103) |
 | [docs/DEBATE-AND-LESSONS.md](docs/DEBATE-AND-LESSONS.md) | Dual-model debate + judge/arbiter PR gate, and the auto-learning lessons loop |
 | [docs/AUTOPILOT.md](docs/AUTOPILOT.md) | Guarded objective queue + fail-closed autonomous dispatch gate |
 | [docs/PARTITIONS.md](docs/PARTITIONS.md) | Propose -> ratify -> dispatch: partition one work item into N budgeted tasks, ratify it in the browser with a separate outward-action consent, dispatch in parallel with a durable journal |
