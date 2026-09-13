@@ -9,13 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
 from hivepilot.services.config_provenance import mask_id
-from hivepilot.services.notification_service import ensure_pollen_doors
+from hivepilot.services.notification_service import door_thread, ensure_pollen_doors
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
 from hivepilot.services.telegram_doors import (
     APPROVALS,
     concierge_action_prompt,
     concierge_answer_text,
-    door_title,
 )
 from hivepilot.utils.logging import get_logger
 
@@ -158,10 +157,11 @@ def _approval_chat_id() -> int | None:
     """Return the chat_id BLOCKING approval keyboards should be sent to.
 
     Resolution order: `telegram_approval_chat_id` (explicit operator choice)
-    -> the forum stream group (`telegram_stream_chat_id`) when
+    -> the     forum stream group (`telegram_stream_chat_id`) when
     `telegram_stream_topics` is on -> `_notification_chat_id()` (the DM),
     exactly as before. A deployment that sets neither new knob keeps
-    today's DM behaviour byte-for-byte.
+    today's DM behaviour byte-for-byte. Persistent doors are looked up,
+    never reminted.
     """
     if settings.telegram_approval_chat_id:
         return settings.telegram_approval_chat_id
@@ -171,7 +171,6 @@ def _approval_chat_id() -> int | None:
 
 
 _APPROVALS_TOPIC_KEY = APPROVALS
-_APPROVALS_TOPIC_TITLE = door_title(APPROVALS) or "Approvals"
 
 
 def _approval_message_thread_id(chat_id: int | None) -> int | None:
@@ -180,22 +179,14 @@ def _approval_message_thread_id(chat_id: int | None) -> int | None:
     Only applies when *chat_id* IS the forum stream group with topics
     enabled — an explicit `telegram_approval_chat_id` that differs from the
     stream group never gets a synthetic thread id (it isn't necessarily a
-    forum at all). Reuses the existing per-agent topic mechanism
-    (`notification_service._ensure_topic_thread` + its
-    `.hivepilot/stream_topics.json` registry) with a dedicated stable key
-    ("approvals") so approvals land in their OWN topic, not mixed into any
-    agent's stream topic. Best-effort: `_ensure_topic_thread` never raises —
-    any failure (not a forum, missing rights, rate-limited) returns None,
-    which makes the caller fall back to Inbox instead of losing the approval
-    in Telegram's built-in General dump.
+    forum at all). Looks up the persistent Approvals door in the registry
+    and never remints it. A missing/stale door falls back to Inbox or DM.
     """
     if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
         return None
     if chat_id != settings.telegram_stream_chat_id:
         return None
-    from hivepilot.services.notification_service import _ensure_topic_thread
-
-    return _ensure_topic_thread(_APPROVALS_TOPIC_KEY, _APPROVALS_TOPIC_TITLE)
+    return door_thread(_APPROVALS_TOPIC_KEY)
 
 
 def _format_results(results) -> str:
@@ -1795,15 +1786,11 @@ def notify_approval_required(
     outright (not just topic-creation, which already degrades gracefully to
     a threadless send), fall back once to the DM/notification chat_id.
 
-    Same self-heal as `notification_service._send_one_chunk` for a DEAD
-    "Approvals" topic (deleted/migrated registry): rather than immediately
-    giving up on the group chat and falling to the DM, a "message thread not
-    found"/"TOPIC_DELETED"-class error first invalidates the cached
-    `approvals` registry entry, recreates the topic, and retries in the SAME
-    chat with the fresh thread id — only a second failure (or a plain
-    non-topic error) falls back to the DM as before.     A "TOPIC_CLOSED" error
-    routes to Inbox instead of recreating — the operator closed Approvals
-    on purpose; Telegram's General dump is not the fallback.
+    A DEAD "Approvals" topic (deleted/migrated registry) invalidates the
+    cached id and falls back to Inbox, then the DM — it does NOT remint
+    the persistent door (Telegram cannot list/dedupe topic names). A
+    "TOPIC_CLOSED" error also routes to Inbox — the operator closed
+    Approvals on purpose; Telegram's General dump is not the fallback.
     """
     chat_id = _approval_chat_id()
     if not chat_id:
@@ -1817,7 +1804,6 @@ def notify_approval_required(
 
         from hivepilot.services.config_provenance import mask_id
         from hivepilot.services.notification_service import (
-            _ensure_topic_thread,
             _invalidate_topic,
             _is_closed_topic_error,
             _is_stale_topic_error,
@@ -1860,17 +1846,13 @@ def notify_approval_required(
                         dead_message_thread_id=dead if dead is not None else thread_id,
                         description=description,
                     )
-                    new_thread_id = _ensure_topic_thread(
-                        _APPROVALS_TOPIC_KEY, _APPROVALS_TOPIC_TITLE
+                    logger.warning(
+                        "stream.topic_stale_no_remint",
+                        agent_key=_APPROVALS_TOPIC_KEY,
+                        chat_id=mask_id(chat_id),
+                        detail="persistent doors are not recreated; falling back to Inbox or DM",
                     )
-                    if new_thread_id is not None:
-                        logger.info(
-                            "stream.topic_recreated",
-                            agent_key=_APPROVALS_TOPIC_KEY,
-                            chat_id=mask_id(chat_id),
-                            message_thread_id=new_thread_id,
-                        )
-                    thread_id = new_thread_id
+                    thread_id = inbox_fallback_thread(thread_id)
                     self_healed = True
 
                 if self_healed:

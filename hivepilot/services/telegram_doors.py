@@ -5,9 +5,10 @@ topic is never treated as a catch-all: unmatched, closed, or threadless
 traffic in the stream forum lands on Inbox (or Alerts when the payload is
 failed / degraded / classifier).
 
-Ephemeral RUN topics are allowed: ``{emoji} {slug}`` with the run id in the
-first message. Role colors stay out of chrome. Do not invent emoji pairs —
-hand-offs use the eight role-charte glyphs; system / concierge uses 🐝.
+Runs stay index-only on the persistent Runs door — ``run:{id}`` topics are
+not created (the Bot API cannot list or dedupe names). Role colors stay
+out of chrome. Do not invent emoji pairs — hand-offs use the eight
+role-charte glyphs; system / concierge uses 🐝.
 """
 
 from __future__ import annotations

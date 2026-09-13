@@ -214,7 +214,7 @@ def events_classify(
 
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
-topics_app = typer.Typer(help="Telegram forum topics: inspect the registry, prune strays")
+topics_app = typer.Typer(help="Telegram forum topics: list, prune, wipe-sync, bootstrap doors")
 app.add_typer(config_app, name="config")
 app.add_typer(corrections_app, name="corrections")
 app.add_typer(topics_app, name="topics")
@@ -1538,6 +1538,69 @@ def topics_prune(
     )
     if result.failed:
         raise typer.Exit(1)
+
+
+@topics_app.command("wipe-sync")
+def topics_wipe_sync(
+    yes: bool = typer.Option(
+        False, "--yes", help="Clear JSON registry and SQLite mirror (default: dry run)"
+    ),
+) -> None:
+    """Forget every cached forum topic id after an operator wipe.
+
+    Telegram cannot list topics, so a wiped forum still looks populated
+    in the local registry — and the SQLite mirror would resurrect those
+    stale ids. This clears both. It does not delete anything in Telegram.
+    Re-mint doors afterwards with `topics bootstrap --yes`.
+    """
+    from hivepilot.services import topics_admin
+
+    result = topics_admin.wipe_sync(confirm=yes)
+    if not result.cleared:
+        typer.echo("Registry already empty.")
+        return
+    verb = "would clear" if result.dry_run else "cleared"
+    for key, thread_id in sorted(result.cleared.items()):
+        typer.echo(f"  {verb:<12} {thread_id:<8} {key}")
+    if result.dry_run:
+        typer.echo(f"\nDry run. {len(result.cleared)} id(s) would be forgotten. Re-run with --yes.")
+        return
+    typer.echo(
+        f"\n{len(result.cleared)} id(s) forgotten. Mint doors with `topics bootstrap --yes`."
+    )
+
+
+@topics_app.command("bootstrap")
+def topics_bootstrap(
+    yes: bool = typer.Option(
+        False, "--yes", help="Mint the four Pollen doors (only when none exist)"
+    ),
+) -> None:
+    """Mint Inbox/Approvals/Runs/Alerts when the registry has none.
+
+    Startup never remints doors. Use this once on an empty forum. If any
+    door already exists this is a no-op — the Bot API cannot list or
+    dedupe topic names, so a partial remint would duplicate.
+    """
+    from hivepilot.services import topics_admin
+
+    result = topics_admin.bootstrap(confirm=yes)
+    if result.skipped:
+        typer.echo("Doors already registered — refusing to remint:")
+        for key, thread_id in sorted(result.existing.items()):
+            typer.echo(f"  {thread_id:<8} {key}")
+        typer.echo("\nNo topics created. Prune strays with `topics prune` if needed.")
+        return
+    if result.dry_run:
+        typer.echo("Would mint Inbox, Approvals, Runs, Alerts.")
+        typer.echo("\nDry run. Re-run with --yes to create the four doors.")
+        return
+    if not result.minted:
+        typer.echo("No doors minted — check telegram_bot_token / telegram_stream_chat_id.")
+        raise typer.Exit(1)
+    for key, thread_id in sorted(result.minted.items()):
+        typer.echo(f"  minted   {thread_id:<8} {key}")
+    typer.echo(f"\n{len(result.minted)} door(s) minted.")
 
 
 @config_app.command("sync")

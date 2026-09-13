@@ -591,7 +591,7 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str | None = None
     telegram_webhook_port: int = 8443
     telegram_stream_live: bool = True  # live-stream agent turns to Telegram during runs
-    telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — four Pollen doors (Inbox/Approvals/Runs/Alerts) plus ephemeral RUN topics
+    telegram_stream_topics: bool = False  # env: HIVEPILOT_TELEGRAM_STREAM_TOPICS — four Pollen doors (Inbox/Approvals/Runs/Alerts); run:{id} topics are not created
     telegram_stream_rich: bool = True  # env: HIVEPILOT_TELEGRAM_STREAM_RICH — softer HTML cards (bold title + two meta lines)
     # HP-16: prefix a per-role avatar on Telegram hand-offs. The eight
     # first-class roles always get a Unicode fallback. When this flag is

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import html
 import json
 import os
 import re
 import threading
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,11 +26,8 @@ from hivepilot.services.telegram_doors import (
     SEMANTIC_TURN_ICONS,
     classify_notification_door,
     door_title,
+    is_persistent_door,
     is_run_topic_key,
-    run_first_message_html,
-    run_topic_key,
-    run_topic_title,
-    slugify,
     soft_card_from_report,
     speaker_html,
     speaker_plain,
@@ -318,7 +317,10 @@ NotifierRegistry.register("webpush", _send_web_push)
 # this detection, the existing per-chunk "retry as plain text" fallback
 # retries with the SAME dead thread id and fails identically — the message
 # is lost and the dead id stays cached forever (see `_send_one_chunk`, which
-# is what actually invalidates + recreates).
+# is what actually invalidates). Persistent Pollen doors and `run:{id}`
+# keys are NEVER reminted: Telegram cannot list/dedupe topic names, so
+# recreate-on-stale is what bled duplicate Inbox/Approvals/Runs/Alerts
+# (and a new run topic after every wipe). Fallback is Inbox, then DM.
 #
 # A *closed* (not deleted) topic is a DIFFERENT error class
 # (e.g. "TOPIC_CLOSED") and must NOT be treated the same way: the operator
@@ -472,6 +474,56 @@ def _mirror_topic(agent_key: str, thread_id: int) -> None:
         logger.warning("stream.topics.mirror_failed", agent_key=agent_key, error=str(exc))
 
 
+def _unmirror_topic(agent_key: str) -> None:
+    """Drop the durable copy of one key. NEVER raises.
+
+    `_invalidate_topic` used to clear only the JSON registry. `_load_topics`
+    then rebuilt the dead id from this table and the next send reminted a
+    duplicate topic Telegram cannot detect.
+    """
+    try:
+        from hivepilot.services import db
+
+        _init_topic_mirror()
+        with db.connect() as conn:
+            conn.execute(
+                db.ph("DELETE FROM stream_topic_registry WHERE agent_key = ?"),
+                (agent_key,),
+            )
+    except Exception as exc:  # noqa: BLE001 — a mirror must never break a send
+        logger.warning("stream.topics.unmirror_failed", agent_key=agent_key, error=str(exc))
+
+
+def _wipe_topic_mirror() -> None:
+    """Delete every stream_topic_registry row. NEVER raises."""
+    try:
+        from hivepilot.services import db
+
+        _init_topic_mirror()
+        with db.connect() as conn:
+            conn.execute("DELETE FROM stream_topic_registry")
+    except Exception as exc:  # noqa: BLE001 — a mirror must never break a send
+        logger.warning("stream.topics.mirror_wipe_failed", error=str(exc))
+
+
+def wipe_topic_registry() -> dict[str, int]:
+    """Clear the JSON registry AND the SQLite mirror.
+
+    After an operator wipe of the Telegram forum, leftover ids make
+    ``bootstrap_pollen_doors`` refuse (doors look present) and
+    ``_load_topics`` resurrect them from the mirror. This is the sync:
+    local state matches the wipe. Does not call Telegram.
+    """
+    global _mirror_reconciled
+    with _topic_create_lock():
+        previous = dict(_load_topics())
+        _wipe_topic_mirror()
+        _save_topics({})
+        _mirror_reconciled = False
+    logger.warning("stream.topics.wipe_sync", cleared=sorted(previous), count=len(previous))
+    return previous
+
+
 def _read_topic_mirror() -> dict[str, int]:
     """Everything the mirror knows. Empty on any failure — never raises."""
     try:
@@ -620,15 +672,16 @@ def _register_topic(agent_key: str, thread_id: int) -> bool:
 
 
 def _invalidate_topic(agent_key: str) -> int | None:
-    """Remove *agent_key* from the topics registry and persist. Best-effort.
+    """Remove *agent_key* from the JSON registry AND the SQLite mirror.
 
     Returns the removed (dead) thread id, or None if the key wasn't cached.
-    This is the self-heal step: without it, the dead id would be re-read by
-    the next `_ensure_topic_thread` call and every future send would fail
-    with the same "thread not found" error forever.
+    The mirror drop is load-bearing: `_load_topics` rebuilds an empty JSON
+    file from SQLite, so a JSON-only invalidate lets a stale id resurrect
+    and the next send remints a duplicate topic.
     """
     registry = _load_topics()
     dead = registry.pop(agent_key, None)
+    _unmirror_topic(agent_key)
     if dead is not None:
         _save_topics(registry)
     return dead
@@ -756,11 +809,94 @@ def _claim_topic_creation(agent_key: str) -> bool:
         return True
 
 
-def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
-    """Return the message_thread_id for *agent_key*, creating it if absent.
+@contextmanager
+def _topic_create_lock() -> Iterator[None]:
+    """Exclusive file lock around create+register.
 
-    Calls Telegram createForumTopic when the key is not in the registry.
-    Best-effort: any failure returns None (never raises).
+    api / telegram / scheduler can all call `_ensure_topic_thread`. Without
+    a lock, two processes that miss the registry both call createForumTopic
+    and register different ids — Telegram accepts both names. Best-effort:
+    a lock failure logs and proceeds rather than dropping a send.
+    """
+    path = _topics_registry_path()
+    lock_path = path.with_name(f"{path.name}.lock")
+    fd: int | None = None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except Exception as exc:  # noqa: BLE001 — lock must never break a send
+        logger.warning("stream.topics.lock_failed", error=str(exc), path=str(lock_path))
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(fd)
+
+
+def _existing_pollen_doors(registry: dict[str, int] | None = None) -> dict[str, int]:
+    """Persistent door keys already in the registry. Lookup only."""
+    mapping = _load_topics() if registry is None else registry
+    return {key: int(mapping[key]) for key in PERSISTENT_DOORS if key in mapping}
+
+
+def _may_create_topic(agent_key: str, *, allow_create: bool) -> bool:
+    """Whether this call may mint a forum topic for *agent_key*.
+
+    ``run:{id}`` is never created. Persistent doors are created only when
+    the operator explicitly bootstraps an empty set. Leftover role keys
+    keep the old create-if-absent path (still locked + capped).
+    """
+    if is_run_topic_key(agent_key):
+        return False
+    if is_persistent_door(agent_key):
+        return allow_create
+    return True
+
+
+def _create_and_register_topic(agent_key: str, title: str, registry_size_before: int) -> int | None:
+    """Call createForumTopic and persist. Caller holds `_topic_create_lock`."""
+    token = settings.telegram_bot_token
+    chat_id = settings.telegram_stream_chat_id
+    if not token or not chat_id:
+        return None
+    try:
+        url = f"https://api.telegram.org/bot{token}/createForumTopic"
+        resp = requests.post(url, json={"chat_id": chat_id, "name": title}, timeout=5)
+        data = resp.json()
+        if data.get("ok"):
+            thread_id: int = data["result"]["message_thread_id"]
+            _register_topic(agent_key, thread_id)
+            logger.info(
+                "stream.topics.created",
+                agent_key=agent_key,
+                title=title,
+                message_thread_id=thread_id,
+                registry_size_before=registry_size_before,
+                registry_path=str(_topics_registry_path()),
+            )
+            return thread_id
+        logger.warning("stream.topics.create_failed", agent_key=agent_key, response=data)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stream.topics.create_error", agent_key=agent_key, error=str(exc))
+    return None
+
+
+def _ensure_topic_thread(agent_key: str, title: str, *, allow_create: bool = False) -> int | None:
+    """Return the cached message_thread_id, creating only when allowed.
+
+    Persistent doors require ``allow_create=True`` (bootstrap). ``run:{id}``
+    is never created. Best-effort: any failure returns None (never raises).
     """
     token = settings.telegram_bot_token
     chat_id = settings.telegram_stream_chat_id
@@ -770,6 +906,16 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
     registry = _load_topics()
     if agent_key in registry:
         return registry[agent_key]
+
+    if not _may_create_topic(agent_key, allow_create=allow_create):
+        logger.info(
+            "stream.topics.create_refused",
+            agent_key=agent_key,
+            detail="run keys and persistent doors are not reminted automatically; "
+            "messages fall back to Inbox or DM. Mint doors with "
+            "`hivepilot topics bootstrap --yes` when the set is empty.",
+        )
+        return None
 
     # Bounded, whatever makes the lookup miss. A registry write that never
     # lands would otherwise create one topic per message -- which is what the
@@ -785,40 +931,21 @@ def _ensure_topic_thread(agent_key: str, title: str) -> int | None:
         )
         return None
 
-    try:
-        url = f"https://api.telegram.org/bot{token}/createForumTopic"
-        resp = requests.post(url, json={"chat_id": chat_id, "name": title}, timeout=5)
-        data = resp.json()
-        if data.get("ok"):
-            thread_id: int = data["result"]["message_thread_id"]
-            _register_topic(agent_key, thread_id)
-            # Creating a topic was the one thing here that recorded NOTHING on
-            # success -- only failures logged. So a group filling up with
-            # topics left no trace to count, and diagnosing it meant reading
-            # a registry that looks healthy precisely because it is keyed.
-            # `registry_size_before` is the number that makes growth visible.
-            logger.info(
-                "stream.topics.created",
-                agent_key=agent_key,
-                title=title,
-                message_thread_id=thread_id,
-                registry_size_before=len(registry),
-                registry_path=str(_topics_registry_path()),
-            )
-            return thread_id
-        logger.warning("stream.topics.create_failed", agent_key=agent_key, response=data)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("stream.topics.create_error", agent_key=agent_key, error=str(exc))
-    return None
+    with _topic_create_lock():
+        # Another process (api / telegram / scheduler) may have created and
+        # registered this key while we waited for the lock.
+        registry = _load_topics()
+        if agent_key in registry:
+            return registry[agent_key]
+        return _create_and_register_topic(agent_key, title, len(registry))
 
 
 _WELCOME_REGISTRY_KEY = "_inbox_welcome"
 
 
 def door_thread(door: str) -> int | None:
-    """Ensure a persistent Pollen door and return its thread id."""
-    title = door_title(door) or door
-    return _ensure_topic_thread(door, title)
+    """Lookup a persistent Pollen door. Never creates or remints."""
+    return _load_topics().get(door)
 
 
 def inbox_fallback_thread(exclude: int | None = None) -> int | None:
@@ -830,12 +957,43 @@ def inbox_fallback_thread(exclude: int | None = None) -> int | None:
 
 
 def ensure_pollen_doors() -> dict[str, int]:
-    """Create the four persistent doors. Best-effort; never raises."""
+    """Return existing persistent doors. Never remints.
+
+    Startup used to walk every door through createForumTopic. After a
+    Telegram wipe (or a partial registry) that minted duplicates the Bot
+    API cannot list or dedupe. If ANY door is already registered, missing
+    doors stay missing. Mint an empty set only via ``bootstrap_pollen_doors``.
+    """
     landed: dict[str, int] = {}
     if not (settings.telegram_stream_topics is True and settings.telegram_stream_chat_id):
         return landed
+    landed = _existing_pollen_doors()
+    inbox_id = landed.get(INBOX)
+    if inbox_id is not None:
+        _ensure_inbox_welcome(inbox_id)
+    return landed
+
+
+def bootstrap_pollen_doors(*, confirm: bool = False) -> dict[str, int]:
+    """Mint Inbox/Approvals/Runs/Alerts only when none of them exist.
+
+    Dry-run unless *confirm*. A partial registry is a no-op — reminting
+    the missing names would duplicate topics Telegram cannot dedupe.
+    """
+    existing = _existing_pollen_doors()
+    if existing:
+        logger.warning(
+            "stream.topics.bootstrap_skipped_doors_present",
+            keys=sorted(existing),
+            detail="refusing to mint when any Pollen door is already registered",
+        )
+        return existing
+    if not confirm:
+        logger.info("stream.topics.bootstrap_dry_run", doors=list(PERSISTENT_DOORS))
+        return {}
+    landed: dict[str, int] = {}
     for key in PERSISTENT_DOORS:
-        thread_id = door_thread(key)
+        thread_id = _ensure_topic_thread(key, door_title(key) or key, allow_create=True)
         if thread_id is not None:
             landed[key] = thread_id
     inbox_id = landed.get(INBOX)
@@ -1312,6 +1470,23 @@ def _send_one_chunk(
                 dead_message_thread_id=dead if dead is not None else message_thread_id,
                 description=description,
             )
+            if is_persistent_door(agent_key) or is_run_topic_key(agent_key):
+                logger.warning(
+                    "stream.topic_stale_no_remint",
+                    agent_key=agent_key,
+                    chat_id=mask_id(chat_id),
+                    detail="persistent doors and run keys are not recreated; "
+                    "falling back to Inbox or DM",
+                )
+                _deliver_threadless(
+                    chunk,
+                    chat_id=chat_id,
+                    parse_mode=parse_mode,
+                    agent_key=agent_key,
+                    entities=entities if parse_mode is None else None,
+                    exclude_thread_id=message_thread_id,
+                )
+                return None
             new_thread_id = _ensure_topic_thread(
                 agent_key, _canonical_topic_title(agent_key, topic_title)
             )
@@ -1436,10 +1611,10 @@ def _send_chunks(
 
     When *agent_key* is given (the registry key `message_thread_id` came
     from), a "message thread not found"/"TOPIC_DELETED" class of error
-    self-heals: the dead registry entry is invalidated, a fresh topic is
-    created via `_ensure_topic_thread`, and every remaining chunk (including
-    the one that failed) is sent to the NEW thread id — see
-    `_send_one_chunk`. A "TOPIC_CLOSED" error instead routes to Inbox
+    invalidates the dead registry entry (JSON + SQLite mirror). Persistent
+    doors and ``run:{id}`` keys are not reminted — the chunk falls back to
+    Inbox or DM. Leftover role keys may still recreate via
+    `_ensure_topic_thread`. A "TOPIC_CLOSED" error also routes to Inbox
     without recreating (the operator closed the original topic on purpose).
     """
     thread_id = message_thread_id
@@ -1467,43 +1642,18 @@ def _resolve_stream_topic(
     run_slug: str | None,
     target: str | None,
 ) -> tuple[str | None, str | None, int | None]:
-    """Pick a Pollen door or ephemeral RUN topic. Never General, never a role topic."""
+    """Pick a Pollen door. Never General, never a role topic, never ``run:{id}``."""
     if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
         return None, None, None
-    role_key = role_key_from_actor(actor)
     if run_id is not None:
-        slug = slugify(run_slug or target or actor)
-        key = run_topic_key(run_id)
-        title = run_topic_title(role_key, slug)
-        registry = _load_topics()
-        existed = key in registry
-        thread_id = _ensure_topic_thread(key, title)
-        if thread_id is not None and not existed:
-            try:
-                _send_chunks(
-                    run_first_message_html(run_id, slug),
-                    chat_id=settings.telegram_stream_chat_id,
-                    message_thread_id=thread_id,
-                    parse_mode="HTML",
-                    html_aware=True,
-                    agent_key=key,
-                    topic_title=title,
-                )
-                runs_id = door_thread(RUNS)
-                if runs_id is not None:
-                    index = f"{speaker_html(actor)}<b>{html.escape(title)}</b>\nrun #{int(run_id)}"
-                    _send_chunks(
-                        index,
-                        chat_id=settings.telegram_stream_chat_id,
-                        message_thread_id=runs_id,
-                        parse_mode="HTML",
-                        html_aware=True,
-                        agent_key=RUNS,
-                        topic_title=door_title(RUNS),
-                    )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("stream.run_topic.seed_failed", run_id=run_id, error=str(exc))
-        return key, title, thread_id
+        # Index-only: the turn stays on the persistent Runs door. Creating
+        # run:{id} topics reminted after every Telegram wipe because the Bot
+        # API cannot list or dedupe names.
+        logger.info(
+            "stream.run_index_only",
+            run_id=run_id,
+            detail="run topics are not created; the turn is indexed on the Runs door",
+        )
     return RUNS, door_title(RUNS), door_thread(RUNS)
 
 

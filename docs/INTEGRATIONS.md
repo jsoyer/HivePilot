@@ -42,11 +42,30 @@ for running a pipeline, listing steps/interactions, and approving gated actions 
 When `HIVEPILOT_TELEGRAM_STREAM_TOPICS=true` in a forum group, HivePilot uses the same
 four persistent topics as the Pollen web doors — **Inbox**, **Approvals**, **Runs**,
 **Alerts**. Inbox holds talk / classify / confirm (pinned welcome; not a General dump).
-Approvals holds ✅/❌ gates. Runs is the run index; a live run may also get an ephemeral
-topic titled `{emoji} {slug}` with the run id in the first message. Alerts is
-failed + degraded + classifier. System/concierge messages use 🐝; hand-offs use the
-role-charte emojis below. Telegram still creates a built-in General topic — HivePilot
-does not use it as a catch-all.
+Approvals holds ✅/❌ gates. Runs is the run index — live turns stay in that
+door; HivePilot does **not** create per-run `run:{id}` topics (the Bot API
+cannot list or dedupe names, so reminting after a wipe duplicated the forum).
+Alerts is failed + degraded + classifier. System/concierge messages use 🐝;
+hand-offs use the role-charte emojis below. Telegram still creates a built-in
+General topic — HivePilot does not use it as a catch-all.
+
+Startup (`ensure_pollen_doors`) is a no-op when any door is already registered.
+Mint an empty set once with:
+
+```bash
+hivepilot topics bootstrap --yes
+```
+
+After an operator wipe of the forum, clear leftover ids (JSON + SQLite
+mirror) so they cannot resurrect, then mint again:
+
+```bash
+hivepilot topics wipe-sync --yes
+hivepilot topics bootstrap --yes
+```
+
+A missing or stale door falls back to Inbox, then the operator DM — it is
+never reminted automatically. Each dead id is dropped from both stores.
 
 ### Role avatars on hand-offs (HP-16)
 
