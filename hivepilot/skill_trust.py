@@ -2,8 +2,8 @@
 
 OpenSpace ``SkillTrustState`` / ``record_trust_observation`` pattern,
 rewritten in Python. This module does **not** vendor OpenSpace, talk to
-OpenSpace cloud, persist pickle embeddings, or implement HP-106 causal
-signals (those stay a stub hook) / HP-107 BM25 / HP-108 skill→tools.
+OpenSpace cloud, persist pickle embeddings, or implement HP-107 BM25 /
+HP-108 skill→tools / HP-109 FIX apply.
 
 Contracts:
 
@@ -18,7 +18,8 @@ Contracts:
 - Attributed failure demotes trusted → provisional. Ambiguous
   failure opens a HP-97 PASS review (``kind=skill_evolution``,
   ``action=trust_review``) and does **not** demote. ``not_skill``
-  (env / tool / network / permission) is ignored.
+  (env / tool / network / permission) is ignored. Attribution is
+  classified by ``hivepilot.skill_signals`` (HP-106).
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from hivepilot.pass_store import (
 from hivepilot.services import db, events, state_service
 from hivepilot.skill_catalog import logical_skill_id
 from hivepilot.skill_events import list_skill_events
+from hivepilot.skill_signals import classify_failure
 
 TRUST_STATES: tuple[str, ...] = ("provisional", "trusted")
 PROVISIONAL = "provisional"
@@ -53,13 +55,6 @@ NOT_SKILL = "not_skill"
 TRUST_REVIEW_ACTION = "trust_review"
 DEFAULT_PROMOTION_THRESHOLD = 2
 SKILL_TRUST_ENTITY_TYPE = "skill_revision"
-
-_ATTRIBUTED_TOKENS: frozenset[str] = frozenset(
-    {"attributed", "skill", "skill_fault", "skill_phase_failed"}
-)
-_NOT_SKILL_TOKENS: frozenset[str] = frozenset(
-    {"not_skill", "env", "tool", "permission", "network", "external"}
-)
 
 
 class SkillTrustError(ValueError):
@@ -109,6 +104,7 @@ class TrustDecision:
     trust: SkillTrust
     proposal_id: str = ""
     attribution: str = ""
+    failure_class: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +112,7 @@ class TrustDecision:
             "trust": self.trust.to_dict(),
             "proposal_id": self.proposal_id,
             "attribution": self.attribution,
+            "failure_class": self.failure_class,
         }
 
 
@@ -137,24 +134,23 @@ def promotion_threshold(override: int | None = None) -> int:
 def classify_attribution(
     raw: str | None = None,
     payload: Mapping[str, Any] | None = None,
+    *,
+    revision_id: str = "",
+    run_id: str = "",
+    tenant: str = "default",
 ) -> str:
-    """HP-106 stub: closed vocabulary, fail-closed to ``ambiguous``.
+    """HP-106 attribution: skill defect vs tool/env/permission/network.
 
-    Explicit ``phase_failed`` / ``skill_phase_failed`` is treated as
-    attributed (OpenSpace ``skill_phase_failed_skill_ids``). Anything
-    unrecognized, including a missing token, is review — never demotion.
+    External faults (including network) are ``not_skill``. Unrecognized
+    evidence is ``ambiguous`` — review, never auto-demote.
     """
-    token = (raw or "").strip().lower()
-    body = dict(payload or {})
-    if not token:
-        token = str(body.get("attribution") or body.get("cause") or "").strip().lower()
-    if body.get("phase_failed") or body.get("skill_phase_failed"):
-        return ATTRIBUTED
-    if token in _ATTRIBUTED_TOKENS:
-        return ATTRIBUTED
-    if token in _NOT_SKILL_TOKENS:
-        return NOT_SKILL
-    return AMBIGUOUS
+    return classify_failure(
+        raw,
+        payload,
+        revision_id=revision_id,
+        run_id=run_id,
+        tenant=tenant,
+    ).trust_attribution
 
 
 def _trust_state(value: str) -> str:
@@ -352,10 +348,22 @@ def report_failure(
         raise SkillTrustError("revision_id is required")
     if not run:
         raise SkillTrustError("run_id is required")
-    kind = classify_attribution(attribution, payload)
+    classified = classify_failure(
+        attribution,
+        payload,
+        revision_id=rev,
+        run_id=run,
+        tenant=(tenant or "default").strip() or "default",
+    )
+    kind = classified.trust_attribution
     current = get(rev, tenant=tenant, skill_name=skill_name, logical_id=logical_id)
     if kind == NOT_SKILL:
-        return TrustDecision(action="ignore", trust=current, attribution=kind)
+        return TrustDecision(
+            action="ignore",
+            trust=current,
+            attribution=kind,
+            failure_class=classified.failure_class,
+        )
     if kind == AMBIGUOUS:
         proposal = _open_review(current, run_id=run, payload=payload)
         return TrustDecision(
@@ -363,9 +371,15 @@ def report_failure(
             trust=current,
             proposal_id=proposal.id,
             attribution=kind,
+            failure_class=classified.failure_class,
         )
     if not current.known:
-        return TrustDecision(action="unknown", trust=current, attribution=kind)
+        return TrustDecision(
+            action="unknown",
+            trust=current,
+            attribution=kind,
+            failure_class=classified.failure_class,
+        )
     _insert_observation(
         current,
         run_id=run,
@@ -391,7 +405,12 @@ def report_failure(
             },
         )
     stored = get(current.revision_id, tenant=current.tenant)
-    return TrustDecision(action=action, trust=stored, attribution=kind)
+    return TrustDecision(
+        action=action,
+        trust=stored,
+        attribution=kind,
+        failure_class=classified.failure_class,
+    )
 
 
 def _row_to_trust(row: Mapping[str, Any]) -> SkillTrust:

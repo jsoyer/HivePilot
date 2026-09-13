@@ -1,26 +1,25 @@
 ## Summary
 
-HP-105: local skill trust ladder. New revisions are **provisional**; `enabled` is orthogonal. Unknown revisions are not implicitly trusted or enabled. Promotion after N distinct successful inter-runs; attributed failure demotes; ambiguous failure opens a PASS review (no auto-demote).
+HP-106: local causal attribution for skill failures. Detector + linker (OpenSpace signals pattern, rewritten) distinguish **tool / env / permission / skill defect**. A network outage is `env` and must not demote HP-105 trust. FIX is gated on revision + causal event + representative result (apply stays HP-109).
 
-Owning issue: [HP-105](https://linear.app/js-workspace/issue/HP-105/u-11-trust-provisionaltrusted-enabled-orthogonal)
+Owning issue: [HP-106](https://linear.app/js-workspace/issue/HP-106/u-12-signaux-attribution-causale)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-104 skill events, HP-98 catalog, HP-97 PASS.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-104 skill events, HP-105 trust, HP-97 PASS.
 
-Replay: `pytest tests/test_skill_trust.py tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py`
+Replay: `pytest tests/test_skill_signals.py tests/test_skill_trust.py tests/test_skill_events.py`
 
 ## What changed
 
-1. **`hivepilot/skill_trust.py`** — `register_revision` (provisional + enabled), `set_enabled`, `evaluate_promotion` (distinct HP-104 `completed` runs; default N=2 via `HIVEPILOT_SKILL_TRUST_PROMOTION`), `report_failure` (attributed → demote; ambiguous → PASS `kind=skill_evolution` / `action=trust_review`; `not_skill` ignored). HP-106 attribution is a closed-vocab stub.
-2. **State store** — `skill_trust_states` + `skill_trust_observations` in `init_db`.
-3. **Docs** — SKILLS / SECURITY / ARCHITECTURE note the ladder. Catalog and events stay free of OpenSpace cloud / pickle.
+1. **`hivepilot/skill_signals.py`** — classify failure class, link invoked/applied HP-104 events, map to HP-105 `attributed` / `ambiguous` / `not_skill`. `assess_fix_eligibility` requires the FIX triple; `draft_fix_proposal` is a non-persisting stub.
+2. **`hivepilot/skill_trust.py`** — `report_failure` / `classify_attribution` call the real classifier (closed-vocab stub removed). `TrustDecision.failure_class` is populated.
+3. **Docs** — SKILLS / SECURITY / ARCHITECTURE note the classes and the network-must-not-demote rule.
 
 ## Out of scope
 
-- HP-106 full signals/attribution, HP-107 BM25, HP-108 skill→tools, HP-109 apply
+- HP-109 FIX/DERIVED/CAPTURED apply, HP-107 BM25, HP-108 skill→tools
 - WhatsApp, HP-67 sandbox, vendored OpenSpace / pickle / cloud
 
 ## Testing
 
-- [x] `pytest tests/test_skill_trust.py tests/test_skill_events.py tests/test_skill_catalog.py tests/test_pass_store.py` — 65 passed
-- [x] `pytest tests/test_skill_orchestrator_wiring.py tests/test_skill_events_panel.py` — 15 passed
-- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [ ] `pytest tests/test_skill_signals.py tests/test_skill_trust.py tests/test_skill_events.py`
+- [ ] `ruff check` + `ruff format --check` on touched Python

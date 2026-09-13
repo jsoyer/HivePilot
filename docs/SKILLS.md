@@ -181,8 +181,8 @@ later scan then sees the new bytes as `FIXED`.
 - Pollen panel `skill-cycle` (opt-in `HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`)
   shows top/bottom measured skills.
 
-HP-79 `skill_usage_events` stays an append-only workshop log. HP-106
-signals and HP-108 skill→tools stay out of scope.
+HP-79 `skill_usage_events` stays an append-only workshop log. HP-108
+skill→tools stays out of scope.
 
 ## Skill trust (HP-105)
 
@@ -199,7 +199,20 @@ signals and HP-108 skill→tools stay out of scope.
 - Attributed failure demotes trusted → provisional. Ambiguous failure
   opens a HP-97 PASS review (`kind=skill_evolution`, `action=trust_review`)
   and does **not** demote. `not_skill` (env / tool / network / permission)
-  is ignored. HP-106 will replace the attribution stub.
+  is ignored.
+
+## Causal attribution (HP-106)
+
+`hivepilot/skill_signals.py` is the OpenSpace detector + linker pattern
+(rewritten; no cloud, no pickle):
+
+- Failure classes: `tool` / `env` / `permission` / `skill_defect`.
+  A network outage is `env` and never a skill fault.
+- Unique skill context + skill defect → `attributed` (HP-105 demote).
+  Multiple or missing subjects → `ambiguous` (PASS review). Tool / env /
+  permission → `not_skill` (trust unchanged).
+- FIX is admissible only with a **revision + causal event + representative
+  result**. Draft apply is HP-109; this module only gates the triple.
 
 ## Skill workshop (HP-79)
 
