@@ -24,5 +24,6 @@ Replay: `pytest tests/test_skill_catalog.py`
 
 ## Testing
 
-- [x] `pytest tests/test_skill_catalog.py`
-- [ ] `ruff check hivepilot/skill_catalog.py tests/test_skill_catalog.py`
+- [x] `pytest tests/test_skill_catalog.py` — 13 passed
+- [x] `pytest` skill-related suites (`test_skill_dirs`, `test_skills_registry`, `test_skill_workshop_service`, `test_skill_catalog`, `test_sample_skill`, `test_skill_config_validation`, `test_skill_application`, `test_skill_orchestrator_wiring`) — 101 passed
+- [x] `ruff check` + `ruff format --check` on `hivepilot/skill_catalog.py` and `tests/test_skill_catalog.py`

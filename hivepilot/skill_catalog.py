@@ -152,8 +152,7 @@ class LogicalSkill:
         active = [rev for rev in self.revisions if rev.is_active]
         if len(active) != 1:
             raise SkillCatalogError(
-                f"{self.logical_id} must have exactly one active revision, "
-                f"got {len(active)}"
+                f"{self.logical_id} must have exactly one active revision, got {len(active)}"
             )
         return active[0]
 
@@ -187,9 +186,7 @@ class SkillCatalog:
         return skill.active_revision
 
     def list_active(self) -> tuple[SkillRevision, ...]:
-        return tuple(
-            self._skills[key].active_revision for key in sorted(self._skills)
-        )
+        return tuple(self._skills[key].active_revision for key in sorted(self._skills))
 
     def revisions(self, name_or_id: str) -> tuple[SkillRevision, ...]:
         skill = self._skills.get(name_or_id) or self.get_by_name(name_or_id)
@@ -286,9 +283,7 @@ class SkillCatalog:
             )
 
         if resolved is SkillOrigin.FIXED:
-            raise SkillCatalogError(
-                f"FIXED requires an existing logical skill {logical_id!r}"
-            )
+            raise SkillCatalogError(f"FIXED requires an existing logical skill {logical_id!r}")
         if resolved is SkillOrigin.DERIVED and not parent_logical_ids:
             raise SkillCatalogError("DERIVED requires one or more parent logical skills")
         if resolved in (SkillOrigin.IMPORTED, SkillOrigin.CAPTURED) and parent_logical_ids:
@@ -308,9 +303,7 @@ class SkillCatalog:
             description=description,
             is_active=True,
         )
-        self._skills[logical_id] = LogicalSkill(
-            logical_id=logical_id, name=name, revisions=[rev]
-        )
+        self._skills[logical_id] = LogicalSkill(logical_id=logical_id, name=name, revisions=[rev])
         return rev
 
     def _append_fixed(
