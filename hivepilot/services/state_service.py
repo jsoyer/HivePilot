@@ -549,6 +549,30 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status ON checkpoints (kind, status)"
         )
+        # HP-104 skill-cycle events. Idempotent per (revision, run, step, type).
+        # Ranking lives in hivepilot.skill_events; absence of a measurement
+        # is not stored as zero. HP-79 skill_usage_events stays append-only.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_cycle_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                revision_id TEXT NOT NULL,
+                logical_id TEXT NOT NULL,
+                skill_name TEXT NOT NULL DEFAULT '',
+                run_id TEXT NOT NULL,
+                step TEXT NOT NULL,
+                tenant TEXT NOT NULL DEFAULT 'default',
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (revision_id, run_id, step, event_type)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_cycle_tenant_skill "
+            "ON skill_cycle_events (tenant, skill_name, event_type)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

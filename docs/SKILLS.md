@@ -161,12 +161,29 @@ instead).
   skill id. `DERIVED` / `CAPTURED` create a new logical skill (roots have
   no parents; `DERIVED` points at one or more parent revisions).
 
-This catalog does not implement HP-105 trust (provisional↔trusted) or
-HP-104 events. HP-99 evidence (`hivepilot/evidence.py`) is a separate
-tenant-scoped registry: evolution claims must cite existing refs;
-missing refs make a `skill_evolution` PASS proposal not admissible.
-Workshop accept/reject (HP-79) still writes directory files only after
-an operator approval; a later scan then sees the new bytes as `FIXED`.
+This catalog does not implement HP-105 trust (provisional↔trusted).
+HP-99 evidence (`hivepilot/evidence.py`) is a separate tenant-scoped
+registry: evolution claims must cite existing refs; missing refs make a
+`skill_evolution` PASS proposal not admissible. Workshop accept/reject
+(HP-79) still writes directory files only after an operator approval; a
+later scan then sees the new bytes as `FIXED`.
+
+## Skill cycle events (HP-104)
+
+`hivepilot/skill_events.py` records the OpenSpace skill-cycle pattern
+(rewritten; no cloud, no pickle):
+
+- Types: `selected`, `invoked`, `applied`, `completed`, `fallback`, `excluded`.
+- Idempotent per `(revision_id, run_id, step, event_type)`. A replay returns
+  the existing row.
+- Absence of measurement is **not** zero. Rankings omit skills with no
+  `selected` count (`rate is None`). A skill that was selected and never
+  completed is a real `0`.
+- Pollen panel `skill-cycle` (opt-in `HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`)
+  shows top/bottom measured skills.
+
+HP-79 `skill_usage_events` stays an append-only workshop log. HP-105 trust,
+HP-106 signals, and HP-108 skill→tools stay out of scope.
 
 ## Skill workshop (HP-79)
 

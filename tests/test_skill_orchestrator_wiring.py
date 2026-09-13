@@ -102,7 +102,13 @@ def _make_orchestrator(tmp_path: Path, *, skill_registry: dict[str, SkillSpec]) 
     return orch
 
 
-def _run_single_step(orch: Any, project: ProjectConfig, task: TaskConfig) -> RunnerPayload:
+def _run_single_step(
+    orch: Any,
+    project: ProjectConfig,
+    task: TaskConfig,
+    *,
+    run_id: int | None = None,
+) -> RunnerPayload:
     """Execute one step and return the exact payload the runner received.
 
     `_capture_or_execute` is replaced by a recorder so the enriched payload is
@@ -136,6 +142,7 @@ def _run_single_step(orch: Any, project: ProjectConfig, task: TaskConfig) -> Run
             auto_git=False,
             simulate=False,
             dry_run=True,
+            run_id=run_id,
         )
 
     assert "payload" in seen, "runner was never invoked for the step"
@@ -585,6 +592,23 @@ def test_mode_api_step_fails_closed_when_fallback_is_cli_only(
                 simulate=False,
                 dry_run=True,
             )
+
+
+def test_skill_cycle_events_record_when_run_id_present(tmp_path: Path) -> None:
+    """HP-104: a real run_id records selected/invoked/applied once each."""
+    from hivepilot.skill_events import list_skill_events
+
+    orch = _make_orchestrator(tmp_path, skill_registry={"demo": _skill()})
+    project = _project(tmp_path)
+    task = _task(tmp_path, skills=["demo"])
+    payload = _run_single_step(orch, project, task, run_id=42)
+    rows = list_skill_events(run_id=42, step="s1", skill_name="demo")
+    kinds = {row.event_type for row in rows}
+    assert {"selected", "invoked", "applied"} <= kinds
+    assert all(row.run_id == "42" for row in rows)
+    scratch = payload.metadata.get(_SKILL_SCRATCH_DIR_KEY)
+    if scratch:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 if __name__ == "__main__":  # pragma: no cover

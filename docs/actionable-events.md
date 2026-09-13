@@ -26,6 +26,7 @@ Exact `change_log.kind` values emitted in-repo (before this spike):
 | `space.message` / `space.created` / `space.typing` / `space.typing_stop` | spaces / orchestrator | sleep |
 | `routine.failed` / `routine.ran` / `routine.upserted` / `routine.deleted` | `routine_service` | sleep |
 | `skill.applied` / `skill.proposal` / `skill.proposal.decided` | `skill_workshop_service` | sleep |
+| `skill.selected` / `skill.invoked` / `skill.completed` / `skill.fallback` / `skill.excluded` | `skill_events` (HP-104) | sleep |
 | `provider.fallback` | `orchestrator` | sleep |
 | `schedule.noop_skip` | `schedule_service` | sleep |
 

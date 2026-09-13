@@ -1,27 +1,26 @@
 ## Summary
 
-HP-102: one shared `decide_approval()` for Pollen cards and the Telegram Approvals-door keyboard. Same `approval_id` on both surfaces → a single resume. Owner + TTL via `pending_confirmation`. Four Telegram doors stay inbox | approvals | runs | alerts (no fifth topic). WhatsApp is out of scope (HP-129).
+HP-104: skill-cycle event store + Pollen top/bottom panel. Six event types, idempotent per `(revision, run, step, type)`. Absence of a measurement is not zero.
 
-Owning issue: [HP-102](https://linear.app/js-workspace/issue/HP-102/u-08-presenter-pollen-telegram-parity-door-approvals)
+Owning issue: [HP-104](https://linear.app/js-workspace/issue/HP-104/u-10-events-skill-cycle-panneau-pollen)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS and HP-101 `decide_memory`.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-98 skill catalog + HP-99 evidence.
 
-Replay: `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py`
+Replay: `pytest tests/test_skill_events.py tests/test_skill_events_panel.py tests/test_skill_orchestrator_wiring.py tests/test_skill_catalog.py tests/test_actionable_events.py`
 
 ## What changed
 
-1. **`hivepilot/presenters.py`** — `present()` / `pollen_card()` / `telegram_keyboard()` / `decide_approval()`. Keyboard is `None` off the Approvals door.
-2. **Telegram** — PASS callback `pass:<decision>:<approval_id>` and `/approvals` send PASS keyboards to the Approvals topic only.
-3. **Pollen** — `GET/POST /v1/pass-approvals/{approval_id}` plus ApprovalsView PASS inbox (same `approval_id`).
-4. **Docs** — SECURITY fail-closed checklist + ARCHITECTURE safety model.
+1. **`hivepilot/skill_events.py`** — `record_skill_event` / `record_cycle` with types `selected`, `invoked`, `applied`, `completed`, `fallback`, `excluded`. Unique key `(revision_id, run_id, step, event_type)`. `rank_skills()` omits unmeasured skills (`rate is None` when `selected == 0`).
+2. **State store** — `skill_cycle_events` table in `init_db`.
+3. **Orchestrator** — fail-safe cycle writes at resolve / apply / fallback / step success. HP-79 `skill_usage_events` unchanged.
+4. **Pollen panel** — opt-in `skill-cycle` (`HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`) shows top/bottom measured skills.
 
 ## Out of scope
 
-- WhatsApp (HP-129), HP-67 sandbox, a fifth Telegram topic, vendored TS / Electron / pickle
+- HP-105 trust ladder, HP-106 signals, HP-108 skill→tools
+- WhatsApp, HP-67 sandbox, vendored OpenSpace / pickle / cloud
 
 ## Testing
 
-- [x] `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py` — 99 passed
-- [x] `pytest tests/test_telegram_bot.py tests/test_approval_forum_topic.py` — 103 passed (no regression)
-- [x] `ruff check` + `ruff format --check` clean
-- [x] Pollen Vitest: `pollen-api.test.ts` + `ApprovalsView.test.tsx` + i18n — 96 passed
+- [ ] `pytest tests/test_skill_events.py tests/test_skill_events_panel.py tests/test_skill_orchestrator_wiring.py tests/test_skill_catalog.py tests/test_actionable_events.py`
+- [ ] `ruff check` + `ruff format --check` on touched Python
