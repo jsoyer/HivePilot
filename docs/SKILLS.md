@@ -214,6 +214,19 @@ skill→tools stays out of scope.
 - FIX is admissible only with a **revision + causal event + representative
   result**. Draft apply is HP-109; this module only gates the triple.
 
+## BM25 retrieval (HP-107)
+
+`hivepilot/skill_ranker.py` is the OpenSpace BM25 stage rewritten locally
+(no vendor package, no embeddings, no pickle, no cloud):
+
+- Corpus = HP-98 **active** revisions. HP-105 `enabled` / provisional
+  filters run **before** scoring so unknown and disabled rows never enter
+  IDF. Provisional stays eligible unless `include_provisional=False`.
+- Ranking text is name + description only. `disclose` returns the
+  `SKILL.md` body after selection (progressive disclosure).
+- Order is deterministic (`-score`, then name, then revision id). Zero
+  model queries. Hybrid embedding RRF is HP-114.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.

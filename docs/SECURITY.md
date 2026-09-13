@@ -116,7 +116,9 @@ inter-runs; attributed failure demotes; ambiguous failure opens a PASS
 (`hivepilot/skill_signals.py`) classifies tool / env / permission /
 skill-defect; a network outage is `env` and must not demote trust. FIX
 requires revision + causal event + representative result (apply is
-HP-109).
+HP-109). HP-107 skill retrieval (`hivepilot/skill_ranker.py`) is local
+Okapi BM25 over enabled (and optionally provisional) active revisions —
+0 model queries, no pickle, body only after `disclose`.
 
 ### Memory proposals HITL (HP-101)
 
