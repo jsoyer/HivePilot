@@ -30,6 +30,7 @@ Replay: `pytest tests/test_workspace_text.py tests/test_tool_catalog.py tests/te
 
 - [x] append / replace / remove / duplicate / stale / overflow
 - [x] isolation: memory = JSON data, not instructions
-- [x] `pytest tests/test_workspace_text.py`
-- [x] `pytest tests/test_tool_catalog.py tests/test_skill_catalog.py` (catalogs still green)
+- [x] `pytest tests/test_workspace_text.py` — 28 passed
+- [x] `pytest tests/test_tool_catalog.py tests/test_skill_catalog.py` — 37 passed (catalogs still green)
+- [x] Combined replay suite — 65 passed
 - [x] `ruff check` + `ruff format --check` on the new files
