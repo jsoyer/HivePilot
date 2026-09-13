@@ -11,8 +11,9 @@ Recall is zero-approval. User Pollen / vault writes go through
 
 Apply runs only after ``decide`` persists APPROVED (HP-97). The reserved
 ``idempotency_key`` (HP-100 ``side_effects``) makes apply-after-approve
-run at most once. This module does not implement presenter parity
-(HP-102), WhatsApp, or HP-67.
+run at most once. Presenter parity (Pollen ↔ Telegram) is
+``hivepilot.presenters`` (HP-102). This module does not implement
+WhatsApp or HP-67.
 """
 
 from __future__ import annotations

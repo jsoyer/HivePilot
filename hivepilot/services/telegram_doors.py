@@ -74,6 +74,11 @@ def is_persistent_door(key: str) -> bool:
     return key in DOOR_TITLES
 
 
+def approval_actions_allowed(door: str) -> bool:
+    """Pollen cards and Telegram approval keyboards stay on Approvals."""
+    return door == APPROVALS
+
+
 def is_run_topic_key(key: str) -> bool:
     return key.startswith(_RUN_KEY_PREFIX) and bool(key[len(_RUN_KEY_PREFIX) :].strip())
 

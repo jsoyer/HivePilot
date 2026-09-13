@@ -55,6 +55,8 @@ import {
   parseGraphRunSelector,
   pauseAutopilot,
   postApproval,
+  fetchPassApprovals,
+  postPassApproval,
   fetchPanel,
   fetchPanels,
   fetchPluginsHealth,
@@ -223,6 +225,21 @@ describe('pollen-api fetch wrappers', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ approver: 'web', approve: false, reason: 'not this time' }),
+      on403: 'forbidden',
+    })
+  })
+
+  it('fetchPassApprovals calls GET /v1/pass-approvals', async () => {
+    await fetchPassApprovals()
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/pass-approvals', { on403: 'forbidden' })
+  })
+
+  it('postPassApproval POSTs decision to /v1/pass-approvals/{approval_id}', async () => {
+    await postPassApproval('abc123', { decision: 'approve' })
+    expect(apiFetchMock).toHaveBeenCalledWith('/v1/pass-approvals/abc123', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approve' }),
       on403: 'forbidden',
     })
   })

@@ -7,7 +7,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import { type Approval, fetchApprovals, postApproval } from '@/lib/pollen-api'
+import {
+  type Approval,
+  type PassApproval,
+  fetchApprovals,
+  fetchPassApprovals,
+  postApproval,
+  postPassApproval,
+} from '@/lib/pollen-api'
 import { useRole } from '@/lib/role-context'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
@@ -121,6 +128,92 @@ function RowActions({ approval, onDone }: RowActionsProps) {
   )
 }
 
+interface PassRowActionsProps {
+  approval: PassApproval
+  onDone: () => void
+}
+
+function PassRowActions({ approval, onDone }: PassRowActionsProps) {
+  const t = useT()
+  const [denyOpen, setDenyOpen] = useState(false)
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit(decision: 'approve' | 'reject') {
+    setSubmitting(true)
+    setError(null)
+    try {
+      await postPassApproval(approval.approval_id, {
+        decision,
+        reason: decision === 'approve' ? undefined : reason.trim(),
+      })
+      onDone()
+    } catch (err) {
+      setError(
+        err instanceof ApiForbiddenError ? t('approvals.insufficientRoleApprove') : describeApiError(err),
+      )
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          disabled={submitting}
+          onClick={() => {
+            void submit('approve')
+          }}
+          aria-label={t('approvals.approvePassAriaLabel', { id: approval.approval_id })}
+        >
+          {t('approvals.approve')}
+        </Button>
+        <Button
+          size="sm"
+          variant="destructive"
+          disabled={submitting}
+          onClick={() => setDenyOpen((open) => !open)}
+          aria-label={t('approvals.denyPassAriaLabel', { id: approval.approval_id })}
+        >
+          {t('approvals.deny')}
+        </Button>
+        {submitting && (
+          <span role="status" className="text-sm text-muted-foreground">
+            {t('common.processing')}
+          </span>
+        )}
+      </div>
+      {denyOpen && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder={t('approvals.reasonPlaceholder')}
+            disabled={submitting}
+          />
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={submitting || !reason.trim()}
+            onClick={() => {
+              void submit('reject')
+            }}
+          >
+            {t('approvals.confirmDeny')}
+          </Button>
+        </div>
+      )}
+      {error && (
+        <div role="alert" className="text-sm text-destructive">
+          {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /**
  * Approvals tab — `GET /v1/approvals` (pending, tenant-filtered), with
  * per-row Approve/Deny via `POST /v1/approvals/{run_id}`.
@@ -147,6 +240,7 @@ export function ApprovalsView() {
   const canApprove = can('approve')
   const [refreshKey, setRefreshKey] = useState(0)
   const state = useAsyncData(() => fetchApprovals(), [refreshKey])
+  const passState = useAsyncData(() => fetchPassApprovals(), [refreshKey])
   const isForbidden = state.status === 'error' && state.error instanceof ApiForbiddenError
 
   function handleDone() {
@@ -247,6 +341,63 @@ export function ApprovalsView() {
             )}
           </AsyncSection>
         )}
+
+        <div className="mt-8 space-y-3">
+          <div>
+            <h3 className="text-sm font-medium">{t('approvals.passTitle')}</h3>
+            <p className="text-sm text-muted-foreground">{t('approvals.passDescription')}</p>
+          </div>
+          <AsyncSection
+            state={passState}
+            isEmpty={(data) => data.length === 0}
+            emptyMessage={t('approvals.noPassPending')}
+          >
+            {(data) => (
+              <Table className="block xl:table">
+                <TableHeader className="hidden xl:table-header-group">
+                  <TableRow>
+                    <TableHead>{t('approvals.kind')}</TableHead>
+                    <TableHead>{t('common.project')}</TableHead>
+                    <TableHead>{t('common.task')}</TableHead>
+                    <TableHead>{t('common.status')}</TableHead>
+                    {canApprove && <TableHead>{t('common.actions')}</TableHead>}
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="block xl:table-row-group">
+                  {data.map((approval) => (
+                    <TableRow
+                      key={approval.approval_id}
+                      data-approval-id={approval.approval_id}
+                      className="mb-3 block rounded-lg border border-border p-3 xl:mb-0 xl:table-row xl:rounded-none xl:border-x-0 xl:border-t-0 xl:p-0"
+                    >
+                      <TableCell className="block whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('approvals.kind')}:</span>
+                        {approval.kind}
+                      </TableCell>
+                      <TableCell className="block break-words whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.project')}:</span>
+                        {approval.project}
+                      </TableCell>
+                      <TableCell className="block break-words whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.task')}:</span>
+                        {approval.task}
+                      </TableCell>
+                      <TableCell className="block whitespace-normal xl:table-cell xl:whitespace-nowrap">
+                        <span className="mr-1 font-medium xl:hidden">{t('common.status')}:</span>
+                        <Badge variant="secondary">{approval.status}</Badge>
+                      </TableCell>
+                      {canApprove && (
+                        <TableCell className="block whitespace-normal pt-2 xl:table-cell xl:pt-2 xl:whitespace-nowrap">
+                          <PassRowActions approval={approval} onDone={handleDone} />
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </AsyncSection>
+        </div>
       </CardContent>
     </Card>
   )

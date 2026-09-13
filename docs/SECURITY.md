@@ -104,7 +104,7 @@ Rules:
 - HP-95 ``volatile`` tools complete without an effect cache.
 - Crash mid-approval → exactly one resume executes the effect.
 
-Applying presenter / skill-doctrine / trust is HP-102 / HP-103 / HP-105.
+Applying skill-doctrine / trust is HP-103 / HP-105. Presenter parity is HP-102.
 
 ### Memory proposals HITL (HP-101)
 
@@ -117,7 +117,10 @@ Applying presenter / skill-doctrine / trust is HP-102 / HP-103 / HP-105.
 - **Recall** does not create or require a proposal.
 - User **Pollen / vault** writes call `user_write` and mutate the corpus directly (no inbox row).
 
-Presenter parity (Pollen ↔ Telegram cards) is HP-102.
+Presenter parity (Pollen ↔ Telegram cards) is HP-102 (`hivepilot/presenters.py`):
+one ``decide_approval()``, same ``approval_id`` on both surfaces, keyboards and
+cards only on the Approvals door, owner+TTL via ``pending_confirmation``. Four
+Telegram doors stay inbox | approvals | runs | alerts.
 
 ### Evidence refs (HP-99) — tenant-scoped, redacted, watermarked
 

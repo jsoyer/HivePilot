@@ -8,6 +8,15 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
+from hivepilot.presenters import (
+    APPROVAL_DOOR,
+    TELEGRAM,
+    decide_approval,
+    memory_corpus,
+    parse_callback,
+    present_pending,
+    telegram_keyboard,
+)
 from hivepilot.services.config_provenance import mask_id
 from hivepilot.services.notification_service import door_thread, ensure_pollen_doors
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
@@ -1443,16 +1452,28 @@ async def _cmd_approvals(update, context) -> None:
     except Exception as exc:
         await update.message.reply_text(f"Error: {exc}")
         return
-    if not pending:
+    owner_id = _concierge_user_id(update.message)
+    pass_cards = present_pending(owner_id=owner_id) if owner_id else []
+    if not pending and not pass_cards:
         await update.message.reply_text("No pending approvals.")
         return
+    approvals_chat = _approval_chat_id() or update.effective_chat.id
+    approvals_thread = _approval_message_thread_id(approvals_chat)
     for row in pending:
         await _send_approval_keyboard_message(
             context.bot,
-            chat_id=update.effective_chat.id,
+            chat_id=approvals_chat,
             run_id=row["run_id"],
             project=row["project"],
             task=row["task"],
+            message_thread_id=approvals_thread,
+        )
+    for card in pass_cards:
+        await _send_pass_keyboard_message(
+            context.bot,
+            chat_id=approvals_chat,
+            card=card,
+            message_thread_id=approvals_thread,
         )
 
 
@@ -1768,6 +1789,123 @@ async def _callback_approval(update, context) -> None:
     except Exception as exc:
         logger.error("telegram.callback_approval.error", run_id=run_id, error=str(exc))
         await query.edit_message_text(f"Error processing run #{run_id}: {exc}")
+
+
+async def _send_pass_keyboard_message(
+    bot,
+    *,
+    chat_id: int,
+    card,
+    message_thread_id: int | None = None,
+) -> None:
+    """Send a PASS card keyboard on the Approvals door only."""
+    keyboard_card = telegram_keyboard(card, door=APPROVAL_DOOR)
+    if keyboard_card is None:
+        return
+    try:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    except ImportError as exc:
+        raise RuntimeError(
+            "python-telegram-bot required: pip install hivepilot[notifications]"
+        ) from exc
+
+    markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(button["text"], callback_data=button["callback_data"])
+                for button in row
+            ]
+            for row in keyboard_card.buttons
+        ]
+    )
+    send_kwargs: dict[str, Any] = {}
+    if message_thread_id is not None:
+        send_kwargs["message_thread_id"] = message_thread_id
+    await bot.send_message(
+        chat_id=chat_id,
+        text=keyboard_card.text,
+        reply_markup=markup,
+        **send_kwargs,
+    )
+
+
+def notify_pass_approval(*, owner_id: str, tenant: str | None = None) -> int:
+    """Present PENDING PASS rows and send keyboards to the Approvals door.
+
+    Returns the number of keyboards queued. Never opens a fifth topic.
+    """
+    cards = present_pending(owner_id=owner_id, tenant=tenant)
+    if not cards:
+        return 0
+    chat_id = _approval_chat_id()
+    if not chat_id:
+        raise RuntimeError("No Telegram notification chat_id configured")
+    message_thread_id = _approval_message_thread_id(chat_id)
+    token = _token()
+
+    async def _send() -> None:
+        from telegram import Bot
+
+        async with Bot(token) as bot:
+            for card in cards:
+                await _send_pass_keyboard_message(
+                    bot,
+                    chat_id=chat_id,
+                    card=card,
+                    message_thread_id=message_thread_id,
+                )
+
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_send())
+        else:
+            loop.run_until_complete(_send())
+    except RuntimeError:
+        asyncio.run(_send())
+    return len(cards)
+
+
+async def _callback_pass_approval(update, context) -> None:
+    """Approve/deny/edit a PASS card — same decide_approval() as Pollen."""
+    query = update.callback_query
+    if query.message is None:
+        await query.answer(
+            "This button can no longer be used (original message unavailable).",
+            show_alert=True,
+        )
+        return
+    parsed = parse_callback(query.data)
+    if parsed is None:
+        await query.answer("Invalid approval button.", show_alert=True)
+        return
+    decision, approval_id = parsed
+    owner_id = _concierge_user_id(query)
+    if not owner_id:
+        await query.answer("Cannot identify you — approval not applied.", show_alert=True)
+        return
+    await query.answer()
+    if not _require_allowed(query.message.chat.id):
+        await query.edit_message_text("Unauthorized.")
+        return
+    try:
+        result = decide_approval(
+            approval_id,
+            decision,
+            owner_id=owner_id,
+            surface=TELEGRAM,
+            actor=f"telegram:{owner_id}",
+            corpus=memory_corpus(),
+        )
+        verb = "approved" if result.decision == "approve" else result.decision
+        await query.edit_message_text(f"{result.proposal.kind} {approval_id} {verb}.")
+    except Exception as exc:
+        logger.error(
+            "telegram.callback_pass_approval.error",
+            approval_id=approval_id,
+            error=str(exc),
+        )
+        await query.edit_message_text(f"Error processing {approval_id}: {exc}")
 
 
 def notify_approval_required(
@@ -2158,6 +2296,9 @@ def _build_application(token: str):
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _cmd_mention))
     app.add_handler(
         CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny|challenge):\d+$")
+    )
+    app.add_handler(
+        CallbackQueryHandler(_callback_pass_approval, pattern=r"^pass:(approve|deny|edit):")
     )
     app.add_handler(CallbackQueryHandler(_concierge_callback, pattern=r"^concierge:(yes|no):"))
     # Graceful error handler: a Telegram polling Conflict (another instance

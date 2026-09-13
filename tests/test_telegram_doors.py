@@ -14,6 +14,7 @@ from hivepilot.services.telegram_doors import (
     RUNS,
     SEMANTIC_TURN_ICONS,
     SYSTEM_EMOJI,
+    approval_actions_allowed,
     classify_notification_door,
     concierge_action_prompt,
     concierge_answer_text,
@@ -40,6 +41,15 @@ def test_four_persistent_doors_match_pollen_names() -> None:
         "Alerts",
     ]
     assert "General" not in DOOR_TITLES.values()
+    assert len(PERSISTENT_DOORS) == 4
+    assert "whatsapp" not in PERSISTENT_DOORS
+
+
+def test_approval_actions_stay_on_approvals_door() -> None:
+    assert approval_actions_allowed(APPROVALS)
+    assert not approval_actions_allowed(INBOX)
+    assert not approval_actions_allowed(RUNS)
+    assert not approval_actions_allowed(ALERTS)
 
 
 def test_role_charte_is_exactly_the_eight_pairs() -> None:

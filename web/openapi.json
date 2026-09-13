@@ -1629,6 +1629,41 @@
         "title": "PartitionTaskRow",
         "type": "object"
       },
+      "PassApprovalAction": {
+        "description": "Pollen Approvals-door decide \u2014 same approval_id as Telegram.",
+        "properties": {
+          "decision": {
+            "default": "approve",
+            "title": "Decision",
+            "type": "string"
+          },
+          "edited_payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited Payload"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "title": "PassApprovalAction",
+        "type": "object"
+      },
       "PipedreamSyncRequest": {
         "properties": {
           "app": {

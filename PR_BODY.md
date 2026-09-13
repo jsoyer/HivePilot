@@ -1,26 +1,27 @@
 ## Summary
 
-HP-101: every model memory write is a PASS proposal (`kind=memory`). Never silent. No Always-allow. Pending/reject leave IsolatedJsonMemory and workspace text unchanged. Edit stages user text; approve applies it. Recall is zero-approval. User Pollen/vault writes go through `user_write` (direct).
+HP-102: one shared `decide_approval()` for Pollen cards and the Telegram Approvals-door keyboard. Same `approval_id` on both surfaces → a single resume. Owner + TTL via `pending_confirmation`. Four Telegram doors stay inbox | approvals | runs | alerts (no fifth topic). WhatsApp is out of scope (HP-129).
 
-Owning issue: [HP-101](https://linear.app/js-workspace/issue/HP-101/u-07-memory-proposals-hitl-proposeapproveeditreject)
+Owning issue: [HP-102](https://linear.app/js-workspace/issue/HP-102/u-08-presenter-pollen-telegram-parity-door-approvals)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-96 isolated memory, HP-97 PASS, HP-100 side_effects for apply-once.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS and HP-101 `decide_memory`.
 
-Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py`
+Replay: `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py`
 
 ## What changed
 
-1. **`hivepilot/memory_proposals.py`** — propose / decide (approve, edit, reject) / recall / `user_write`. Apply IsolatedJsonMemory or workspace text only after APPROVED.
-2. **`hivepilot/pass_store.py`** — `stage_edit` merges user text while status stays PENDING (`decide('edit')` remains terminal and is not an apply signal).
-3. **Docs** — SECURITY fail-closed checklist + ARCHITECTURE safety model.
+1. **`hivepilot/presenters.py`** — `present()` / `pollen_card()` / `telegram_keyboard()` / `decide_approval()`. Keyboard is `None` off the Approvals door.
+2. **Telegram** — PASS callback `pass:<decision>:<approval_id>` and `/approvals` send PASS keyboards to the Approvals topic only.
+3. **Pollen** — `GET/POST /v1/pass-approvals/{approval_id}` plus ApprovalsView PASS inbox (same `approval_id`).
+4. **Docs** — SECURITY fail-closed checklist + ARCHITECTURE safety model.
 
 ## Out of scope
 
-- HP-102 presenter parity (Pollen ↔ Telegram cards)
-- HP-105 trust, WhatsApp, HP-67 sandbox, vendored TS / Electron / pickle
+- WhatsApp (HP-129), HP-67 sandbox, a fifth Telegram topic, vendored TS / Electron / pickle
 
 ## Testing
 
-- [x] `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py` — 82 passed
+- [x] `pytest tests/test_presenters.py tests/test_telegram_pass_presenter.py tests/test_api_pass_approvals.py tests/test_telegram_doors.py tests/test_memory_proposals.py tests/test_pass_store.py tests/test_checkpoints.py tests/test_pending_confirmation.py` — 99 passed
+- [x] `pytest tests/test_telegram_bot.py tests/test_approval_forum_topic.py` — 103 passed (no regression)
 - [x] `ruff check` + `ruff format --check` clean
-- [x] GitHub CI — 8/8 green (ruff, mypy, pytest, postgres dialect, Pollen build, OpenAPI drift, Helm, public-safe prompts)
+- [x] Pollen Vitest: `pollen-api.test.ts` + `ApprovalsView.test.tsx` + i18n — 96 passed
