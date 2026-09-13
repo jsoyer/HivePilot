@@ -146,11 +146,11 @@ class TestResolveOnOff:
 
     def test_cataloged_improve_without_frontmatter_uses_default(self) -> None:
         catalog = SkillCatalog()
-        _record(catalog, "improve", allowed_tools=None, enabled=True)
+        rev = _record(catalog, "improve", allowed_tools=None, enabled=True)
         assert build_capability_map(catalog)["improve"] == ("Read", "Grep", "Glob")
-        disabled = SkillCatalog()
-        _record(disabled, "improve", allowed_tools=None, enabled=False)
-        assert resolve_chat_tools(["Read", "Bash"], catalog=disabled) == ["Bash"]
+        assert resolve_chat_tools(["Read", "Bash"], catalog=catalog) == ["Read", "Bash"]
+        set_enabled(rev.revision_id, False)
+        assert resolve_chat_tools(["Read", "Bash"], catalog=catalog) == ["Bash"]
 
 
 class TestNoKeywordForceLoad:
@@ -220,7 +220,7 @@ class TestConciergeClassifierUntouched:
     def test_role_chat_helper_filters_allowlist(self, monkeypatch) -> None:
         catalog = _web_catalog(web_enabled=False)
         role = SimpleNamespace(allowed_tools=["Read", "WebSearch"])
-        monkeypatch.setattr("hivepilot.roles.get_role", lambda name: role)
+        monkeypatch.setattr(concierge_service, "get_role", lambda name: role)
         assert concierge_service.resolve_role_chat_tools("developer", catalog=catalog) == ["Read"]
 
 
