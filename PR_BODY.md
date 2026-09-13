@@ -1,27 +1,26 @@
 ## Summary
 
-HP-99: tenant-scoped evidence refs, bounded packets, and ingest redaction. Evolution claims must cite existing refs in the same tenant; missing refs make a `skill_evolution` proposal not admissible. Secrets are redacted at ingest. Watermark is `change_log.id`.
+HP-100: unique `idempotency_key` on table `side_effects`, plus a `pending_tool` checkpoint around PASS/approval. Resume reuses the same key. Volatile catalog tools skip the effect cache. Crash mid-approval executes the effect exactly once.
 
-Owning issue: [HP-99](https://linear.app/js-workspace/issue/HP-99/u-05-evidence-refs-paquets-bornes-redaction)
+Owning issue: [HP-100](https://linear.app/js-workspace/issue/HP-100/u-06-idempotency-checkpoint-resume)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS + HP-98 skill catalog.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS + HP-95 tool catalog.
 
-Replay: `pytest tests/test_evidence.py tests/test_pass_store.py tests/test_skill_catalog.py`
+Replay: `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py`
 
 ## What changed
 
-1. **`hivepilot/evidence.py`** — tenant-scoped ref registry; ingest redacts registered secrets and secret-looking metadata keys; each ingest emits HP-40 `change_log` and stores **watermark = `change_log.id`**.
-2. **Bounded packets** — `build_packet` caps chars/refs, lists omitted and missing ids (no silent drop).
-3. **Admissibility** — `assess_evolution_claim` is fail-closed: empty or missing/foreign-tenant refs ⇒ not admissible.
-4. **PASS gate** — `submit(kind=skill_evolution)` persists PENDING first (HP-97), then rejects when the claim is not admissible. `create_pending` is unchanged.
+1. **`hivepilot/side_effects.py`** — unique `idempotency_key`; persist `side_effects`; volatile rows complete without caching a payload.
+2. **`hivepilot/checkpoints.py`** — `kind=pending_tool` around PASS `submit`/`decide`; `resume` reuses the reserved key and CAS-claims so the effect runs at most once.
+3. **State store** — `side_effects` + `checkpoints` tables in `init_db` (same CREATE IF NOT EXISTS pattern as HP-97 / HP-99).
 
 ## Out of scope
 
-- HP-109 FIX/DERIVED/CAPTURED apply paths
-- HP-104 events panel, HP-105 trust, HP-100/101
-- WhatsApp, HP-67 sandbox, OpenSpace cloud / pickle / vendored TS
+- HP-101 memory proposals HITL
+- HP-102 presenter parity, HP-103 skill doctrine, HP-105 trust
+- WhatsApp, HP-67 sandbox, vendored TS / Electron / pickle
 
 ## Testing
 
-- [x] `pytest tests/test_evidence.py tests/test_pass_store.py tests/test_skill_catalog.py tests/test_events.py` — 61 passed
-- [x] `ruff check` + `ruff format --check` clean
+- [ ] `pytest tests/test_side_effects.py tests/test_checkpoints.py tests/test_pass_store.py tests/test_tool_catalog.py`
+- [ ] `ruff check` + `ruff format --check` clean
