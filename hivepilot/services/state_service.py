@@ -547,8 +547,7 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status "
-            "ON checkpoints (kind, status)"
+            "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status ON checkpoints (kind, status)"
         )
         conn.execute(
             """

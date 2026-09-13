@@ -26,8 +26,10 @@ from hivepilot.pass_store import (
     REJECTED,
     PassProposal,
     decide,
-    get as get_proposal,
     submit,
+)
+from hivepilot.pass_store import (
+    get as get_proposal,
 )
 from hivepilot.services import db, state_service
 from hivepilot.side_effects import (
@@ -37,9 +39,11 @@ from hivepilot.side_effects import (
     bind,
     cached_result,
     complete,
-    get as get_effect,
     normalize_key,
     reserve,
+)
+from hivepilot.side_effects import (
+    get as get_effect,
 )
 from hivepilot.tool_catalog import TOOL_APPROVAL_KIND, ToolCatalog, resolve
 
@@ -135,8 +139,7 @@ def _ensure_table() -> None:
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status "
-            "ON checkpoints (kind, status)"
+            "CREATE INDEX IF NOT EXISTS idx_checkpoints_kind_status ON checkpoints (kind, status)"
         )
 
 
@@ -225,9 +228,7 @@ def open_pending_tool(
     existing = get_checkpoint(key)
     if existing is not None:
         if existing.kind != PENDING_TOOL:
-            raise CheckpointError(
-                f"checkpoint {key} is {existing.kind}, not {PENDING_TOOL}"
-            )
+            raise CheckpointError(f"checkpoint {key} is {existing.kind}, not {PENDING_TOOL}")
         return existing
 
     effect = get_effect(key)
@@ -341,9 +342,7 @@ def resume(
     if effect is None or checkpoint is None:
         raise CheckpointError(f"no pending_tool checkpoint for {key}")
     if checkpoint.kind != PENDING_TOOL:
-        raise CheckpointError(
-            f"checkpoint {key} is {checkpoint.kind}, not {PENDING_TOOL}"
-        )
+        raise CheckpointError(f"checkpoint {key} is {checkpoint.kind}, not {PENDING_TOOL}")
 
     proposal = get_proposal(checkpoint.proposal_id)
     if effect.status == COMPLETED:
@@ -395,9 +394,7 @@ def resume(
         )
     if proposal.status != APPROVED:
         # EDITED is terminal on PASS but is not an apply signal (HP-101).
-        raise CheckpointError(
-            f"proposal {proposal.id} is {proposal.status}, not {APPROVED}"
-        )
+        raise CheckpointError(f"proposal {proposal.id} is {proposal.status}, not {APPROVED}")
 
     claimed = _claim_resume(checkpoint.id)
     latest = get_checkpoint(key)

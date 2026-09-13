@@ -180,9 +180,7 @@ def reserve(
             )
     except Exception as exc:
         if _is_unique_violation(exc):
-            raise SideEffectError(
-                f"idempotency_key already exists: {key}"
-            ) from exc
+            raise SideEffectError(f"idempotency_key already exists: {key}") from exc
         raise
     stored = get(key)
     if stored is None:

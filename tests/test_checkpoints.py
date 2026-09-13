@@ -19,7 +19,8 @@ from hivepilot.checkpoints import (
 )
 from hivepilot.pass_store import APPROVED, PENDING, decide, get
 from hivepilot.services import approval_rules_service
-from hivepilot.side_effects import cached_result, get as get_effect
+from hivepilot.side_effects import cached_result
+from hivepilot.side_effects import get as get_effect
 from hivepilot.tool_catalog import load_catalog
 
 
