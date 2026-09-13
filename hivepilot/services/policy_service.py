@@ -53,6 +53,10 @@ class Policy:
     # which the orchestrator's license gate treats like any other scan
     # failure (fail-closed).
     license_scan_tool: str = "syft"
+    # HP-95: per-token policy overrides for the tool catalog.
+    # Values are allow | deny | require_approval. This never mutates
+    # catalog risk / volatile / idempotency — those stay in tool_catalog.yaml.
+    tool_policies: dict[str, str] = field(default_factory=dict)
 
 
 def _load_yaml(path: Path) -> dict:
@@ -82,6 +86,44 @@ def _get_policies() -> dict:
         # policies.yaml nests default/projects under a top-level "policies" key.
         _cache["data"] = raw.get("policies", raw)
     return _cache["data"]
+
+
+# HP-95: closed policy tokens for tool_catalog overrides. Duplicated here
+# (not imported from tool_catalog) so this module cannot cycle on catalog
+# load. Keep in sync with hivepilot.tool_catalog.POLICIES.
+_TOOL_POLICY_VALUES: frozenset[str] = frozenset({"allow", "deny", "require_approval"})
+
+
+def _tool_policies_map(raw: object, *, project_name: str, scope: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not all(isinstance(key, str) and key.strip() for key in raw):
+        raise ValueError(
+            f"Invalid policy 'tool_policies' for project {project_name!r} "
+            f"({scope}): {raw!r}. Must be a mapping of tool token → "
+            "allow|deny|require_approval."
+        )
+    cleaned: dict[str, str] = {}
+    for key, value in raw.items():
+        if value not in _TOOL_POLICY_VALUES:
+            raise ValueError(
+                f"Invalid policy 'tool_policies' for project {project_name!r} "
+                f"token {key!r}: {value!r}. Must be one of "
+                f"{sorted(_TOOL_POLICY_VALUES)}."
+            )
+        cleaned[key] = value
+    return cleaned
+
+
+def _merge_tool_policies(default: dict, project_rules: dict, project_name: str) -> dict[str, str]:
+    """Project tokens win; neither map may set risk (catalog-only)."""
+    base = _tool_policies_map(
+        default.get("tool_policies"), project_name=project_name, scope="default"
+    )
+    extra = _tool_policies_map(
+        project_rules.get("tool_policies"), project_name=project_name, scope="project"
+    )
+    return {**base, **extra}
 
 
 def _validate_license_list(value: object, *, field_name: str, project_name: str) -> None:
@@ -132,6 +174,7 @@ def get_policy(project_name: str) -> Policy:
     _validate_license_list(
         allowed_licenses, field_name="allowed_licenses", project_name=project_name
     )
+    tool_policies = _merge_tool_policies(default, project_rules or {}, project_name)
     return Policy(
         allow_auto_git=rules.get("allow_auto_git", True),
         require_approval=rules.get("require_approval", False),
@@ -144,6 +187,7 @@ def get_policy(project_name: str) -> Policy:
         denied_licenses=denied_licenses,
         allowed_licenses=allowed_licenses,
         license_scan_tool=rules.get("license_scan_tool", "syft"),
+        tool_policies=tool_policies,
     )
 
 

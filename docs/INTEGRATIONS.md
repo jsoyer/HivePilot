@@ -535,10 +535,12 @@ Paste import still does not fetch. Listing tools is a separate admin action that
 
 - `POST /v1/mcp/servers/{id}/sync` — JSON-RPC `tools/list` on an `http` server (HTTPS required off-loopback; redirects refused; private/metadata DNS answers rejected).
 - `POST /v1/tools/openapi/import` — OpenAPI 3 / Swagger 2 from pasted text or an allowlisted URL. MCP paste of an OpenAPI document is rejected and points here.
-- `GET /v1/tools` — catalog of qualified names `{kind}__{source}__{local}` (Claude `mcp__server__tool` shape). Collisions across sources get a `__2` suffix instead of overwriting.
+- `GET /v1/tools` — catalog of qualified names `{kind}__{source}__{local}` (Claude `mcp__server__tool` shape). Collisions across sources get a `__2` suffix instead of overwriting. Response fields are unchanged by HP-95 (no risk/policy folded into this payload).
 - Literal header/env secrets require `HIVEPILOT_CREDENTIALS_KEY` (Fernet). GET responses expose `has_credentials` only — never ciphertext or plaintext. Without the key, keep using `${env:NAME}` refs.
 
 This slice catalogs tools. It does not invoke them or inject registry servers into Claude `--mcp-config`.
+
+HP-95 classification (`hivepilot/tool_catalog.py` + `tool_catalog.yaml`) is a **separate** resolution layer: risk × policy × volatile × idempotency, fail-closed on unknown tokens. It matches typed-tool `qualified_name` / `source_kind` when present but does not merge plugin capabilities or outward tokens into risk tiers, and it does not change this endpoint.
 
 ## See also
 

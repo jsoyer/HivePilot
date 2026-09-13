@@ -19,6 +19,11 @@
 # (recorded failed, no step executed). Fail-closed: if the scanner itself
 # fails (e.g. not installed), the run is blocked too — a configured gate
 # never silently passes.
+#
+# HP-95 tool catalog: tool_policies maps a catalog token (or glob) to
+# allow | deny | require_approval. This overrides policy only — never
+# risk / volatile / idempotency (those live in tool_catalog.yaml).
+# A high-risk tool cannot be lowered to automatic without HP-86 mechanical.
 policies:
   default:
     allow_auto_git: true

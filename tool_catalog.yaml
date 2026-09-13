@@ -1,0 +1,81 @@
+# HP-95 tool catalog — intrinsic classification (Coworker YAML axes).
+#
+# Fields: risk, defaultPolicy, volatile, idempotency
+#   risk           — immutable. policies.yaml must NOT override this.
+#   defaultPolicy  — allow | deny | require_approval
+#   volatile       — true when repeating the call can change the world/result
+#   idempotency    — true when repeating the call is safe / same effect
+#
+# Unknown token → deny (fail-closed). There is no catch-all "*".
+#
+# Orthogonal — do not encode these here:
+#   outward tokens: hivepilot/outward.py (git_push, notify, vault_write, …)
+#   plugin caps:    hivepilot/plugin_capabilities.py
+#                   (network|filesystem|subprocess|secrets_access|env)
+#
+# Policy overrides belong in policies.yaml under tool_policies: (policy only).
+# A high-risk tool cannot be lowered to automatic without HP-86 mechanical.
+
+version: 1
+tools:
+  - token: Read
+    risk: low
+    defaultPolicy: allow
+    volatile: false
+    idempotency: true
+  - token: Grep
+    risk: low
+    defaultPolicy: allow
+    volatile: false
+    idempotency: true
+  - token: Glob
+    risk: low
+    defaultPolicy: allow
+    volatile: false
+    idempotency: true
+  - token: WebSearch
+    risk: low
+    defaultPolicy: allow
+    volatile: true
+    idempotency: true
+  - token: WebFetch
+    risk: medium
+    defaultPolicy: require_approval
+    volatile: true
+    idempotency: true
+  - token: Edit
+    risk: medium
+    defaultPolicy: require_approval
+    volatile: false
+    idempotency: false
+  - token: Write
+    risk: medium
+    defaultPolicy: require_approval
+    volatile: false
+    idempotency: false
+  - token: Bash
+    risk: high
+    defaultPolicy: require_approval
+    volatile: true
+    idempotency: false
+  # Typed-tool patterns (HP-58 qualified names). Add exact tokens as needed.
+  - token: "mcp__*__*_read"
+    risk: low
+    defaultPolicy: allow
+    volatile: true
+    idempotency: true
+  - token: "openapi__*__get_*"
+    risk: low
+    defaultPolicy: allow
+    volatile: true
+    idempotency: true
+  - token: "mcp__*__create_*"
+    risk: high
+    defaultPolicy: require_approval
+    volatile: false
+    idempotency: false
+  - token: "mcp__*__delete_*"
+    risk: critical
+    defaultPolicy: require_approval
+    volatile: false
+    idempotency: false

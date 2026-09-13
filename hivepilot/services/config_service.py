@@ -40,6 +40,10 @@ CONFIG_FILES = {
     # fallback); when the operator pastes IDs, sync must copy them or the
     # live host silently stays on glyphs — same class of miss as vault.yaml.
     "telegram_avatars.yaml",
+    # HP-95: intrinsic tool catalog. Missing is deny-all (fail-closed);
+    # when the operator ships classifications, sync must copy them or
+    # every token stays unknown.
+    "tool_catalog.yaml",
 }
 CONFIG_DIRS = {"prompts", "roster-presets"}
 

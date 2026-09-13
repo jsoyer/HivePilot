@@ -202,6 +202,10 @@ class Settings(BaseSettings):
     roles_file: Path = Path("roles.yaml")
     pipelines_file: Path = Path("pipelines.yaml")
     policies_file: Path = Path("policies.yaml")
+    # HP-95: intrinsic tool classifications (risk × policy × volatile ×
+    # idempotency). Missing file is fail-closed deny-all. Policy overrides
+    # live in policies.yaml (policy only — never risk).
+    tool_catalog_file: Path = Path("tool_catalog.yaml")
     # Delegation (HP-48): the maximum length of a handoff chain (agent A hands
     # the conversation to B hands to C …). Bounds a runaway handoff loop —
     # `delegation.handoff` refuses past this and posts a "limit reached" note
