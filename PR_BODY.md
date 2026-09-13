@@ -21,5 +21,6 @@ Replay: `pytest tests/test_skill_ranker.py tests/test_skill_catalog.py tests/tes
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_ranker.py tests/test_skill_catalog.py tests/test_skill_trust.py`
-- [ ] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `pytest tests/test_skill_ranker.py tests/test_skill_catalog.py tests/test_skill_trust.py` — 45 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/skill_ranker.py` — no issues
