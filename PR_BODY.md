@@ -1,32 +1,26 @@
 ## Summary
 
-HP-103 (Linear acceptance): skills-first doctrine — capability = `SKILL.md` + scripts; runtime = confinement / approvals / audit — plus a read-only audit of the top 5 domain procedures still encoded in the engine.
+HP-101: every model memory write is a PASS proposal (`kind=memory`). Never silent. No Always-allow. Pending/reject leave IsolatedJsonMemory and workspace text unchanged. Edit stages user text; approve applies it. Recall is zero-approval. User Pollen/vault writes go through `user_write` (direct).
 
-Owning issue: [HP-103](https://linear.app/js-workspace/issue/HP-103/u-09-doctrine-skills-first-audit-top-5-runtimeskill)
+Owning issue: [HP-101](https://linear.app/js-workspace/issue/HP-101/u-07-memory-proposals-hitl-proposeapproveeditreject)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-96 isolated memory, HP-97 PASS, HP-100 side_effects for apply-once.
 
-Replay: inspect `docs/adr/2026-09-13-skills-first.md` and `docs/runtime-to-skill-audit.md`. Docs-only; `hivepilot stage --help` still lists `attach-skill` / `detach-skill`.
+Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py`
 
 ## What changed
 
-1. **`docs/adr/2026-09-13-skills-first.md`** — Coworker AGENTS.md / repo-contracts **patterns** (skills are the capability SSOT; runtime is not a skill discovery root), rewritten. Status `proposed` until Jerome accepts (same path as HP-94). **Do not flip to accepted in this merge.**
-2. **`docs/runtime-to-skill-audit.md`** — read-only top 5 (adversarial review, lessons distill, debate judge, rebuttal protocol, concierge classifier) with file pointers and what the runtime must keep. Implements nothing.
-3. **Cross-links** — `docs/SKILLS.md`, `docs/adr/README.md`, `docs/ARCHITECTURE.md`, `docs/PIPELINES-AND-ROLES.md`, README docs table.
-
-Pipeline `stage attach-skill` / `PipelineStage.skills` unchanged. Rebased onto `main` after HP-100 #675; no HP-100 code paths edited.
+1. **`hivepilot/memory_proposals.py`** — propose / decide (approve, edit, reject) / recall / `user_write`. Apply IsolatedJsonMemory or workspace text only after APPROVED.
+2. **`hivepilot/pass_store.py`** — `stage_edit` merges user text while status stays PENDING (`decide('edit')` remains terminal and is not an apply signal).
+3. **Docs** — SECURITY fail-closed checklist + ARCHITECTURE safety model.
 
 ## Out of scope
 
-- HP-108 skill→tools gate
-- HP-100 / HP-101 / HP-102 / HP-105 code paths (cite only)
-- WhatsApp
-- HP-67 desktop-per-agent
-- Extracting any of the five audit items into `skills/`
+- HP-102 presenter parity (Pollen ↔ Telegram cards)
+- HP-105 trust, WhatsApp, HP-67 sandbox, vendored TS / Electron / pickle
 
 ## Testing
 
-- [x] Docs-only: no Python / YAML config modules added
-- [x] `hivepilot stage --help` still lists `attach-skill` / `detach-skill` (CLI text unchanged)
-- [x] ADR frontmatter `status: proposed` left unchanged
-- [x] Rebased onto `origin/main` (HP-100 #675); `PR_BODY.md` conflict resolved to this HP-103 body
+- [x] `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py` — 82 passed
+- [x] `ruff check` + `ruff format --check` clean
+- [x] GitHub CI — 8/8 green (ruff, mypy, pytest, postgres dialect, Pollen build, OpenAPI drift, Helm, public-safe prompts)

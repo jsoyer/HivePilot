@@ -17,11 +17,11 @@ Statuses: PENDING | APPROVED | REJECTED | EDITED | EXPIRED.
 
 ``decide`` persists the status **before** any ``side_effect`` callback.
 ``submit(kind=skill_evolution)`` rejects a claim that is not HP-99
-admissible (missing or foreign-tenant evidence refs). This module does
-not apply memory writes, tool calls, or skill promotions
-(HP-101 / HP-105 / HP-109). Idempotent ``side_effects`` +
-``pending_tool`` resume live in ``hivepilot.side_effects`` /
-``hivepilot.checkpoints`` (HP-100).
+admissible (missing or foreign-tenant evidence refs). Memory
+apply-after-approve is ``hivepilot.memory_proposals`` (HP-101). This
+module does not apply tool calls or skill promotions (HP-105 / HP-109).
+Idempotent ``side_effects`` + ``pending_tool`` resume live in
+``hivepilot.side_effects`` / ``hivepilot.checkpoints`` (HP-100).
 """
 
 from __future__ import annotations
@@ -302,6 +302,53 @@ def merge_edit(original: Mapping[str, Any], edited: Mapping[str, Any]) -> dict[s
             continue
         merged[key] = value
     return merged
+
+
+def stage_edit(
+    proposal_id: str,
+    edited_payload: Mapping[str, Any],
+    *,
+    actor: str = "",
+) -> PassProposal:
+    """Merge an edit into a PENDING proposal. Status stays PENDING.
+
+    ``decide('edit')`` remains terminal (HP-97) and is not an apply signal.
+    HP-101 stages user text here so a later ``approve`` can apply it.
+    """
+    _ensure_table()
+    if edited_payload is None:
+        raise PassStoreError("edit requires edited_payload")
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph("SELECT * FROM pass_proposals WHERE id=?"),
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            raise PassStoreError(f"proposal not found: {proposal_id}")
+        current = _row(row)
+        if current.status != PENDING:
+            raise PassStoreError(f"proposal {proposal_id} is already {current.status}")
+        payload = merge_edit(current.payload, edited_payload)
+        if actor:
+            payload["staged_by"] = (actor or "").strip()
+        conn.execute(
+            db.ph(
+                """
+                UPDATE pass_proposals
+                SET payload=?
+                WHERE id=? AND status=?
+                """
+            ),
+            (
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                proposal_id,
+                PENDING,
+            ),
+        )
+    stored = get(proposal_id)
+    if stored is None or stored.status != PENDING:
+        raise PassStoreError(f"failed to stage edit for {proposal_id}")
+    return stored
 
 
 def decide(
