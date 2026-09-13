@@ -18,6 +18,6 @@ Replay: `pytest tests/test_tool_catalog.py tests/test_hp58_typed_tools.py tests/
 
 ## Testing
 
-- [ ] `pytest tests/test_tool_catalog.py` — unknown deny; override ≠ risk; high→allow gated; orthogonality; YAML load; known resolve
-- [ ] `pytest tests/test_hp58_typed_tools.py` — `GET /v1/tools` still works
-- [ ] `ruff check` + `ruff format --check` clean
+- [x] `pytest tests/test_tool_catalog.py` — 23 passed (unknown deny; override ≠ risk; high→allow gated; orthogonality; YAML load; known resolve)
+- [x] `pytest tests/test_hp58_typed_tools.py` — 15 passed (`GET /v1/tools` still works)
+- [x] `ruff check` + `ruff format --check` clean

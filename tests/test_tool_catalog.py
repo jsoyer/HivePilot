@@ -292,13 +292,9 @@ def test_invalid_catalog_risk_is_rejected(tmp_path: Path) -> None:
         load_catalog(path, force=True)
 
 
-def test_lint_catalog_reports_bad_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_lint_catalog_reports_bad_yaml(tmp_path: Path) -> None:
     path = tmp_path / "tool_catalog.yaml"
     path.write_text("tools: [unclosed\n", encoding="utf-8")
-    from hivepilot.config import settings
-
-    monkeypatch.setattr(settings, "tool_catalog_file", path)
-    monkeypatch.setattr(settings, "resolve_config_path", lambda *_a, **_k: path)
     problems = lint_catalog(path)
     assert problems
     reload_catalog()
