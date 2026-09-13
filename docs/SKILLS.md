@@ -161,7 +161,6 @@ instead).
   skill id. `DERIVED` / `CAPTURED` create a new logical skill (roots have
   no parents; `DERIVED` points at one or more parent revisions).
 
-This catalog does not implement HP-105 trust (provisional↔trusted).
 HP-99 evidence (`hivepilot/evidence.py`) is a separate tenant-scoped
 registry: evolution claims must cite existing refs; missing refs make a
 `skill_evolution` PASS proposal not admissible. Workshop accept/reject
@@ -182,8 +181,25 @@ later scan then sees the new bytes as `FIXED`.
 - Pollen panel `skill-cycle` (opt-in `HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`)
   shows top/bottom measured skills.
 
-HP-79 `skill_usage_events` stays an append-only workshop log. HP-105 trust,
-HP-106 signals, and HP-108 skill→tools stay out of scope.
+HP-79 `skill_usage_events` stays an append-only workshop log. HP-106
+signals and HP-108 skill→tools stay out of scope.
+
+## Skill trust (HP-105)
+
+`hivepilot/skill_trust.py` is the OpenSpace trust-lifecycle pattern
+(rewritten; no cloud, no pickle):
+
+- New registered revisions start **provisional**. `enabled` is orthogonal
+  and can be flipped without changing trust (and the reverse).
+- An unknown revision is not implicitly trusted and not implicitly
+  enabled. Lookup does not create a row.
+- Promotion counts distinct HP-104 `completed` events across runs
+  (`HIVEPILOT_SKILL_TRUST_PROMOTION`, default 2). After a demotion, only
+  successes since the last attributed failure count.
+- Attributed failure demotes trusted → provisional. Ambiguous failure
+  opens a HP-97 PASS review (`kind=skill_evolution`, `action=trust_review`)
+  and does **not** demote. `not_skill` (env / tool / network / permission)
+  is ignored. HP-106 will replace the attribution stub.
 
 ## Skill workshop (HP-79)
 

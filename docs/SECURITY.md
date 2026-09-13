@@ -90,7 +90,7 @@ Isolated memory is JSON **data** (`role=data`), never system/instruction text an
 
 Rules:
 
-1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying tools / skill promotions is HP-100 / HP-105. Memory apply-after-approve is HP-101.
+1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying tools is HP-100. Skill trust (provisional↔trusted) is HP-105; applying an approved evolution is HP-109. Memory apply-after-approve is HP-101.
 2. **Edit cannot retarget.** `path`, `revision`, and `expected_revision` stay frozen. Body text / args may change.
 3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
 4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
@@ -104,10 +104,15 @@ Rules:
 - HP-95 ``volatile`` tools complete without an effect cache.
 - Crash mid-approval → exactly one resume executes the effect.
 
-Applying skill-doctrine / trust is HP-103 / HP-105. Presenter parity is HP-102.
+Applying skill-doctrine is HP-103. Presenter parity is HP-102.
 HP-104 skill-cycle events (`hivepilot/skill_events.py`) are a local
 idempotent log (OpenSpace `record_skill_event` pattern, rewritten; no
 cloud, no pickle). Absence of a measurement is not stored as zero.
+HP-105 trust (`hivepilot/skill_trust.py`) is a local two-state ladder
+(provisional↔trusted) with `enabled` orthogonal. Unknown revisions are
+not implicitly trusted or enabled. Promotion uses distinct completed
+inter-runs; attributed failure demotes; ambiguous failure opens a PASS
+`trust_review` and does not auto-demote.
 
 ### Memory proposals HITL (HP-101)
 
