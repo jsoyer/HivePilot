@@ -21,5 +21,5 @@ Replay: `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/te
 
 ## Testing
 
-- [ ] `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py`
-- [ ] `ruff check` + `ruff format --check` clean
+- [x] `pytest tests/test_memory_proposals.py tests/test_pass_store.py tests/test_workspace_text.py tests/test_side_effects.py tests/test_checkpoints.py` — 82 passed
+- [x] `ruff check` + `ruff format --check` clean
