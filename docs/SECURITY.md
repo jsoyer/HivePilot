@@ -68,6 +68,17 @@ This catalog is orthogonal to:
 
 Do not fold those axes into risk tiers. HP-58 `GET /v1/tools` stays a typed-tool listing; catalog resolution is a separate helper (`hivepilot.tool_catalog.resolve`) for the Approvals inbox `kind=tool` (HP-94). HP-61 `change_class` is unchanged.
 
+### Workspace text + isolated JSON memory (HP-96)
+
+`hivepilot/workspace_text.py` applies Coworker-style exact edits (rewritten in Python; no vendored TS/Electron):
+
+- empty `old_text` → append
+- a non-unique match → refuse (document unchanged)
+- `expected_revision` is required; mismatch → stale refuse
+- a result over `max_bytes` → overflow refuse
+
+Isolated memory is JSON **data** (`role=data`), never system/instruction text and never merged into `extra_prompt`. A payload that *looks* like an instruction stays inside the data envelope. HITL memory proposals are HP-101.
+
 ### HP-61 change class (mechanical vs ask)
 
 Per-action approval rules (`PUT /v1/approval-rules`) may set optional
