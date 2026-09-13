@@ -1,10 +1,10 @@
-# HP-95 tool catalog — intrinsic classification.
+# HP-95 tool catalog — intrinsic classification (Coworker YAML axes).
 #
-# Axes: risk × default_policy × volatile × idempotent
-#   risk            — immutable. policies.yaml must NOT override this.
-#   default_policy  — allow | deny | require_approval
-#   volatile        — true when repeating the call can change the world/result
-#   idempotent      — true when repeating the call is safe / same effect
+# Fields: risk, defaultPolicy, volatile, idempotency
+#   risk           — immutable. policies.yaml must NOT override this.
+#   defaultPolicy  — allow | deny | require_approval
+#   volatile       — true when repeating the call can change the world/result
+#   idempotency    — true when repeating the call is safe / same effect
 #
 # Unknown token → deny (fail-closed). There is no catch-all "*".
 #
@@ -14,68 +14,68 @@
 #                   (network|filesystem|subprocess|secrets_access|env)
 #
 # Policy overrides belong in policies.yaml under tool_policies: (policy only).
-# A high/critical tool cannot be widened to allow without HP-86 mechanical.
+# A high-risk tool cannot be lowered to automatic without HP-86 mechanical.
 
 version: 1
 tools:
   - token: Read
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: false
-    idempotent: true
+    idempotency: true
   - token: Grep
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: false
-    idempotent: true
+    idempotency: true
   - token: Glob
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: false
-    idempotent: true
+    idempotency: true
   - token: WebSearch
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: true
-    idempotent: true
+    idempotency: true
   - token: WebFetch
     risk: medium
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: true
-    idempotent: true
+    idempotency: true
   - token: Edit
     risk: medium
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: false
-    idempotent: false
+    idempotency: false
   - token: Write
     risk: medium
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: false
-    idempotent: false
+    idempotency: false
   - token: Bash
     risk: high
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: true
-    idempotent: false
+    idempotency: false
   # Typed-tool patterns (HP-58 qualified names). Add exact tokens as needed.
   - token: "mcp__*__*_read"
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: true
-    idempotent: true
+    idempotency: true
   - token: "openapi__*__get_*"
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: true
-    idempotent: true
+    idempotency: true
   - token: "mcp__*__create_*"
     risk: high
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: false
-    idempotent: false
+    idempotency: false
   - token: "mcp__*__delete_*"
     risk: critical
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: false
-    idempotent: false
+    idempotency: false

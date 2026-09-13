@@ -760,7 +760,7 @@ effective policy for a given project.
 - `secrets_fail_mode` — `"closed"` | `"fallback"` (default `"closed"`)
 - `block_on_severity` — CVE severity gate, `None` by default (no gate)
 - `scan_tool` — `"grype"` | `"osv-scanner"`
-- `tool_policies` — HP-95 map of catalog token (or glob) → `allow` / `deny` / `require_approval`. Overrides **policy only**; never `risk`, `volatile`, or `idempotent` (those live in `tool_catalog.yaml`). High/critical cannot be widened to `allow` without HP-86 `change_class=mechanical`.
+- `tool_policies` — HP-95 map of catalog token (or glob) → `allow` / `deny` / `require_approval`. Overrides **policy only**; never `risk` (or catalog `volatile` / `idempotency`). A high-risk tool cannot be lowered to automatic without HP-86 `change_class=mechanical`.
 
 ```yaml
 policies:
@@ -988,21 +988,22 @@ Hermes-4 (HP-71) is the OpenRouter / Nous OSS column — not the Hermes Agent fr
 Optional. Missing file is fail-closed deny-all for catalog resolution.
 
 Each `tools:` entry is an intrinsic classification. `policies.yaml`
-`tool_policies` may override `default_policy` only — never `risk`.
+`tool_policies` may override policy only — never `risk`. YAML fields are
+`risk`, `defaultPolicy`, `volatile`, `idempotency`.
 
 ```yaml
 version: 1
 tools:
   - token: Read
     risk: low
-    default_policy: allow
+    defaultPolicy: allow
     volatile: false
-    idempotent: true
+    idempotency: true
   - token: "mcp__github__create_*"
     risk: high
-    default_policy: require_approval
+    defaultPolicy: require_approval
     volatile: false
-    idempotent: false
+    idempotency: false
 ```
 
 Unknown token → deny. Orthogonal to outward tokens and plugin capabilities.

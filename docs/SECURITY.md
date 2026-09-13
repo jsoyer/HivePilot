@@ -55,9 +55,9 @@ hivepilot approvals deny <id>
 | Axis | Who owns it | Values |
 | --- | --- | --- |
 | `risk` | catalog only | `low` / `medium` / `high` / `critical` |
-| `default_policy` | catalog; `policies.yaml` `tool_policies` may override | `allow` / `deny` / `require_approval` |
+| `defaultPolicy` | catalog; `policies.yaml` `tool_policies` may override | `allow` / `deny` / `require_approval` |
 | `volatile` | catalog only | bool |
-| `idempotent` | catalog only | bool |
+| `idempotency` | catalog only | bool |
 
 Unknown token → **deny** (fail-closed). Policies may tighten or restate policy; they **must not** mutate `risk`. A `tool_policies` override cannot widen a high/critical tool to `allow` unless the caller also supplies HP-86 `change_class=mechanical`.
 

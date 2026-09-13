@@ -11,7 +11,7 @@ Replay: `pytest tests/test_tool_catalog.py tests/test_hp58_typed_tools.py tests/
 ## What changed
 
 1. **`hivepilot/tool_catalog.py` + `tool_catalog.yaml`** — intrinsic classification. Unknown token → deny (fail-closed). No catch-all `*`.
-2. **`policies.yaml` `tool_policies`** — may override **policy** (`allow` / `deny` / `require_approval`) only. Never mutates `risk` / `volatile` / `idempotent`.
+2. **YAML fields** are Linear/Coworker: `risk`, `defaultPolicy`, `volatile`, `idempotency`. `policies.yaml` `tool_policies` may override **policy** only — never `risk`.
 3. **High/critical cannot widen to `allow`** without HP-86 `change_class=mechanical`. Tightening (deny) always allowed. HP-61 rules table is untouched.
 4. **Orthogonal** to outward tokens (`hivepilot/outward.py`) and plugin capabilities (`network|filesystem|subprocess|secrets_access|env`). Not merged into risk tiers.
 5. **`GET /v1/tools` unchanged** — HP-58 typed-tool listing; catalog resolution is a separate helper (`resolve` / `resolve_typed_tool`) for the HP-94 Approvals inbox `kind=tool`.

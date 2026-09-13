@@ -55,7 +55,7 @@ class Policy:
     license_scan_tool: str = "syft"
     # HP-95: per-token policy overrides for the tool catalog.
     # Values are allow | deny | require_approval. This never mutates
-    # catalog risk / volatile / idempotent — those stay in tool_catalog.yaml.
+    # catalog risk / volatile / idempotency — those stay in tool_catalog.yaml.
     tool_policies: dict[str, str] = field(default_factory=dict)
 
 

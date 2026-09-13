@@ -22,8 +22,8 @@
 #
 # HP-95 tool catalog: tool_policies maps a catalog token (or glob) to
 # allow | deny | require_approval. This overrides policy only — never
-# risk / volatile / idempotent (those live in tool_catalog.yaml).
-# High/critical cannot be widened to allow without HP-86 mechanical.
+# risk / volatile / idempotency (those live in tool_catalog.yaml).
+# A high-risk tool cannot be lowered to automatic without HP-86 mechanical.
 policies:
   default:
     allow_auto_git: true

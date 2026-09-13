@@ -3,7 +3,8 @@
 Coworker pattern (``src/shared/tool-catalog.ts``), rewritten in Python.
 Intrinsic classification lives in ``tool_catalog.yaml``. ``policies.yaml``
 may override **policy** (allow / deny / require_approval) only — never
-``risk``, ``volatile``, or ``idempotent``.
+``risk``. YAML axes (HP-95 / Coworker): ``risk``, ``defaultPolicy``,
+``volatile``, ``idempotency``.
 
 Unknown tool token → deny (fail-closed). No catch-all ``*`` ships in the
 default YAML; an unmatched token is unknown, not "unclassified allow".
@@ -68,13 +69,22 @@ class ToolEntry:
     source_kind: str = ""
     qualified_name: str = ""
 
+    # Linear / Coworker YAML field names (HP-95).
+    @property
+    def defaultPolicy(self) -> str:
+        return self.default_policy
+
+    @property
+    def idempotency(self) -> bool:
+        return self.idempotent
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "token": self.token,
             "risk": self.risk,
-            "default_policy": self.default_policy,
+            "defaultPolicy": self.default_policy,
             "volatile": self.volatile,
-            "idempotent": self.idempotent,
+            "idempotency": self.idempotent,
             "source_kind": self.source_kind,
             "qualified_name": self.qualified_name,
         }
@@ -106,15 +116,23 @@ class ToolDecision:
     def needs_approval(self) -> bool:
         return self.known and self.policy == "require_approval"
 
+    @property
+    def defaultPolicy(self) -> str:
+        return self.default_policy
+
+    @property
+    def idempotency(self) -> bool:
+        return self.idempotent
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "token": self.token,
             "known": self.known,
             "risk": self.risk,
             "policy": self.policy,
-            "default_policy": self.default_policy,
+            "defaultPolicy": self.default_policy,
             "volatile": self.volatile,
-            "idempotent": self.idempotent,
+            "idempotency": self.idempotent,
             "overridden": self.overridden,
             "approval_kind": self.approval_kind,
             "allowed": self.allowed,
@@ -198,14 +216,14 @@ def _parse_entry(raw: object, index: int) -> ToolEntry:
         token=token,
         risk=_require_enum(raw.get("risk"), RISK_LEVELS, field="risk"),
         default_policy=_require_enum(
-            raw.get("default_policy", raw.get("defaultPolicy")),
+            raw.get("defaultPolicy", raw.get("default_policy")),
             POLICIES,
-            field="default_policy",
+            field="defaultPolicy",
         ),
         volatile=_require_bool(raw.get("volatile"), field="volatile", default=False),
         idempotent=_require_bool(
-            raw.get("idempotent", raw.get("idempotency")),
-            field="idempotent",
+            raw.get("idempotency", raw.get("idempotent")),
+            field="idempotency",
             default=False,
         ),
         source_kind=source_kind,
@@ -435,7 +453,7 @@ def approval_payload(decision: ToolDecision) -> dict[str, Any]:
         "risk": decision.risk,
         "policy": decision.policy,
         "volatile": decision.volatile,
-        "idempotent": decision.idempotent,
+        "idempotency": decision.idempotent,
         "known": decision.known,
     }
 

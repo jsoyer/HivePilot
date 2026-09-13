@@ -45,30 +45,30 @@ SAMPLE = [
     {
         "token": "Read",
         "risk": "low",
-        "default_policy": "allow",
+        "defaultPolicy": "allow",
         "volatile": False,
-        "idempotent": True,
+        "idempotency": True,
     },
     {
         "token": "Bash",
         "risk": "high",
-        "default_policy": "require_approval",
+        "defaultPolicy": "require_approval",
         "volatile": True,
-        "idempotent": False,
+        "idempotency": False,
     },
     {
         "token": "mcp__github__create_*",
         "risk": "high",
-        "default_policy": "require_approval",
+        "defaultPolicy": "require_approval",
         "volatile": False,
-        "idempotent": False,
+        "idempotency": False,
     },
     {
         "token": "openapi__demo__ping",
         "risk": "low",
-        "default_policy": "allow",
+        "defaultPolicy": "allow",
         "volatile": False,
-        "idempotent": True,
+        "idempotency": True,
         "match": {"source_kind": "openapi", "qualified_name": "openapi__demo__ping"},
     },
 ]
@@ -101,7 +101,8 @@ def test_known_low_risk_resolves_allow(catalog) -> None:
     assert decision.policy == "allow"
     assert decision.allowed is True
     assert decision.volatile is False
-    assert decision.idempotent is True
+    assert decision.idempotency is True
+    assert decision.defaultPolicy == "allow"
     assert decision.approval_kind == TOOL_APPROVAL_KIND
 
 
@@ -111,7 +112,7 @@ def test_known_high_risk_resolves_require_approval(catalog) -> None:
     assert decision.policy == "require_approval"
     assert decision.needs_approval is True
     assert decision.volatile is True
-    assert decision.idempotent is False
+    assert decision.idempotency is False
 
 
 def test_glob_token_matches_typed_tool_name(catalog) -> None:
@@ -128,6 +129,19 @@ def test_shipped_yaml_resolves_known_and_denies_unknown() -> None:
     assert resolve("Read", catalog=shipped).allowed
     assert resolve("Bash", catalog=shipped).needs_approval
     assert resolve("totally-unknown-zz", catalog=shipped).denied
+
+
+def test_shipped_yaml_uses_linear_field_names() -> None:
+    root = Path(__file__).resolve().parents[1] / "tool_catalog.yaml"
+    data = yaml.safe_load(root.read_text(encoding="utf-8"))
+    assert data["tools"]
+    for row in data["tools"]:
+        assert set(row) >= {"token", "risk", "defaultPolicy", "volatile", "idempotency"}
+        assert "default_policy" not in row
+        assert "idempotent" not in row
+    entry = load_catalog(root, force=True).entries[0]
+    assert entry.defaultPolicy == entry.default_policy
+    assert entry.idempotency == entry.idempotent
 
 
 def test_load_from_yaml_roundtrip(tmp_path: Path) -> None:
@@ -159,7 +173,11 @@ def test_policy_override_does_not_mutate_risk(catalog) -> None:
     assert after.overridden is True
 
 
-def test_high_override_to_allow_stays_gated_without_mechanical(catalog) -> None:
+def test_policy_override_does_not_lower_high_to_automatic_without_hp86_mechanical(
+    catalog,
+) -> None:
+    """Linear HP-95: override must not lower a high-risk tool to automatic
+    without HP-86 mechanical class binding. Does not implement HP-86."""
     decision = resolve(
         "Bash",
         catalog=catalog,
@@ -169,6 +187,7 @@ def test_high_override_to_allow_stays_gated_without_mechanical(catalog) -> None:
     assert decision.risk == "high"
     assert decision.policy == "require_approval"
     assert decision.allowed is False
+    assert decision.defaultPolicy == "require_approval"
 
 
 def test_high_override_to_allow_requires_hp86_mechanical(catalog) -> None:
@@ -230,6 +249,7 @@ def test_approval_payload_is_kind_tool(catalog) -> None:
     assert payload["kind"] == "tool"
     assert payload["risk"] == "high"
     assert payload["policy"] == "require_approval"
+    assert payload["idempotency"] is False
     assert "change_class" not in payload
 
 
@@ -355,6 +375,8 @@ def test_decision_to_dict_exposes_flags(catalog) -> None:
     payload = resolve("Read", catalog=catalog).to_dict()
     assert payload["risk"] == "low"
     assert payload["policy"] == "allow"
+    assert payload["defaultPolicy"] == "allow"
+    assert payload["idempotency"] is True
     assert isinstance(payload, dict)
     assert ToolDecision(
         token="x",
