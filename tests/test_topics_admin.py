@@ -97,3 +97,22 @@ class TestListShowsWhatIsProtected:
         entries = topics_admin.list_topics()
 
         assert {"developer": 330, "ciso": 331, "qa": 332} == entries
+
+
+class TestWipeSync:
+    def test_confirm_clears_registry(self, registry):
+        from hivepilot.services import topics_admin
+
+        result = topics_admin.wipe_sync(confirm=True)
+
+        assert result.dry_run is False
+        assert result.cleared == {"developer": 330, "ciso": 331, "qa": 332}
+        assert topics_admin.list_topics() == {}
+
+    def test_dry_run_leaves_registry(self, registry):
+        from hivepilot.services import topics_admin
+
+        result = topics_admin.wipe_sync(confirm=False)
+
+        assert result.dry_run is True
+        assert topics_admin.list_topics() == {"developer": 330, "ciso": 331, "qa": 332}

@@ -392,32 +392,23 @@ def test_invalidate_topic_removes_and_persists(tmp_path, monkeypatch: pytest.Mon
     assert ns._invalidate_topic("gustave") is None
 
 
-def _sequenced_ensure_topic_thread(*values: int | None):
-    """Return a fake `_ensure_topic_thread(agent_key, title)` that yields
-    *values* in order on successive calls — the FIRST call resolves the
-    initial (soon-to-be-dead) thread id, later calls simulate what the
-    self-heal recreate attempt gets back."""
-    it = iter(values)
-
-    def _fn(agent_key: str, title: str):
-        try:
-            return next(it)
-        except StopIteration:
-            return None
-
-    return _fn
-
-
-def test_stale_topic_self_heals_recreates_and_resends(
+def test_stale_persistent_door_does_not_remint_falls_back_to_inbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A send that 400s with "message thread not found" invalidates the
-    registry entry, recreates the topic, and re-sends the SAME content to
-    the NEW thread id — the message is delivered, not lost."""
+    persistent door and delivers to Inbox — it does NOT remint the door."""
     _stream_topics_settings(monkeypatch)
-    # First call (initial resolve) returns the soon-to-be-dead 208; the
-    # second call (triggered by the self-heal recreate) returns a fresh 999.
-    monkeypatch.setattr(ns, "_ensure_topic_thread", _sequenced_ensure_topic_thread(208, 999))
+    monkeypatch.setattr(
+        ns, "_load_topics", lambda: {"runs": 208, "inbox": 11, "approvals": 12, "alerts": 13}
+    )
+
+    remint_keys: list[str] = []
+
+    def _ensure(agent_key: str, title: str, *, allow_create: bool = False):
+        remint_keys.append(agent_key)
+        raise AssertionError("persistent doors must not remint on stale")
+
+    monkeypatch.setattr(ns, "_ensure_topic_thread", _ensure)
 
     invalidated: list[str] = []
     orig_invalidate = ns._invalidate_topic
@@ -429,12 +420,10 @@ def test_stale_topic_self_heals_recreates_and_resends(
     monkeypatch.setattr(ns, "_invalidate_topic", _spy_invalidate)
 
     calls: list[dict] = []
-    call_count = {"n": 0}
 
     def _fake(msg, chat_id=None, message_thread_id=None, parse_mode=None):
-        call_count["n"] += 1
         calls.append({"msg": msg, "message_thread_id": message_thread_id})
-        if call_count["n"] == 1:
+        if message_thread_id == 208:
             raise _FakeTelegramError("Bad Request: message thread not found")
 
     monkeypatch.setattr(ns, "_send_telegram", _fake)
@@ -442,23 +431,20 @@ def test_stale_topic_self_heals_recreates_and_resends(
     ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
 
     assert invalidated == ["runs"]
+    assert remint_keys == []
     assert len(calls) == 2
     assert calls[0]["message_thread_id"] == 208
-    assert calls[1]["message_thread_id"] == 999  # NEW thread id, not the dead one
-    assert calls[1]["message_thread_id"] != calls[0]["message_thread_id"]
-    assert calls[0]["msg"] == calls[1]["msg"]  # identical content, just re-routed
+    assert calls[1]["message_thread_id"] == 11  # Inbox, not a reminted Runs door
+    assert calls[0]["msg"] == calls[1]["msg"]
 
 
-def test_stale_topic_recreate_failure_falls_back_to_threadless(
+def test_stale_topic_inbox_missing_falls_back_to_threadless(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If recreating the topic also fails (`_ensure_topic_thread` returns
-    None), the message is still delivered — sent WITHOUT a thread id rather
-    than being dropped. No exception escapes `stream_agent_turn`."""
+    """If Inbox is missing (or is the same dead id), the message is still
+    delivered threadless rather than being dropped."""
     _stream_topics_settings(monkeypatch)
-    # First call resolves 208 (the id that will die); recreate attempt fails
-    # (no forum rights, rate-limited, ...) and returns None.
-    monkeypatch.setattr(ns, "_ensure_topic_thread", _sequenced_ensure_topic_thread(208, None))
+    monkeypatch.setattr(ns, "_load_topics", lambda: {"runs": 208})
 
     calls: list[dict] = []
 
@@ -485,11 +471,12 @@ def test_closed_topic_does_not_recreate_sends_to_general(
     when that thread is distinct; this mock returns the same id so
     last-resort threadless is used."""
     _stream_topics_settings(monkeypatch)
+    monkeypatch.setattr(ns, "_load_topics", lambda: {"runs": 208, "inbox": 208})
 
-    recreate_calls: list[str] = []
+    remint_keys: list[str] = []
 
-    def _ensure(agent_key: str, title: str) -> int:
-        recreate_calls.append(agent_key)
+    def _ensure(agent_key: str, title: str, *, allow_create: bool = False) -> int:
+        remint_keys.append(agent_key)
         return 208
 
     monkeypatch.setattr(ns, "_ensure_topic_thread", _ensure)
@@ -505,8 +492,7 @@ def test_closed_topic_does_not_recreate_sends_to_general(
 
     ns.stream_agent_turn(actor="Gustave (Developer)", summary="deploy finished")
 
-    # Initial Runs resolve, then Inbox probe (same id → excluded). No recreate.
-    assert recreate_calls == ["runs", "inbox"]
+    assert remint_keys == []
     assert len(calls) == 2
     assert calls[0]["message_thread_id"] == 208
     assert calls[1]["message_thread_id"] is None  # last-resort threadless

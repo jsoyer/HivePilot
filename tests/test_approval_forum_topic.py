@@ -3,9 +3,8 @@ topic (not the operator's DM), covering:
 
 - `_approval_chat_id` resolution order (approval_chat_id -> stream group ->
   DM, the last being today's regression-tested behaviour)
-- `_approval_message_thread_id` reusing `notification_service._ensure_topic_thread`
-  with the dedicated "approvals" key, only when the resolved chat IS the
-  forum stream group
+- `_approval_message_thread_id` looking up the persistent Approvals door
+  (never reminting), only when the resolved chat IS the forum stream group
 - the approval message carries the inline keyboard + resolved
   `message_thread_id`, with callback_data unchanged
 - topic-creation failure degrades to a threadless send (never lost)
@@ -81,20 +80,17 @@ class TestApprovalChatIdResolution:
 
 
 class TestApprovalMessageThreadId:
-    def test_resolved_group_chat_creates_approvals_topic(
+    def test_resolved_group_chat_looks_up_approvals_door(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", True)
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
 
-        with patch(
-            "hivepilot.services.notification_service._ensure_topic_thread",
-            return_value=777,
-        ) as mock_ensure:
+        with patch.object(telegram_bot, "door_thread", return_value=777) as mock_door:
             thread_id = telegram_bot._approval_message_thread_id(-100111)
 
         assert thread_id == 777
-        mock_ensure.assert_called_once_with("approvals", "Approvals")
+        mock_door.assert_called_once_with("approvals")
 
     def test_explicit_approval_chat_different_from_stream_group_no_thread(
         self, monkeypatch: pytest.MonkeyPatch
@@ -104,11 +100,11 @@ class TestApprovalMessageThreadId:
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", True)
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
 
-        with patch("hivepilot.services.notification_service._ensure_topic_thread") as mock_ensure:
+        with patch.object(telegram_bot, "door_thread") as mock_door:
             thread_id = telegram_bot._approval_message_thread_id(-100999)
 
         assert thread_id is None
-        mock_ensure.assert_not_called()
+        mock_door.assert_not_called()
 
     def test_topics_disabled_no_thread(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", False)
@@ -126,18 +122,14 @@ class TestApprovalMessageThreadId:
 
         assert thread_id is None
 
-    def test_topic_creation_failure_degrades_to_no_thread(
+    def test_missing_approvals_door_degrades_to_no_thread(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """`_ensure_topic_thread` is best-effort and returns None on any
-        failure (not a forum, missing rights, 429) — never raises."""
+        """A missing Approvals door is lookup-only — never reminted."""
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", True)
         monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
 
-        with patch(
-            "hivepilot.services.notification_service._ensure_topic_thread",
-            return_value=None,
-        ):
+        with patch.object(telegram_bot, "door_thread", return_value=None):
             thread_id = telegram_bot._approval_message_thread_id(-100111)
 
         assert thread_id is None
@@ -261,10 +253,7 @@ class TestNotifyApprovalRequiredRouting:
 
         with (
             patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
-            patch(
-                "hivepilot.services.notification_service._ensure_topic_thread",
-                return_value=777,
-            ),
+            patch.object(telegram_bot, "door_thread", return_value=777),
             patch("telegram.Bot") as mock_bot_cls,
         ):
             mock_bot_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
@@ -314,10 +303,7 @@ class TestNotifyApprovalRequiredRouting:
 
         with (
             patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
-            patch(
-                "hivepilot.services.notification_service._ensure_topic_thread",
-                return_value=777,
-            ),
+            patch.object(telegram_bot, "door_thread", return_value=777),
             patch("telegram.Bot") as mock_bot_cls,
         ):
             mock_bot_cls.return_value.__aenter__ = AsyncMock(return_value=MagicMock())
@@ -336,13 +322,11 @@ class TestNotifyApprovalRequiredRouting:
         with pytest.raises(RuntimeError):
             telegram_bot.notify_approval_required(run_id=4, project="acme", task="deploy")
 
-    def test_stale_topic_self_heals_retries_same_chat_not_dm(
+    def test_stale_topic_falls_back_to_inbox_not_remint(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A dead "Approvals" topic (message thread not found) must NOT
-        immediately fall back to the DM — it self-heals: invalidate the
-        registry entry, recreate the topic, and retry in the SAME group
-        chat with the fresh thread id."""
+        """A dead "Approvals" topic is invalidated and retried on Inbox
+        in the SAME group — never reminted, never immediately dumped to DM."""
         self._patch_settings(
             monkeypatch, stream_topics=True, stream_chat_id=-100111, notification_chat_id=555
         )
@@ -355,18 +339,19 @@ class TestNotifyApprovalRequiredRouting:
             if message_thread_id == 208:
                 raise RuntimeError("Bad Request: message thread not found")
 
-        ensure_calls: list[str] = []
-
-        def fake_ensure(agent_key: str, title: str):
-            ensure_calls.append(agent_key)
-            return 208 if len(ensure_calls) == 1 else 999
+        def fake_door(door: str) -> int | None:
+            return {"approvals": 208, "inbox": 11}.get(door)
 
         with (
             patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
+            patch.object(telegram_bot, "door_thread", side_effect=fake_door),
+            patch(
+                "hivepilot.services.notification_service.door_thread",
+                side_effect=fake_door,
+            ),
             patch(
                 "hivepilot.services.notification_service._ensure_topic_thread",
-                side_effect=fake_ensure,
-            ),
+            ) as mock_ensure,
             patch(
                 "hivepilot.services.notification_service._invalidate_topic",
                 return_value=208,
@@ -378,11 +363,12 @@ class TestNotifyApprovalRequiredRouting:
             telegram_bot.notify_approval_required(run_id=6, project="acme", task="deploy")
 
         mock_invalidate.assert_called_once_with("approvals")
+        mock_ensure.assert_not_called()
         assert len(calls) == 2
         assert calls[0]["chat_id"] == -100111
         assert calls[0]["message_thread_id"] == 208
         assert calls[1]["chat_id"] == -100111  # SAME group, NOT the DM
-        assert calls[1]["message_thread_id"] == 999  # fresh, recreated topic
+        assert calls[1]["message_thread_id"] == 11  # Inbox, not a reminted Approvals door
 
     def test_closed_topic_falls_back_to_general_not_dm(
         self, monkeypatch: pytest.MonkeyPatch
@@ -402,11 +388,18 @@ class TestNotifyApprovalRequiredRouting:
             if message_thread_id == 208:
                 raise RuntimeError("Bad Request: TOPIC_CLOSED")
 
+        def fake_door(door: str) -> int | None:
+            return 208
+
         with (
             patch.object(telegram_bot, "_send_approval_keyboard_message", fake_send_keyboard),
+            patch.object(telegram_bot, "door_thread", side_effect=fake_door),
+            patch(
+                "hivepilot.services.notification_service.door_thread",
+                side_effect=fake_door,
+            ),
             patch(
                 "hivepilot.services.notification_service._ensure_topic_thread",
-                return_value=208,
             ) as mock_ensure,
             patch("telegram.Bot") as mock_bot_cls,
         ):
@@ -414,12 +407,7 @@ class TestNotifyApprovalRequiredRouting:
             mock_bot_cls.return_value.__aexit__ = AsyncMock(return_value=False)
             telegram_bot.notify_approval_required(run_id=7, project="acme", task="deploy")
 
-        # Resolve Approvals, then probe Inbox (same mocked id → excluded).
-        # No recreate of the closed Approvals topic.
-        assert [c.args for c in mock_ensure.call_args_list] == [
-            ("approvals", "Approvals"),
-            ("inbox", "Inbox"),
-        ]
+        mock_ensure.assert_not_called()
         assert len(calls) == 2
         assert calls[0]["chat_id"] == -100111
         assert calls[1]["chat_id"] == -100111  # SAME group, NOT the DM

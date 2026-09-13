@@ -56,6 +56,55 @@ def list_topics() -> dict[str, int]:
     return dict(notification_service._load_topics())
 
 
+@dataclass
+class BootstrapResult:
+    """What ``topics bootstrap`` did, or would do."""
+
+    minted: dict[str, int] = field(default_factory=dict)
+    existing: dict[str, int] = field(default_factory=dict)
+    skipped: bool = False
+    dry_run: bool = False
+
+
+@dataclass
+class WipeSyncResult:
+    """What ``topics wipe-sync`` did, or would do."""
+
+    cleared: dict[str, int] = field(default_factory=dict)
+    dry_run: bool = False
+
+
+def wipe_sync(*, confirm: bool = False) -> WipeSyncResult:
+    """Clear JSON registry + SQLite mirror after an operator wipe.
+
+    Does not delete Telegram topics — the operator already did that.
+    Dry-run unless *confirm*.
+    """
+    from hivepilot.services import notification_service
+
+    current = list_topics()
+    if not confirm:
+        return WipeSyncResult(cleared=current, dry_run=True)
+    notification_service.wipe_topic_registry()
+    return WipeSyncResult(cleared=current, dry_run=False)
+
+
+def bootstrap(*, confirm: bool = False) -> BootstrapResult:
+    """Mint Inbox/Approvals/Runs/Alerts only when none of them exist.
+
+    Dry-run unless *confirm*. A partial registry is a no-op.
+    """
+    from hivepilot.services import notification_service
+
+    existing = notification_service._existing_pollen_doors()
+    if existing:
+        return BootstrapResult(existing=existing, skipped=True, dry_run=not confirm)
+    if not confirm:
+        return BootstrapResult(dry_run=True)
+    minted = notification_service.bootstrap_pollen_doors(confirm=True)
+    return BootstrapResult(minted=minted, dry_run=False)
+
+
 def plan_prune(thread_ids: list[int]) -> PrunePlan:
     """Split requested ids into deletable and protected, order preserved."""
     live = set(list_topics().values())

@@ -402,7 +402,7 @@ class TestStreamAgentTurnTopics:
         s.telegram_allowed_chat_ids = []
         return s
 
-    def test_topics_enabled_calls_ensure_and_passes_thread_id(self):
+    def test_topics_enabled_looks_up_runs_door(self):
         fake_thread_id = 42
         sent_kwargs = {}
 
@@ -412,14 +412,17 @@ class TestStreamAgentTurnTopics:
         with (
             patch("hivepilot.services.notification_service.settings", self._make_settings(True)),
             patch(
+                "hivepilot.services.notification_service._load_topics",
+                return_value={"runs": fake_thread_id, "inbox": 11},
+            ),
+            patch(
                 "hivepilot.services.notification_service._ensure_topic_thread",
-                return_value=fake_thread_id,
             ) as mock_ensure,
             patch("hivepilot.services.notification_service._send_telegram", fake_send),
         ):
             stream_agent_turn(actor="Blaise (CTO)", stage="planning")
 
-        mock_ensure.assert_called_once_with("runs", "Runs")
+        mock_ensure.assert_not_called()
         assert sent_kwargs["message_thread_id"] == fake_thread_id
 
     def test_topics_disabled_passes_none_thread_id(self):
@@ -436,7 +439,7 @@ class TestStreamAgentTurnTopics:
 
         assert sent_kwargs["message_thread_id"] is None
 
-    def test_run_id_mints_ephemeral_run_topic(self):
+    def test_run_id_does_not_create_run_topic(self):
         sent = []
 
         def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None):
@@ -452,11 +455,10 @@ class TestStreamAgentTurnTopics:
             patch("hivepilot.services.notification_service.settings", self._make_settings(True)),
             patch(
                 "hivepilot.services.notification_service._ensure_topic_thread",
-                return_value=88,
             ) as mock_ensure,
             patch(
                 "hivepilot.services.notification_service._load_topics",
-                return_value={},
+                return_value={"runs": 88, "inbox": 11},
             ),
             patch("hivepilot.services.notification_service._send_telegram", fake_send),
         ):
@@ -467,7 +469,6 @@ class TestStreamAgentTurnTopics:
                 run_slug="acme-api",
             )
 
-        keys = [c.args[0] for c in mock_ensure.call_args_list]
-        assert "run:42" in keys
-        assert "runs" in keys
-        assert any("run #42" in (c["msg"] or "") for c in sent)
+        mock_ensure.assert_not_called()
+        assert all(c.args[0] != "run:42" for c in mock_ensure.call_args_list)
+        assert sent and sent[0]["message_thread_id"] == 88
