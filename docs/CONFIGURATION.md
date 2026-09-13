@@ -760,6 +760,7 @@ effective policy for a given project.
 - `secrets_fail_mode` — `"closed"` | `"fallback"` (default `"closed"`)
 - `block_on_severity` — CVE severity gate, `None` by default (no gate)
 - `scan_tool` — `"grype"` | `"osv-scanner"`
+- `tool_policies` — HP-95 map of catalog token (or glob) → `allow` / `deny` / `require_approval`. Overrides **policy only**; never `risk`, `volatile`, or `idempotent` (those live in `tool_catalog.yaml`). High/critical cannot be widened to `allow` without HP-86 `change_class=mechanical`.
 
 ```yaml
 policies:
@@ -982,6 +983,31 @@ Hermes-4 (HP-71) is the OpenRouter / Nous OSS column — not the Hermes Agent fr
 - Default `HIVEPILOT_DEV_FALLBACK_RUNNERS` ends with `openrouter` so a developer
   quota/credit miss falls over to Hermes-4 after `codex` / `cursor`
 
+## tool_catalog.yaml — risk × policy × volatile × idempotency (HP-95)
+
+Optional. Missing file is fail-closed deny-all for catalog resolution.
+
+Each `tools:` entry is an intrinsic classification. `policies.yaml`
+`tool_policies` may override `default_policy` only — never `risk`.
+
+```yaml
+version: 1
+tools:
+  - token: Read
+    risk: low
+    default_policy: allow
+    volatile: false
+    idempotent: true
+  - token: "mcp__github__create_*"
+    risk: high
+    default_policy: require_approval
+    volatile: false
+    idempotent: false
+```
+
+Unknown token → deny. Orthogonal to outward tokens and plugin capabilities.
+See [SECURITY.md](SECURITY.md#tool-catalog-hp-95--risk--policy--volatile--idempotency).
+
 ## api_tokens.yaml — auth tokens
 
 Not part of the config-repo sync set (kept local, per-deployment).
@@ -1004,7 +1030,7 @@ The repo ships an exhaustive `.env.example` with roughly 166 variables, every on
 with its default value — use it as the reference rather than a full enumeration here.
 
 File-path settings mirror each YAML file 1:1: `projects_file`, `tasks_file`, `roles_file`,
-`pipelines_file`, `policies_file`, `groups_file`, `schedules_file`, `model_profiles_file`,
+`pipelines_file`, `policies_file`, `tool_catalog_file`, `groups_file`, `schedules_file`, `model_profiles_file`,
 `api_tokens_file`, plus `state_db`, `runs_dir`, `prompts_dir`.
 
 ### Roster presets (`HIVEPILOT_ROSTER_PRESET`)

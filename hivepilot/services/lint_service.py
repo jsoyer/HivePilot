@@ -6,6 +6,7 @@ from typing import List
 from hivepilot.models import TaskConfig
 from hivepilot.registry import RunnerRegistry
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
+from hivepilot.tool_catalog import lint_catalog
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,6 +47,8 @@ def lint_configuration() -> List[str]:
     for name, project in projects.projects.items():
         if not project.path.exists():
             errors.append(f"Project '{name}' path does not exist: {project.path}")
+
+    errors.extend(lint_catalog())
 
     return errors
 

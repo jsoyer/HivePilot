@@ -25,7 +25,7 @@ HivePilot is a config-driven orchestrator: a CLI drives an `Orchestrator` that r
     │   Config layer     │      │   Runner layer      │      │      Services         │
     │ projects/tasks/     │      │ RunnerRegistry       │      │ state_service          │
     │ roles/pipelines/    │      │ dispatch by `kind`   │      │ debate_service         │
-    │ policies/groups/    │      │                       │      │ lessons_service        │
+    │ policies/catalog/   │      │                       │      │ lessons_service        │
     │ schedules/          │      │ claude / codex /      │      │ drift_service          │
     │ model_profiles      │      │ vibe / openrouter      │      │ analytics_service      │
     │ + pydantic Settings │      │ (built-in)             │      │ secrets                │
@@ -59,7 +59,7 @@ HivePilot is a config-driven orchestrator: a CLI drives an `Orchestrator` that r
 | CLI (`hivepilot`, Typer) | Entrypoint `hivepilot.cli:app`. 24 command groups (task, pipeline, config, role, project, drift, plugins, playbooks, and more) cover config editing, execution, and observability. |
 | Orchestrator (`hivepilot/orchestrator.py`) | Runs tasks and pipelines. Resolves per-stage dispatch (runner/model/effort), manages git worktree isolation for git-mutating work, enforces approval gates, and invokes debate and lessons hooks around execution. |
 | Runner layer | `RunnerRegistry` dispatches by `kind` to a `BaseRunner` subclass. Built-in kinds: `claude`, `codex`, `vibe`, `openrouter`. Plugin-contributed kinds are PATH-gated (only usable if the underlying binary is present). Each runner exposes a CLI invocation path; API-capable runners also expose an API path. |
-| Config layer | YAML files for projects, tasks, roles, pipelines, policies, groups, schedules, and model_profiles, plus a pydantic `Settings` object read from `HIVEPILOT_`-prefixed environment variables. Each config file resolves in order: `$XDG_CONFIG_HOME/hivepilot/<file>` → config-repo → `base_dir`. |
+| Config layer | YAML files for projects, tasks, roles, pipelines, policies, groups, schedules, model_profiles, and the HP-95 `tool_catalog` (risk × policy × volatile × idempotency), plus a pydantic `Settings` object read from `HIVEPILOT_`-prefixed environment variables. Each config file resolves in order: `$XDG_CONFIG_HOME/hivepilot/<file>` → config-repo → `base_dir`. |
 | Services (`hivepilot/services/*`) | `state_service` (SQLite persistence), `debate_service`, `lessons_service`, `drift_service`, `analytics_service`, `secrets`, `notification_service`, `scheduler_daemon`, `api_service` (FastAPI), `interaction_service`, and others. |
 | State store | SQLite `state.db` holding runs, steps, interactions, verdicts, lessons, drift scans, and tenants; per-run `runs/<timestamp>/summary.json`; structured JSON logs. |
 | Plugin system | Six contribution types — runners, notifiers, hooks, secrets, panels, skills — loaded from Python entry-points or local `plugins/*.py`. |
@@ -91,7 +91,7 @@ See [PIPELINES-AND-ROLES.md](./PIPELINES-AND-ROLES.md) and [RUNNERS.md](./RUNNER
 ## Safety model
 
 - **Dry-run / simulate** — pipelines and tasks can be previewed without executing runners.
-- **Approval gates** — a 3-tier gate model, plus automatic gating of destructive operations. The destructive-op check is fail-closed: if the check itself raises, the step is treated as destructive and gated.
+- **Approval gates** — a 3-tier gate model, plus automatic gating of destructive operations. The destructive-op check is fail-closed: if the check itself raises, the step is treated as destructive and gated. HP-95 adds a tool-catalog decision (`kind=tool` on the HP-94 Approvals inbox) that is orthogonal to HP-61 `change_class`, outward tokens, and plugin capabilities.
 - **Prompt-injection validation** — inputs assembled into agent prompts are validated before dispatch.
 - **Secrets masking** — secret values are masked at every output sink (CLI, API, DB, notifications), not only at the point of use.
 - **Fail-closed debate and lessons gates** — if a debate verdict or lesson-validation step errors or is inconclusive, the gate denies rather than defaulting to allow.

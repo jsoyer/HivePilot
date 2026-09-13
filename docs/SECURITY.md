@@ -48,6 +48,26 @@ hivepilot approvals approve <id>
 hivepilot approvals deny <id>
 ```
 
+### Tool catalog (HP-95) — risk × policy × volatile × idempotency
+
+`tool_catalog.yaml` classifies known tool tokens on four axes:
+
+| Axis | Who owns it | Values |
+| --- | --- | --- |
+| `risk` | catalog only | `low` / `medium` / `high` / `critical` |
+| `default_policy` | catalog; `policies.yaml` `tool_policies` may override | `allow` / `deny` / `require_approval` |
+| `volatile` | catalog only | bool |
+| `idempotent` | catalog only | bool |
+
+Unknown token → **deny** (fail-closed). Policies may tighten or restate policy; they **must not** mutate `risk`. A `tool_policies` override cannot widen a high/critical tool to `allow` unless the caller also supplies HP-86 `change_class=mechanical`.
+
+This catalog is orthogonal to:
+
+- outward tokens (`hivepilot/outward.py`) — visibility off this machine
+- plugin capabilities (`network` / `filesystem` / `subprocess` / `secrets_access` / `env`)
+
+Do not fold those axes into risk tiers. HP-58 `GET /v1/tools` stays a typed-tool listing; catalog resolution is a separate helper (`hivepilot.tool_catalog.resolve`) for the Approvals inbox `kind=tool` (HP-94). HP-61 `change_class` is unchanged.
+
 ### HP-61 change class (mechanical vs ask)
 
 Per-action approval rules (`PUT /v1/approval-rules`) may set optional
@@ -259,6 +279,8 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - A missing adjudication verdict = block PR promotion.
 - A missing `HIVEPILOT_CREDENTIALS_KEY` = refuse literal MCP/OpenAPI secrets (keep `${env:}` refs).
 - An MCP/OpenAPI fetch that resolves to a private or metadata address = refuse (SSRF).
+- An unknown tool-catalog token = deny (HP-95).
+- A `tool_policies` override cannot lower a high/critical risk to automatic without HP-86 `mechanical`.
 
 ## See also
 
