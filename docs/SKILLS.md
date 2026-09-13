@@ -139,6 +139,24 @@ The bundled `sample_skill` plugin is a default-OFF demo — enable it explicitly
 - Skill names must be unique across registered skills; config validation rejects unknown names on stages/steps.
 - Plugin-contributed skills take precedence over same-named skill directories.
 
+## Skill catalog (HP-98)
+
+`hivepilot/skill_catalog.py` scans the same two sources **read-only** into an
+in-memory revision DAG. It does not write `.skill_id` sidecars (OpenSpace
+does; HivePilot assigns a deterministic logical id from the skill name
+instead).
+
+- Origins: `IMPORTED`, `FIXED`, `DERIVED`, `CAPTURED`.
+- Exactly one active revision per logical skill.
+- A content-hash change is a new **revision** (`FIXED`), not a new logical
+  skill id. `DERIVED` / `CAPTURED` create a new logical skill (roots have
+  no parents; `DERIVED` points at one or more parent revisions).
+
+This catalog does not implement HP-105 trust (provisional↔trusted), HP-104
+events, or HP-99 evidence. Workshop accept/reject (HP-79) still writes
+directory files only after an operator approval; a later scan then sees
+the new bytes as `FIXED`.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.
