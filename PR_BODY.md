@@ -23,5 +23,5 @@ Replay: `pytest tests/test_evidence.py tests/test_pass_store.py tests/test_skill
 
 ## Testing
 
-- [ ] `pytest tests/test_evidence.py tests/test_pass_store.py tests/test_skill_catalog.py`
-- [ ] `ruff check` + `ruff format --check` clean
+- [x] `pytest tests/test_evidence.py tests/test_pass_store.py tests/test_skill_catalog.py tests/test_events.py` — 61 passed
+- [x] `ruff check` + `ruff format --check` clean
