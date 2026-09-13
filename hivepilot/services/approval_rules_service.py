@@ -34,8 +34,21 @@ HUMAN_GATE_CLASSES: frozenset[str] = CHANGE_CLASSES - {MECHANICAL}
 
 # Metadata keys that must never be treated as a change class (HP-86).
 # ``kind`` is already the HP-61 action token (e.g. pipeline_checkpoint).
+# ``pass_kind`` is the HP-94 discriminant (partition/tool/memory/skill_evolution)
+# and must stay partitioned from both action and change_class (HP-97).
 _NOT_A_CLASS_KEYS: frozenset[str] = frozenset(
-    {"source", "watcher", "woke", "wake", "event", "bus_kind", "kind", "action", "step_name"}
+    {
+        "source",
+        "watcher",
+        "woke",
+        "wake",
+        "event",
+        "bus_kind",
+        "kind",
+        "action",
+        "step_name",
+        "pass_kind",
+    }
 )
 _CLAIM_KEYS: tuple[str, ...] = ("change_class", "class")
 _TRUTHY = frozenset({"true", "1", "yes", "contested"})

@@ -79,6 +79,22 @@ Do not fold those axes into risk tiers. HP-58 `GET /v1/tools` stays a typed-tool
 
 Isolated memory is JSON **data** (`role=data`), never system/instruction text and never merged into `extra_prompt`. A payload that *looks* like an instruction stays inside the data envelope. HITL memory proposals are HP-101.
 
+### PASS store (HP-97) — one inbox, decide before side-effect
+
+`hivepilot/pass_store.py` is the unified Approvals inbox (ADR HP-94 / plan coworker-openspace). It extends HP-61 rules rather than adding a second control plane.
+
+| Field | Values |
+| --- | --- |
+| `kind` | `partition` / `tool` / `memory` / `skill_evolution` (HP-94). Partitioned from the HP-61 action token, which already used `kind`. |
+| status | `PENDING` / `APPROVED` / `REJECTED` / `EDITED` / `EXPIRED` |
+
+Rules:
+
+1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying memory / tools / skill promotions is HP-100 / HP-101 / HP-105.
+2. **Edit cannot retarget.** `path`, `revision`, and `expected_revision` stay frozen. Body text / args may change.
+3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
+4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
+
 ### HP-61 change class (mechanical vs ask)
 
 Per-action approval rules (`PUT /v1/approval-rules`) may set optional
@@ -292,6 +308,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - An MCP/OpenAPI fetch that resolves to a private or metadata address = refuse (SSRF).
 - An unknown tool-catalog token = deny (HP-95).
 - A `tool_policies` override cannot lower a high/critical risk to automatic without HP-86 `mechanical`.
+- A PASS `match_auto` approve requires HP-86 `mechanical`; non-mechanical never auto (HP-97).
+- A PASS edit cannot retarget `path` / `revision` (HP-97).
+- A PASS decision is persisted before any side-effect callback (HP-97).
 
 ## See also
 

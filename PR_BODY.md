@@ -1,36 +1,28 @@
 ## Summary
 
-HP-96 (Linear acceptance): exact workspace text edits with a required revision lock, plus isolated JSON memory (data, not instructions). Coworker + OpenSpace patterns only; ADR HP-94 accepted.
+HP-97: unified PASS store for tool / memory / skill_evolution (and partition) proposals. One inbox; `kind` is the HP-94 discriminant, partitioned from the HP-61 action token. Decision persisted **before** side-effect. Edit cannot retarget path/revision. `match_auto` composes HP-95 tool-catalog policy + HP-61 rules + HP-86 mechanical gate.
 
-Owning issue: [HP-96](https://linear.app/js-workspace/issue/HP-96/u-02-workspace-text-revision-isolation-json-memoire)
+Owning issue: [HP-97](https://linear.app/js-workspace/issue/HP-97/u-03-pass-store-unifie-tool-memory-skill-proposals)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-61 / HP-86 / HP-95 / HP-96.
 
-Replay: `pytest tests/test_workspace_text.py tests/test_tool_catalog.py tests/test_skill_catalog.py`
+Replay: `pytest tests/test_pass_store.py tests/test_hp61_approval_rules.py tests/test_tool_catalog.py`
 
 ## What changed
 
-1. **`hivepilot/workspace_text.py`** — Coworker `workspace-context.ts` / `applyWorkspaceTextEdit` **patterns**, rewritten. Empty `oldText` appends; non-unique match refuses; `expectedRevision` required; overflow bound.
-2. **Isolated JSON memory** — stored/recalled as `role=data`. No path renders memory as instructions or merges it into `extra_prompt`.
-3. **Tests** — append / replace / remove / duplicate / stale / overflow + isolation.
-4. **Docs** — pointers in `docs/ARCHITECTURE.md` and `docs/SECURITY.md`.
-
-`tool_catalog` and `skill_catalog` are untouched.
+1. **`hivepilot/pass_store.py`** — create pending → `decide(approve/reject/edit/expire)` → inbox filtered by `kind`. Statuses `PENDING|APPROVED|REJECTED|EDITED|EXPIRED`.
+2. **Persist before side-effect** — `decide` commits, then runs an optional callback. A raising callback cannot roll back the status.
+3. **Edit freeze** — `path` / `revision` / `expected_revision` cannot be retargeted.
+4. **`match_auto` compose** — catalog deny wins; catalog `require_approval` stays HITL; only HP-86 `mechanical` may auto-approve. HP-94 `kind` is stored as `pass_kind` so it does not collide with HP-61's action `kind`.
+5. **SQLite `pass_proposals`** — the run-keyed `approvals` table is not reused (`PRIMARY KEY(run_id)`).
 
 ## Out of scope
 
-- HP-97 PASS store
-- HP-99 evidence refs
-- HP-101 memory HITL proposals
-- HP-105 trust provisional↔trusted
-- WhatsApp
-- HP-67 desktop-per-agent
+- HP-99 evidence, HP-100 idempotency/checkpoints, HP-101 memory HITL apply, HP-105 trust
+- WhatsApp, HP-67 sandbox, presenter/Telegram door wiring (HP-102)
 
 ## Testing
 
-- [x] append / replace / remove / duplicate / stale / overflow
-- [x] isolation: memory = JSON data, not instructions
-- [x] `pytest tests/test_workspace_text.py` — 28 passed
-- [x] `pytest tests/test_tool_catalog.py tests/test_skill_catalog.py` — 37 passed (catalogs still green)
-- [x] Combined replay suite — 65 passed
-- [x] `ruff check` + `ruff format --check` on the new files
+- [ ] `pytest tests/test_pass_store.py` — decide + persist-before-effect + edit freeze + compose match_auto
+- [ ] `pytest tests/test_hp61_approval_rules.py tests/test_tool_catalog.py` — no regression
+- [ ] `ruff check` + `ruff format --check` clean

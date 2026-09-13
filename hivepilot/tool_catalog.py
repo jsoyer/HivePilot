@@ -22,8 +22,8 @@ cannot widen a high/critical tool to ``allow`` unless the caller supplies
 ``change_class=mechanical``. This module does not persist rules or replace
 the existing approval-rule table.
 
-Helpers here are for the future HP approval path. They do not execute
-typed tools and do not change ``GET /v1/tools``.
+Helpers here feed ``hivepilot.pass_store.match_auto`` (HP-97). They do not
+execute typed tools and do not change ``GET /v1/tools``.
 """
 
 from __future__ import annotations
