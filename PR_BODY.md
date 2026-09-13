@@ -23,6 +23,5 @@ Replay: `pytest tests/test_pass_store.py tests/test_hp61_approval_rules.py tests
 
 ## Testing
 
-- [ ] `pytest tests/test_pass_store.py` — decide + persist-before-effect + edit freeze + compose match_auto
-- [ ] `pytest tests/test_hp61_approval_rules.py tests/test_tool_catalog.py` — no regression
-- [ ] `ruff check` + `ruff format --check` clean
+- [x] `pytest tests/test_pass_store.py tests/test_hp61_approval_rules.py tests/test_tool_catalog.py tests/test_workspace_text.py` — 88 passed
+- [x] `ruff check` + `ruff format --check` clean
