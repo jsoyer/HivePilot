@@ -225,7 +225,9 @@ class TestProgressiveDisclosure:
 
     def test_body_is_not_in_the_index(self) -> None:
         catalog = _golden_catalog()
-        index = ranking_text("redaction-docs", catalog.active_revision("redaction-docs").description)
+        index = ranking_text(
+            "redaction-docs", catalog.active_revision("redaction-docs").description
+        )
         assert "rollback" not in index
         hits = retrieve(catalog, "déployer en production rollback")
         assert hits[0].name == "deploiement-prod"
