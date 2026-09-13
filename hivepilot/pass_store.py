@@ -16,8 +16,10 @@ column ``kind`` and, when composing ``match_auto``, partitions:
 Statuses: PENDING | APPROVED | REJECTED | EDITED | EXPIRED.
 
 ``decide`` persists the status **before** any ``side_effect`` callback.
-This module does not apply memory writes, tool calls, skill promotions, or
-idempotent side-effect tables (HP-100 / HP-101 / HP-105).
+``submit(kind=skill_evolution)`` rejects a claim that is not HP-99
+admissible (missing or foreign-tenant evidence refs). This module does
+not apply memory writes, tool calls, skill promotions, or idempotent
+side-effect tables (HP-100 / HP-101 / HP-105 / HP-109).
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from hivepilot.evidence import assess_evolution_claim
 from hivepilot.services import approval_rules_service, db, state_service
 from hivepilot.services.approval_rules_service import (
     MECHANICAL,
@@ -40,6 +43,8 @@ from hivepilot.tool_catalog import (
     ToolCatalog,
     resolve,
 )
+
+SKILL_EVOLUTION_KIND = "skill_evolution"
 
 # Closed vocabularies. Adding a token is additive; renaming is a breaking change.
 STATUSES: tuple[str, ...] = ("PENDING", "APPROVED", "REJECTED", "EDITED", "EXPIRED")
@@ -451,6 +456,15 @@ def submit(
         tenant=tenant,
         expires_at=expires_at,
     )
+    if proposal.kind == SKILL_EVOLUTION_KIND:
+        admission = assess_evolution_claim(proposal.payload, tenant=proposal.tenant)
+        if not admission.admissible:
+            return decide(
+                proposal.id,
+                "reject",
+                actor="evidence",
+                reason=admission.reason,
+            )
     composed_meta = {
         "token": proposal.action or (proposal.payload.get("token") or ""),
         "action": proposal.action,

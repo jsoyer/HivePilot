@@ -95,6 +95,16 @@ Rules:
 3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
 4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
 
+### Evidence refs (HP-99) — tenant-scoped, redacted, watermarked
+
+`hivepilot/evidence.py` is a local evidence registry (OpenSpace `evidence/*` pattern, rewritten; no cloud, no pickle):
+
+- Refs are keyed by `(tenant, ref_id)`. A foreign-tenant id is missing.
+- Ingest redacts registered secret values and secret-looking metadata keys before persist.
+- Each ingest emits an HP-40 `change_log` row; the ref **watermark is `change_log.id`**.
+- Packets are bounded (`max_chars` / `max_refs`); omitted refs are listed, not silently dropped.
+- A `skill_evolution` claim that cites missing or empty refs is **not admissible**. `pass_store.submit` persists PENDING first, then rejects with that reason. Applying FIX/DERIVED/CAPTURED is HP-109.
+
 ### HP-61 change class (mechanical vs ask)
 
 Per-action approval rules (`PUT /v1/approval-rules`) may set optional

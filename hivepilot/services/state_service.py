@@ -489,6 +489,29 @@ def init_db() -> None:
             )
             """
         )
+        # HP-99 tenant-scoped evidence refs. Watermark is change_log.id
+        # (written at ingest in hivepilot.evidence). Missing refs make a
+        # skill_evolution claim non-admissible; apply paths are HP-109.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evidence_refs (
+                tenant TEXT NOT NULL DEFAULT 'default',
+                ref_id TEXT NOT NULL,
+                ref_type TEXT NOT NULL,
+                preview TEXT NOT NULL DEFAULT '',
+                metadata TEXT NOT NULL DEFAULT '{}',
+                contains_secret INTEGER NOT NULL DEFAULT 0,
+                first_seen_watermark INTEGER NOT NULL,
+                last_seen_watermark INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant, ref_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_evidence_refs_tenant_watermark "
+            "ON evidence_refs (tenant, last_seen_watermark)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

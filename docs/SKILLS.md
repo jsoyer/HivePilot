@@ -152,10 +152,12 @@ instead).
   skill id. `DERIVED` / `CAPTURED` create a new logical skill (roots have
   no parents; `DERIVED` points at one or more parent revisions).
 
-This catalog does not implement HP-105 trust (provisional↔trusted), HP-104
-events, or HP-99 evidence. Workshop accept/reject (HP-79) still writes
-directory files only after an operator approval; a later scan then sees
-the new bytes as `FIXED`.
+This catalog does not implement HP-105 trust (provisional↔trusted) or
+HP-104 events. HP-99 evidence (`hivepilot/evidence.py`) is a separate
+tenant-scoped registry: evolution claims must cite existing refs;
+missing refs make a `skill_evolution` PASS proposal not admissible.
+Workshop accept/reject (HP-79) still writes directory files only after
+an operator approval; a later scan then sees the new bytes as `FIXED`.
 
 ## Skill workshop (HP-79)
 

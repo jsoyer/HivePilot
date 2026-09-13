@@ -13,8 +13,10 @@ existing identity — so a content-hash change creates a new revision under
 the same logical skill. OpenSpace persists ``{name}__imp_{uuid}`` in a
 sidecar; we refuse that write and use a deterministic digest instead.
 
-HP-105 trust (provisional↔trusted), HP-104 events, and HP-99 evidence are
-out of scope. Workshop states (proposed|accepted|rejected) stay in
+HP-105 trust (provisional↔trusted) and HP-104 events stay out of scope.
+HP-99 evidence lives in ``hivepilot.evidence`` and may mark a
+``skill_evolution`` proposal non-admissible when refs are missing.
+Workshop states (proposed|accepted|rejected) stay in
 ``skill_workshop_service``.
 """
 
