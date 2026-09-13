@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,7 +16,7 @@ from hivepilot.services.telegram_doors import APPROVALS, INBOX
 
 
 @pytest.fixture(autouse=True)
-def _reset_presenter() -> None:
+def _reset_presenter() -> Iterator[None]:
     reset_pending()
     yield
     reset_pending()

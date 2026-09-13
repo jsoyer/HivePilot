@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,7 +13,7 @@ from hivepilot.services.token_service import add_token
 
 
 @pytest.fixture(autouse=True)
-def _reset_presenter() -> None:
+def _reset_presenter() -> Iterator[None]:
     reset_pending()
     yield
     reset_pending()

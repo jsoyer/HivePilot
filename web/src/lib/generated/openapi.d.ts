@@ -732,6 +732,23 @@ export interface components {
             /** Wall Clock Seconds */
             wall_clock_seconds?: number | null;
         };
+        /**
+         * PassApprovalAction
+         * @description Pollen Approvals-door decide — same approval_id as Telegram.
+         */
+        PassApprovalAction: {
+            /**
+             * Decision
+             * @default approve
+             */
+            decision: string;
+            /** Edited Payload */
+            edited_payload?: {
+                [key: string]: unknown;
+            } | null;
+            /** Reason */
+            reason?: string | null;
+        };
         /** PipedreamSyncRequest */
         PipedreamSyncRequest: {
             /** App */

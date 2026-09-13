@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -44,7 +45,7 @@ from hivepilot.workspace_text import IsolatedJsonMemory
 
 
 @pytest.fixture(autouse=True)
-def _reset_presenter() -> None:
+def _reset_presenter() -> Iterator[None]:
     reset_pending()
     yield
     reset_pending()
