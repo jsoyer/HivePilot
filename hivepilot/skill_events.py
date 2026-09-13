@@ -180,17 +180,18 @@ def _decode_payload(raw: Any) -> dict[str, Any]:
 
 
 def _row_to_event(row: Mapping[str, Any]) -> SkillEvent:
+    data = dict(row)
     return SkillEvent(
-        event_id=str(row["id"]),
-        event_type=str(row["event_type"]),
-        revision_id=str(row["revision_id"]),
-        logical_id=str(row["logical_id"]),
-        skill_name=str(row["skill_name"]),
-        run_id=str(row["run_id"]),
-        step=str(row["step"]),
-        tenant=str(row["tenant"]),
-        payload=_decode_payload(row.get("payload")),
-        created_ts=str(row["created_ts"]) if row.get("created_ts") is not None else None,
+        event_id=str(data["id"]),
+        event_type=str(data["event_type"]),
+        revision_id=str(data["revision_id"]),
+        logical_id=str(data["logical_id"]),
+        skill_name=str(data["skill_name"]),
+        run_id=str(data["run_id"]),
+        step=str(data["step"]),
+        tenant=str(data["tenant"]),
+        payload=_decode_payload(data.get("payload")),
+        created_ts=str(data["created_ts"]) if data.get("created_ts") is not None else None,
     )
 
 
@@ -404,11 +405,11 @@ def summarize_skills(*, tenant: str = "default") -> list[SkillStats]:
             (tenant,),
         ).fetchall()
     buckets: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for raw in rows:
+        row = dict(raw)
         name = str(row["skill_name"])
-        key = name
         bucket = buckets.setdefault(
-            key,
+            name,
             {
                 "skill_name": name,
                 "logical_id": str(row["logical_id"]),

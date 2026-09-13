@@ -51,6 +51,21 @@ def _fetch() -> dict[str, Any]:
 
     ranking = rank_skills(tenant=_TENANT, limit=_RANK_LIMIT)
     if not ranking.top and not ranking.bottom:
+        if ranking.unmeasured:
+            return {
+                "sections": [
+                    {
+                        "kind": "stat",
+                        "label": "unmeasured skills",
+                        "value": str(ranking.unmeasured),
+                        "status": None,
+                    },
+                    {
+                        "kind": "text",
+                        "content": "Events exist but no skill has a selected count, so none are ranked (absence ≠ zero).",
+                    },
+                ]
+            }
         return {
             "sections": [
                 {

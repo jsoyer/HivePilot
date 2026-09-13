@@ -78,7 +78,6 @@ from hivepilot.services import (
     scan_service,
     state_service,
 )
-from hivepilot.skill_events import record_cycle_safe
 from hivepilot.services import (
     context_budget as context_budget_service,
 )
@@ -116,6 +115,7 @@ from hivepilot.services.project_service import (
 from hivepilot.services.secret_refs import resolve_secret_refs
 from hivepilot.services.secrets_service import secret_resolver
 from hivepilot.services.state_service import RunStatus
+from hivepilot.skill_events import record_cycle_safe
 from hivepilot.utils.io import create_run_directory, write_summary
 from hivepilot.utils.logging import get_logger
 

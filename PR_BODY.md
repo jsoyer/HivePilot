@@ -22,5 +22,6 @@ Replay: `pytest tests/test_skill_events.py tests/test_skill_events_panel.py test
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_events.py tests/test_skill_events_panel.py tests/test_skill_orchestrator_wiring.py tests/test_skill_catalog.py tests/test_actionable_events.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_skill_events.py tests/test_skill_events_panel.py` — 21 passed
+- [x] `pytest tests/test_skill_orchestrator_wiring.py tests/test_actionable_events.py tests/test_gating_conformance.py::TestAllPluginStemsHaveEnabledFlag` — 104 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
