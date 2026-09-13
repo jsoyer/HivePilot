@@ -16,7 +16,8 @@ sidecar; we refuse that write and use a deterministic digest instead.
 HP-105 trust lives in ``hivepilot.skill_trust`` (provisional↔trusted,
 ``enabled`` orthogonal). HP-104 cycle events live in
 ``hivepilot.skill_events`` (idempotent per revision/run/step/type;
-absence of measurement is not zero).
+absence of measurement is not zero). HP-106 attribution lives in
+``hivepilot.skill_signals`` (tool / env / permission / skill_defect).
 HP-99 evidence lives in ``hivepilot.evidence`` and may mark a
 ``skill_evolution`` proposal non-admissible when refs are missing.
 Workshop states (proposed|accepted|rejected) stay in

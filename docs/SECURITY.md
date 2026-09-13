@@ -112,7 +112,11 @@ HP-105 trust (`hivepilot/skill_trust.py`) is a local two-state ladder
 (provisional↔trusted) with `enabled` orthogonal. Unknown revisions are
 not implicitly trusted or enabled. Promotion uses distinct completed
 inter-runs; attributed failure demotes; ambiguous failure opens a PASS
-`trust_review` and does not auto-demote.
+`trust_review` and does not auto-demote. HP-106
+(`hivepilot/skill_signals.py`) classifies tool / env / permission /
+skill-defect; a network outage is `env` and must not demote trust. FIX
+requires revision + causal event + representative result (apply is
+HP-109).
 
 ### Memory proposals HITL (HP-101)
 
