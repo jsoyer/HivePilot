@@ -24,6 +24,6 @@ Replay: `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
-- [ ] `mypy hivepilot/skill_embeddings.py hivepilot/skill_ranker.py hivepilot/host_skills.py`
+- [x] `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py` — 46 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/skill_embeddings.py hivepilot/skill_ranker.py hivepilot/host_skills.py` — no issues

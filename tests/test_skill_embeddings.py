@@ -18,14 +18,13 @@ from hivepilot.skill_embeddings import (
     cosine_similarity,
     decode_vector,
     embeddings_enabled,
-    encode_vector,
     revision_hash,
     rrf_combine,
     set_embedding_provider,
     store_vector,
     vectors_for_documents,
 )
-from hivepilot.skill_ranker import bm25_scores, ranking_text, retrieve
+from hivepilot.skill_ranker import ranking_text, retrieve
 from hivepilot.skill_trust import register_revision
 
 _EMBED_SOURCE = Path(__file__).resolve().parents[1] / "hivepilot" / "skill_embeddings.py"
@@ -111,9 +110,7 @@ class TestDisabledIsPureBm25:
         noisy = MapProvider({"nope": (1.0,)})
         set_embedding_provider(noisy)
         got = retrieve(catalog, query)
-        assert [(hit.name, hit.score) for hit in got] == [
-            (hit.name, hit.score) for hit in expected
-        ]
+        assert [(hit.name, hit.score) for hit in got] == [(hit.name, hit.score) for hit in expected]
         assert noisy.calls == 0
         assert [hit.name for hit in expected][0] == "alpha-docs"
 

@@ -231,13 +231,7 @@ def fuse_bm25_cosine(
 ) -> tuple[float, ...]:
     """RRF of BM25 and cosine. Provider errors fall back to BM25 scores."""
     n_docs = len(documents)
-    if not (
-        n_docs
-        == len(cache_keys)
-        == len(names)
-        == len(revision_ids)
-        == len(bm25)
-    ):
+    if not (n_docs == len(cache_keys) == len(names) == len(revision_ids) == len(bm25)):
         raise SkillEmbeddingError("hybrid inputs must be the same length")
     if n_docs == 0:
         return ()
@@ -250,8 +244,7 @@ def fuse_bm25_cosine(
         return tuple(bm25)
     query_vector = query_vectors[0]
     cosines = [
-        cosine_similarity(query_vector, vec) if vec is not None else None
-        for vec in doc_vectors
+        cosine_similarity(query_vector, vec) if vec is not None else None for vec in doc_vectors
     ]
     bm25_order = _rank_indices(bm25, names, revision_ids, require_positive=True)
     cosine_order = [
