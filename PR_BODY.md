@@ -21,7 +21,8 @@ Replay: `pytest tests/test_skill_evolution_accept.py tests/test_skill_evolution.
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_evolution_accept.py tests/test_skill_evolution.py tests/test_skill_evolution_validator.py tests/test_api_skill_evolution.py tests/test_pass_store.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
-- [ ] `mypy hivepilot/skill_evolution_accept.py hivepilot/skill_evolution.py`
-- [ ] `npm test` in `web/` for workshop + lineage
+- [x] `pytest tests/test_skill_evolution_accept.py tests/test_skill_evolution.py tests/test_skill_evolution_validator.py tests/test_api_skill_evolution.py tests/test_pass_store.py` — 77 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/skill_evolution_accept.py hivepilot/skill_evolution.py tests/test_skill_evolution_accept.py` — no issues
+- [x] `npm test` (workshop + lineage + i18n) — 15 passed
+- [x] `npm run build` — Pollen static bundle refreshed

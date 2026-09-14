@@ -32,16 +32,15 @@ from hivepilot.orchestrator import Orchestrator
 from hivepilot.pass_store import (
     SKILL_EVOLUTION_KIND,
     PassStoreError,
-    decide as pass_decide,
-    get as get_pass_proposal,
-    inbox as pass_inbox,
 )
-from hivepilot.skill_dirs import skill_scan_dirs
-from hivepilot.skill_evolution import apply_approved, preview_accept
-from hivepilot.skill_evolution_accept import (
-    HITL_REQUIRED,
-    STALE_DIGEST,
-    SkillEvolutionAcceptError,
+from hivepilot.pass_store import (
+    decide as pass_decide,
+)
+from hivepilot.pass_store import (
+    get as get_pass_proposal,
+)
+from hivepilot.pass_store import (
+    inbox as pass_inbox,
 )
 from hivepilot.presenters import (
     POLLEN,
@@ -72,6 +71,13 @@ from hivepilot.services import (
     token_service,
 )
 from hivepilot.services.metrics import registry, run_duration_seconds
+from hivepilot.skill_dirs import skill_scan_dirs
+from hivepilot.skill_evolution import apply_approved, preview_accept
+from hivepilot.skill_evolution_accept import (
+    HITL_REQUIRED,
+    STALE_DIGEST,
+    SkillEvolutionAcceptError,
+)
 from hivepilot.ui.plugin_persist import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 

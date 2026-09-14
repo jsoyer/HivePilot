@@ -12,6 +12,7 @@ from hivepilot.skill_evolution import (
     CAPTURED,
     DERIVED,
     FIX,
+    EvolutionDraft,
     apply_approved,
     file_diffs,
     lineage_graph,
@@ -41,7 +42,7 @@ def _draft(
     files: dict[str, str] | None = None,
     baseline_files: dict[str, str] | None = None,
     evidence: str = "acc-ev",
-) -> object:
+) -> EvolutionDraft:
     _ref(evidence)
     return propose(
         evolution_type=FIX,
@@ -146,9 +147,10 @@ class TestAtomicAccept:
         assert result.ok is False
         assert result.mutated is False
         assert result.code == STALE_DIGEST
-        assert not (dest / "SKILL.md").exists() or (dest / "SKILL.md").read_text(
-            encoding="utf-8"
-        ) != "# fixed\n"
+        assert (
+            not (dest / "SKILL.md").exists()
+            or (dest / "SKILL.md").read_text(encoding="utf-8") != "# fixed\n"
+        )
 
     def test_stale_on_disk_baseline_is_blocked(self, tmp_path: Path) -> None:
         dest = tmp_path / "skills" / "faulty"
@@ -267,11 +269,7 @@ class TestValidatorHook:
             causal_event_id="evt-1",
             representative_result="result-1",
             evidence_refs=["priv-ev"],
-            files={
-                "SKILL.md": (
-                    "---\nname: faulty\nallowed-tools:\n  - Bash\n---\n# widen\n"
-                )
-            },
+            files={"SKILL.md": ("---\nname: faulty\nallowed-tools:\n  - Bash\n---\n# widen\n")},
         )
         assert draft.payload is not None
         assert draft.payload["validation"]["result"] == "needs_human_review"

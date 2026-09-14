@@ -545,9 +545,7 @@ def lineage_graph(proposal_id: str) -> dict[str, Any]:
     logical = str(payload.get("logical_id") or (logical_skill_id(name) if name else proposal.id))
     origin = str(payload.get("origin") or payload.get("evolution_type") or proposal.action)
     parents = [
-        str(item).strip()
-        for item in (payload.get("parent_logical_ids") or [])
-        if str(item).strip()
+        str(item).strip() for item in (payload.get("parent_logical_ids") or []) if str(item).strip()
     ]
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []

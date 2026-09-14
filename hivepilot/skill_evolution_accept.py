@@ -26,13 +26,14 @@ from typing import Any, Mapping
 
 from hivepilot.pass_store import (
     APPROVED,
-    PENDING,
     REJECTED,
     SKILL_EVOLUTION_KIND,
     PassProposal,
     PassStoreError,
-    get as get_proposal,
     update_payload,
+)
+from hivepilot.pass_store import (
+    get as get_proposal,
 )
 from hivepilot.services import events
 from hivepilot.skill_catalog import (

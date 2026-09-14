@@ -55,9 +55,7 @@ def test_list_requires_auth(api_client):
     assert api_client.get("/v1/skill-evolutions").status_code == 401
 
 
-def test_hitl_then_accept(
-    api_client, tmp_tokens_file, tmp_path: Path, monkeypatch
-):
+def test_hitl_then_accept(api_client, tmp_tokens_file, tmp_path: Path, monkeypatch):
     from hivepilot.config import settings
     from hivepilot.skill_dirs import skill_scan_dirs
 
@@ -65,7 +63,9 @@ def test_hitl_then_accept(
     skills.mkdir()
     monkeypatch.setattr(settings, "plugins_enabled", True)
     monkeypatch.setattr(settings, "base_dir", tmp_path)
-    monkeypatch.setattr("hivepilot.services.api_service.skill_scan_dirs", lambda: skill_scan_dirs(tmp_path))
+    monkeypatch.setattr(
+        "hivepilot.services.api_service.skill_scan_dirs", lambda: skill_scan_dirs(tmp_path)
+    )
 
     read_raw, _ = add_token("read")
     approve_raw, _ = add_token("approve")
