@@ -2,7 +2,7 @@
 
 OpenSpace ``EvolutionType`` pattern, rewritten in Python. This module does
 **not** vendor OpenSpace, talk to OpenSpace cloud, persist pickle
-embeddings, write ``.skill_id`` sidecars, implement HP-112, HP-114, or
+embeddings, write ``.skill_id`` sidecars, implement HP-114, or
 OpenSpace ``autonomous`` evolution mode. HP-110 validation lives in
 ``hivepilot.skill_evolution_validator`` and is a read-only gate. HP-111
 atomic accept lives in ``hivepilot.skill_evolution_accept``.

@@ -124,6 +124,8 @@ for concierge/chat only. Skill off (HP-105 `enabled=False`) drops those
 tokens from the chat allowlist. Cataloged skills with no trust row stay
 on. No keyword force-load.
 The classifier stays `--tools ""`. Pipeline stage-attach is unchanged.
+HP-112 host skills (`hivepilot/host_skills.py`) search that local catalog
+and delegate through HivePilot `run_subagent` / `spawn_peer` / pipelines.
 
 ### Memory proposals HITL (HP-101)
 

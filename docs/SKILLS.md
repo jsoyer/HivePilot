@@ -17,7 +17,8 @@ and the read-only [runtime-to-skill audit](runtime-to-skill-audit.md).
 Pipeline stage-attach (`PipelineStage.skills` /
 `hivepilot stage attach-skill`) is unchanged. HP-108 gates **concierge/chat
 tool tokens** from enabled skills; it does not keyword force-load or
-auto-attach a skill onto a pipeline stage.
+auto-attach a skill onto a pipeline stage. HP-112 host skills search that
+catalog and delegate through HivePilot subagent / peer / pipeline APIs.
 
 For the general plugin loading and trust model, see [PLUGINS.md](PLUGINS.md).
 
@@ -246,7 +247,8 @@ pattern rewritten locally (no vendored TS):
 - Ranking text is name + description only. `disclose` returns the
   `SKILL.md` body after selection (progressive disclosure).
 - Order is deterministic (`-score`, then name, then revision id). Zero
-  model queries. Hybrid embedding RRF is HP-114.
+  model queries. Hybrid embedding RRF is HP-114. HP-112 `discover` is the
+  host entry that calls this ranker.
 
 ## Evolution drafts (HP-109)
 
@@ -298,6 +300,21 @@ are structural.
 - Pollen → Operate → **Skills** shows per-file diffs and an `@xyflow` lineage
   DAG. Approve / reject first; Accept stays disabled until APPROVED.
 
+## Host skills (HP-112)
+
+`hivepilot/host_skills.py` is the OpenSpace host-skills pattern rewritten
+locally (no remote skill host, no pickle):
+
+- `discover` calls HP-107 BM25 over the HP-98 catalog. HP-105 filters run
+  before scoring. Hits are cards; `disclose` returns the body after
+  selection. No query argument attaches a skill to a stage (HP-108 /
+  HP-103 attach stays explicit YAML).
+- `delegate` modes are `subagent` / `peer` / `pipeline` — HivePilot
+  `run_subagent`, `spawn_peer`, and `Orchestrator.run_pipeline` (or a
+  registered pipeline runner).
+- Bundled plugin `host_skills` publishes `skill-discovery` and
+  `delegate-task` SkillSpecs. They grant no HP-95 tool tokens.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.
@@ -317,4 +334,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - [PIPELINES-AND-ROLES.md](PIPELINES-AND-ROLES.md) — pipeline stages, task steps, and roles
 - [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md) — HP-103 doctrine (capability vs runtime)
 - HP-111 atomic accept: `hivepilot/skill_evolution_accept.py` + Pollen workshop diffs / lineage
+- HP-112 host skills: `hivepilot/host_skills.py` (`discover` / `delegate`)
 - [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine

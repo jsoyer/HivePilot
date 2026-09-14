@@ -3,7 +3,8 @@
 Coworker ``skill-capabilities.ts`` pattern, rewritten in Python. This
 module does **not** vendor Coworker TS/Electron, keyword-match a chat
 message to force-load skills, change ``PipelineStage.skills`` /
-``hivepilot stage attach-skill``, or apply HP-109 / HP-112 / HP-114.
+``hivepilot stage attach-skill``, or apply HP-109 / HP-114. HP-112
+host skills (`hivepilot.host_skills`) do not keyword-load a skill.
 
 Contracts:
 
