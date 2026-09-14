@@ -19,7 +19,8 @@ Statuses: PENDING | APPROVED | REJECTED | EDITED | EXPIRED.
 ``submit(kind=skill_evolution)`` rejects a claim that is not HP-99
 admissible (missing or foreign-tenant evidence refs). Memory
 apply-after-approve is ``hivepilot.memory_proposals`` (HP-101). This
-module does not apply tool calls or skill-evolution writes (HP-109).
+module does not apply tool calls. Skill-evolution drafts are HP-109;
+atomic accept is HP-111.
 HP-105 trust reviews use ``create_pending`` (no auto-decide).
 Idempotent ``side_effects`` + ``pending_tool`` resume live in
 ``hivepilot.side_effects`` / ``hivepilot.checkpoints`` (HP-100).

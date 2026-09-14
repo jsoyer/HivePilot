@@ -219,6 +219,12 @@ def _summary(proposal: PassProposal) -> str:
         target = str(payload.get("target") or "")
         key = str(payload.get("key") or payload.get("path") or "")
         return " ".join(part for part in (target, key) if part).strip() or proposal.action
+    if proposal.kind == "skill_evolution":
+        evo = str(payload.get("evolution_type") or proposal.action or "")
+        name = str(payload.get("name") or payload.get("skill_name") or "")
+        labeled = " ".join(part for part in (evo, name) if part).strip()
+        if labeled:
+            return labeled
     token = proposal.action or str(payload.get("token") or payload.get("action") or "")
     return token or proposal.kind
 

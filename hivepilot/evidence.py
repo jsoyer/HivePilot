@@ -2,7 +2,7 @@
 
 OpenSpace ``skill_engine/evidence/*`` pattern, rewritten in Python. This
 module does **not** vendor OpenSpace, talk to OpenSpace cloud, persist
-pickle embeddings, or implement HP-109 FIX/DERIVED/CAPTURED apply paths.
+pickle embeddings, or implement HP-111 atomic accept of FIX/DERIVED/CAPTURED.
 
 Contracts:
 
@@ -16,7 +16,7 @@ Contracts:
 
 ``pass_store.submit(kind=skill_evolution)`` uses ``assess_evolution_claim``
 to reject non-admissible proposals. ``create_pending`` stays persist-first
-(HP-97). Applying an approved evolution is HP-109.
+(HP-97). Draft FIX/DERIVED/CAPTURED is HP-109; atomic accept is HP-111.
 """
 
 from __future__ import annotations

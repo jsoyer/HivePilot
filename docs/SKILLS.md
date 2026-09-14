@@ -212,7 +212,8 @@ HP-79 `skill_usage_events` stays an append-only workshop log.
   Multiple or missing subjects → `ambiguous` (PASS review). Tool / env /
   permission → `not_skill` (trust unchanged).
 - FIX is admissible only with a **revision + causal event + representative
-  result**. Draft apply is HP-109; this module only gates the triple.
+  result**. This module only gates the triple. Persisting a PASS draft is
+  HP-109; apply/commit is HP-111.
 
 ## Skill→tools gate (HP-108)
 
@@ -246,6 +247,24 @@ pattern rewritten locally (no vendored TS):
   `SKILL.md` body after selection (progressive disclosure).
 - Order is deterministic (`-score`, then name, then revision id). Zero
   model queries. Hybrid embedding RRF is HP-114.
+
+## Evolution drafts (HP-109)
+
+`hivepilot/skill_evolution.py` is the OpenSpace EvolutionType pattern
+(rewritten; no cloud, no pickle, no autonomous mode):
+
+- Types: `FIX` / `DERIVED` / `CAPTURED`. Origins match HP-98
+  (`fixed` / `derived` / `captured`).
+- Admissible drafts land in the HP-97 PASS inbox (`kind=skill_evolution`).
+  They never write skill files, `.skill_id` sidecars, or catalog revisions.
+- `CAPTURED` requires independent validation: an execution evidence ref
+  plus a **distinct** validation ref. Whole-task `completed` on the same
+  run is not sufficient. A caller flag is not enough.
+- Merge keys are deterministic and idempotent. A second propose with the
+  same key returns the existing card.
+- `create_pending` only — no `submit` / `match_auto`, no OpenSpace
+  `autonomous` evolution mode. `apply_approved` is an HP-111 hook that
+  always refuses mutation.
 
 ## Skill workshop (HP-79)
 
