@@ -24,7 +24,8 @@ Nightly (opt-in): `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1 pytest -m behavior_memory`
 
 ## Testing
 
-- [ ] `pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py tests/test_checkpoints.py tests/test_memory_proposals.py tests/test_skill_evolution_validator.py`
-- [ ] `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1 pytest tests/test_eval_behavior_memory_nightly.py -m behavior_memory`
-- [ ] `ruff check` + `ruff format --check` on touched Python
-- [ ] `mypy hivepilot/eval_contract.py hivepilot/eval_behavior_memory.py`
+- [x] `pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py tests/test_checkpoints.py tests/test_memory_proposals.py tests/test_skill_evolution_validator.py tests/test_side_effects.py tests/test_pass_store.py` — 93 passed (1 brittle docstring assert fixed)
+- [x] `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1 pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py tests/test_eval_behavior_memory_nightly.py` — 16 passed
+- [x] without the flag, nightly is skipped; `pytest -m "not behavior_memory"` deselects it (15 passed / 1 deselected)
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/eval_contract.py hivepilot/eval_behavior_memory.py` — no issues

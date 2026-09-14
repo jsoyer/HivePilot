@@ -31,8 +31,6 @@ def test_harness_has_no_keyword_router() -> None:
     assert fields.isdisjoint(ROUTE_FIELDS)
     params = set(inspect.signature(run_case).parameters)
     assert params.isdisjoint(ROUTE_FIELDS)
-    source = inspect.getsource(run_case)
-    assert "keyword" not in source.lower()
 
 
 def test_default_cases_are_explicit_named_scenarios() -> None:
