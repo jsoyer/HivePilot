@@ -1,9 +1,10 @@
 """HP-107 local BM25 skill retrieval — deterministic, 0 model queries.
 
 OpenSpace ``skill_engine/skill_ranker`` BM25 stage, rewritten in Python.
-This module does **not** vendor a BM25 package, call an embedding API,
-persist pickle caches, talk to OpenSpace cloud, or implement HP-114
-hybrid RRF. HP-112 host skills (`hivepilot.host_skills`) call this
+This module does **not** vendor a BM25 package, persist pickle caches,
+or talk to OpenSpace cloud. HP-114 hybrid RRF is optional and lives in
+``hivepilot.skill_embeddings``: default provider is off, so retrieve is
+pure BM25. HP-112 host skills (`hivepilot.host_skills`) call this
 ranker. HP-108 skill→tools lives in ``hivepilot.skill_capabilities``.
 
 Contracts:
@@ -15,6 +16,8 @@ Contracts:
   returns the ``SKILL.md`` body after selection.
 - Order is deterministic: ``(-score, name, revision_id)``. Same query +
   same eligible set ⇒ same hits.
+- Provider off (the default) ⇒ BM25 scores and order unchanged. Hybrid
+  never starts a network client on that path.
 """
 
 from __future__ import annotations
@@ -25,6 +28,11 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 from hivepilot.skill_catalog import SkillCatalog, SkillRevision
+from hivepilot.skill_embeddings import (
+    EmbeddingProvider,
+    fuse_bm25_cosine,
+    revision_hash,
+)
 from hivepilot.skill_trust import TRUSTED, SkillTrust, get
 
 DEFAULT_TOP_K = 10
@@ -200,9 +208,16 @@ def _passes_trust_filter(trust: SkillTrust, *, include_provisional: bool) -> boo
 class SkillRanker:
     """Local BM25 over a catalog. Filters first, then scores, then discloses."""
 
-    def __init__(self, catalog: SkillCatalog, *, tenant: str = "default") -> None:
+    def __init__(
+        self,
+        catalog: SkillCatalog,
+        *,
+        tenant: str = "default",
+        provider: EmbeddingProvider | None = None,
+    ) -> None:
         self.catalog = catalog
         self.tenant = (tenant or "default").strip() or "default"
+        self.provider = provider
 
     def retrieve(
         self,
@@ -210,6 +225,7 @@ class SkillRanker:
         *,
         top_k: int = DEFAULT_TOP_K,
         include_provisional: bool = True,
+        provider: EmbeddingProvider | None = None,
     ) -> tuple[SkillHit, ...]:
         """Rank eligible skills. Hits never carry a body."""
         if top_k < 1:
@@ -221,6 +237,24 @@ class SkillRanker:
             return ()
         documents = [ranking_text(row.revision.name, row.revision.description) for row in pool]
         scores = bm25_scores(query, documents)
+        active = self.provider if provider is None else provider
+        if active is not None:
+            scores = fuse_bm25_cosine(
+                query,
+                documents,
+                [
+                    revision_hash(
+                        row.revision.revision_id,
+                        row.revision.content_hash,
+                        text,
+                    )
+                    for row, text in zip(pool, documents)
+                ],
+                [row.revision.name for row in pool],
+                [row.revision.revision_id for row in pool],
+                scores,
+                active,
+            )
         hits = [
             SkillHit(
                 revision_id=row.revision.revision_id,
@@ -263,9 +297,10 @@ def retrieve(
     tenant: str = "default",
     top_k: int = DEFAULT_TOP_K,
     include_provisional: bool = True,
+    provider: EmbeddingProvider | None = None,
 ) -> tuple[SkillHit, ...]:
     """Module-level retrieve used by tests and later hosts."""
-    return SkillRanker(catalog, tenant=tenant).retrieve(
+    return SkillRanker(catalog, tenant=tenant, provider=provider).retrieve(
         query,
         top_k=top_k,
         include_provisional=include_provisional,

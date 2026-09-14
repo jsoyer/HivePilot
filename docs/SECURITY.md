@@ -119,6 +119,9 @@ requires revision + causal event + representative result (drafts are
 HP-109; atomic accept is HP-111). HP-107 skill retrieval (`hivepilot/skill_ranker.py`) is local
 Okapi BM25 over enabled (and optionally provisional) active revisions —
 0 model queries, no pickle, body only after `disclose`.
+HP-114 hybrid RRF (`hivepilot/skill_embeddings.py`) is opt-in: flag off
+⇒ BM25 unchanged and 0 network. Cache rows are JSON vectors keyed by
+`(revision_hash, model, dims)` — never pickle.
 HP-108 (`hivepilot/skill_capabilities.py`) maps skill → HP-95 tool tokens
 for concierge/chat only. Skill off (HP-105 `enabled=False`) drops those
 tokens from the chat allowlist. Cataloged skills with no trust row stay

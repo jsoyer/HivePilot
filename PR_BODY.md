@@ -1,31 +1,32 @@
 ## Summary
 
-HP-113: 0-model eval contract in default PR CI, plus an opt-in nightly behavior-memory suite. Denied / traversal / pending never mutate; approve×2 is one HP-100 side-effect. The harness takes explicit `gate` × `surface` × `token`/`path` — no keyword routing.
+HP-114: optional BM25 + cosine hybrid via reciprocal rank fusion. Default path stays HP-107 BM25 (0 embed calls, 0 network). When a provider is passed or `HIVEPILOT_SKILL_EMBEDDINGS` is on **and** a provider is registered, ranks are fused with RRF (k=60). Document vectors cache in SQLite as JSON floats, keyed by `(revision_hash, model, dims)`. **Never pickle.** Cosine does not replace BM25.
 
-Owning issue: [HP-113](https://linear.app/js-workspace/issue/HP-113/u-19-eval-contract-ci-behavior-memory-opt-in)
+Owning issue: [HP-114](https://linear.app/js-workspace/issue/HP-114/u-20-embeddings-hybrid-rrf-optionnel-no-pickle)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-95 catalog, HP-97 PASS, HP-100 idempotency, HP-101 memory HITL.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-107 BM25, HP-98 revision hashes, HP-112 `discover`.
 
-Replay: `pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py`
-Nightly (opt-in): `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1 pytest -m behavior_memory`
+Replay: `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py`
 
 ## What changed
 
-1. **`hivepilot/eval_contract.py`** — deterministic contract harness (no LLM). `check_suite()` asserts denied/traversal/pending → 0 effects and approve×2 → 1 effect via HP-100 keys.
-2. **`hivepilot/eval_behavior_memory.py`** — HITL memory scenarios, gated on `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1`.
-3. **CI** — default `pytest` excludes `@pytest.mark.behavior_memory`. `.github/workflows/nightly.yml` runs that marker when dispatched or when repository variable `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1`.
-4. **Docs** — SECURITY / ARCHITECTURE record the contract and the opt-in nightly flag.
+1. **`hivepilot/skill_embeddings.py`** — `EmbeddingProvider` protocol, RRF, cosine, JSON cache. Flag off ignores a registered provider.
+2. **`hivepilot/skill_ranker.py`** — optional `provider` on `SkillRanker` / `retrieve`. Off ⇒ identical BM25 hits and scores.
+3. **`hivepilot/host_skills.py`** — `discover` uses `configured_embedding_provider()` so hybrid is opt-in on the host path.
+4. **`skill_embeddings` table** in `state_service.init_db()`.
+5. **Docs** — SKILLS / SECURITY / ARCHITECTURE.
 
 ## Out of scope
 
-- HP-114 hybrid RRF
+- Shipping a mandatory or network embedding backend
 - WhatsApp, HP-67 sandbox, cloud OpenSpace, autonomous evolve
-- Vendored Coworker evals / keyword skill routing
+- Vendored OpenSpace pickle / replace-only ranking
 
 ## Testing
 
-- [x] `pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py tests/test_checkpoints.py tests/test_memory_proposals.py tests/test_skill_evolution_validator.py tests/test_side_effects.py tests/test_pass_store.py` — 93 passed (1 brittle docstring assert fixed)
-- [x] `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1 pytest tests/test_eval_contract.py tests/test_eval_behavior_memory.py tests/test_eval_behavior_memory_nightly.py` — 16 passed
-- [x] without the flag, nightly is skipped; `pytest -m "not behavior_memory"` deselects it (15 passed / 1 deselected)
+- [x] `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py` — 46 passed
 - [x] `ruff check` + `ruff format --check` clean on touched Python
-- [x] `mypy hivepilot/eval_contract.py hivepilot/eval_behavior_memory.py` — no issues
+- [x] `mypy hivepilot/skill_embeddings.py hivepilot/skill_ranker.py hivepilot/host_skills.py` — no issues
+- [x] CI mypy follow-up: typed `_skill(..., front=...)` and dropped `list.append(...) or` in host-skills tests (pre-existing on main, blocked `mypy hivepilot tests`)
+- [x] Local `mypy hivepilot tests` — no issues (839 files)
+- [x] CI pytest follow-up: `host_skills_enabled` + installer classification (HP-112 plugin gating) — 113 passed

@@ -614,6 +614,21 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_skill_trust_obs_rev "
             "ON skill_trust_observations (tenant, revision_id, outcome)"
         )
+        # HP-114 optional hybrid embeddings. JSON float arrays only — no
+        # pickle. Keyed by (revision_hash, model, dims). Unused when the
+        # provider is off (default BM25).
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_embeddings (
+                revision_hash TEXT NOT NULL,
+                model TEXT NOT NULL,
+                dims INTEGER NOT NULL,
+                vector TEXT NOT NULL,
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (revision_hash, model, dims)
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

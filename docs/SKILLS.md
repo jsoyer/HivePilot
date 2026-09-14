@@ -247,8 +247,28 @@ pattern rewritten locally (no vendored TS):
 - Ranking text is name + description only. `disclose` returns the
   `SKILL.md` body after selection (progressive disclosure).
 - Order is deterministic (`-score`, then name, then revision id). Zero
-  model queries. Hybrid embedding RRF is HP-114. HP-112 `discover` is the
-  host entry that calls this ranker.
+  model queries when the optional embedding provider is off (the default).
+  HP-112 `discover` is the host entry that calls this ranker.
+
+## Hybrid embeddings (HP-114)
+
+`hivepilot/skill_embeddings.py` is an **optional** RRF fuse of BM25 +
+cosine. It is off unless `HIVEPILOT_SKILL_EMBEDDINGS` is a truthy flag
+(`1` / `true` / `yes` / `on`) **and** a provider is registered or passed
+in. Flag off ⇒ retrieve is byte-identical to HP-107 BM25 and makes **0**
+embed / network calls, even if a provider object exists in the process.
+
+- Cache is SQLite/Postgres table `skill_embeddings`, keyed by
+  `(revision_hash, model, dims)`. `revision_hash` covers the HP-98
+  revision id + content hash + ranking surface. Vectors are JSON float
+  arrays. **Never pickle.**
+- Fusion is reciprocal rank fusion (k=60) of the BM25 ranking and the
+  cosine ranking. Cosine does not replace BM25 (OpenSpace replace-only
+  ranking is not copied).
+- A cache hit skips `provider.embed` for that revision. Provider errors
+  fall back to BM25.
+- `SkillRanker` / `discover` accept an explicit `provider`. Hosts that
+  omit it use `configured_embedding_provider()`.
 
 ## Evolution drafts (HP-109)
 
@@ -305,7 +325,8 @@ are structural.
 `hivepilot/host_skills.py` is the OpenSpace host-skills pattern rewritten
 locally (no remote skill host, no pickle):
 
-- `discover` calls HP-107 BM25 over the HP-98 catalog. HP-105 filters run
+- `discover` calls HP-107 BM25 over the HP-98 catalog (HP-114 hybrid RRF
+  only when the embedding provider is enabled). HP-105 filters run
   before scoring. Hits are cards; `disclose` returns the body after
   selection. No query argument attaches a skill to a stage (HP-108 /
   HP-103 attach stays explicit YAML).
@@ -335,4 +356,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md) — HP-103 doctrine (capability vs runtime)
 - HP-111 atomic accept: `hivepilot/skill_evolution_accept.py` + Pollen workshop diffs / lineage
 - HP-112 host skills: `hivepilot/host_skills.py` (`discover` / `delegate`)
+- HP-114 optional hybrid RRF: `hivepilot/skill_embeddings.py` (off by default)
 - [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine

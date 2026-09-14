@@ -10,17 +10,21 @@ local `@dataclass`. Local-file plugins are loaded via
 `importlib.util.spec_from_file_location()` / `exec_module()`, which never
 registers the module in `sys.modules`.
 
-Always on when plugins load. Still respects the central plugin gate
-(`settings.plugins_enabled` / `settings.plugins_disabled`, keyed off this
-file's stem `host_skills`).
+Gated on `settings.host_skills_enabled` (default True). `register()`
+returns `{}` when the flag is False. Still respects the central plugin
+gate (`settings.plugins_enabled` / `settings.plugins_disabled`, keyed
+off this file's stem `host_skills`).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from hivepilot.config import settings
 from hivepilot.host_skills import skill_specs
 
 
 def register() -> dict[str, Any]:
+    if not settings.host_skills_enabled:
+        return {}
     return {"skills": [dict(spec) for spec in skill_specs()]}

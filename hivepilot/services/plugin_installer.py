@@ -308,6 +308,19 @@ KNOWN_EXAMPLE_PLUGINS: dict[str, ExamplePluginSpec] = {
             "nothing"
         ),
     ),
+    "host_skills": ExamplePluginSpec(
+        name="host_skills",
+        description=(
+            "Local skill-discovery + delegate-task SkillSpecs (HP-112). Search is "
+            "HP-107 BM25; optional HP-114 hybrid RRF when embeddings are enabled."
+        ),
+        env_flag="HIVEPILOT_HOST_SKILLS_ENABLED",
+        prereq_kind="none",
+        prereq_detail=(
+            "nothing to install. Discovery is local catalog search; delegate "
+            "uses HivePilot subagent / peer / pipeline APIs"
+        ),
+    ),
     "kms": ExamplePluginSpec(
         name="kms",
         description="A `secrets` provider backed by a cloud KMS (AWS/GCP/Azure) for ${secret:NAME} decryption.",
