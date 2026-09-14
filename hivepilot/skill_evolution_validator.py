@@ -26,7 +26,6 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import unquote
 
 import yaml
 
@@ -36,6 +35,7 @@ from hivepilot.pass_store import get as get_proposal
 from hivepilot.services.config_provenance import REDACTED, registered_secret_values
 from hivepilot.services.token_service import ROLE_RANKS
 from hivepilot.skill_dirs import MAX_SKILL_FILE_BYTES, MAX_SKILL_FILES, SKILL_MANIFEST
+from hivepilot.workspace_paths import SYMLINK_ESCAPE, confine, normalize_relpath
 
 # Closed vocabularies. Adding a token is additive; renaming is a breaking change.
 APPROVE = "approve"
@@ -353,36 +353,25 @@ def _check_paths(
             continue
         if root is None:
             continue
-        candidate = skill_root / rel
-        if candidate.is_symlink() or candidate.exists():
-            try:
-                resolved = candidate.resolve()
-                resolved.relative_to(root)
-            except (OSError, ValueError):
-                findings.append(
-                    ValidationFinding(
-                        check="symlink",
-                        result=REJECT,
-                        code="symlink_escape",
-                        detail=rel,
-                    )
+        confined = confine(rel, root=root)
+        if not confined.ok and confined.code == SYMLINK_ESCAPE:
+            findings.append(
+                ValidationFinding(
+                    check="symlink",
+                    result=REJECT,
+                    code="symlink_escape",
+                    detail=rel,
                 )
+            )
     return findings
 
 
 def _unsafe_relpath(rel: str) -> str:
-    if not rel or "\x00" in rel:
-        return "path_null" if "\x00" in rel else "path_empty"
-    cleaned = unquote(rel.replace("\\", "/"))
-    if cleaned.startswith("/") or cleaned.startswith("~"):
-        return "path_absolute"
-    if re.match(r"^[A-Za-z]:", cleaned):
-        return "path_absolute"
-    path = Path(cleaned)
-    if path.is_absolute():
-        return "path_absolute"
-    parts = path.parts
-    if any(part in {"", ".", ".."} for part in parts):
+    cleaned, code = normalize_relpath(rel)
+    if code:
+        return code
+    parts = Path(cleaned).parts
+    if any(part in {"", "."} for part in parts):
         return "path_traversal"
     if any(part.startswith(".") for part in parts):
         return "path_hidden"
