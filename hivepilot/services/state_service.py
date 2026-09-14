@@ -491,7 +491,7 @@ def init_db() -> None:
         )
         # HP-99 tenant-scoped evidence refs. Watermark is change_log.id
         # (written at ingest in hivepilot.evidence). Missing refs make a
-        # skill_evolution claim non-admissible; apply paths are HP-109.
+        # skill_evolution claim non-admissible; drafts are HP-109, accept HP-111.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS evidence_refs (

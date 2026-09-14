@@ -3,7 +3,7 @@
 OpenSpace ``SkillTrustState`` / ``record_trust_observation`` pattern,
 rewritten in Python. This module does **not** vendor OpenSpace, talk to
 OpenSpace cloud, persist pickle embeddings, or implement HP-107 BM25 /
-HP-109 FIX apply. HP-108 skill→tools lives in
+HP-109 evolution apply. HP-108 skill→tools lives in
 ``hivepilot.skill_capabilities`` and reads the ``enabled`` flag.
 
 Contracts:

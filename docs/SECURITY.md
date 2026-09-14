@@ -90,7 +90,7 @@ Isolated memory is JSON **data** (`role=data`), never system/instruction text an
 
 Rules:
 
-1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying tools is HP-100. Skill trust (provisional↔trusted) is HP-105; applying an approved evolution is HP-109. Memory apply-after-approve is HP-101.
+1. **Persist first.** `create_pending` writes `PENDING`. `decide` commits approve/reject/edit/expire **before** any `side_effect` callback. A raising callback cannot roll back the decision. Applying tools is HP-100. Skill trust (provisional↔trusted) is HP-105; evolution drafts are HP-109 and atomic accept is HP-111. Memory apply-after-approve is HP-101.
 2. **Edit cannot retarget.** `path`, `revision`, and `expected_revision` stay frozen. Body text / args may change.
 3. **`match_auto` composes** tool-catalog policy + HP-61 rules + HP-86 `change_class`. Only `mechanical` may auto-approve. `product_fork` / `security` / `destructive` / `unknown` stay HITL. Catalog `deny` wins; catalog `require_approval` stays HITL (rules may still deny).
 4. **Not WhatsApp, not HP-67.** Four Telegram doors stay the presenter surface.
@@ -115,8 +115,8 @@ inter-runs; attributed failure demotes; ambiguous failure opens a PASS
 `trust_review` and does not auto-demote. HP-106
 (`hivepilot/skill_signals.py`) classifies tool / env / permission /
 skill-defect; a network outage is `env` and must not demote trust. FIX
-requires revision + causal event + representative result (apply is
-HP-109). HP-107 skill retrieval (`hivepilot/skill_ranker.py`) is local
+requires revision + causal event + representative result (drafts are
+HP-109; atomic accept is HP-111). HP-107 skill retrieval (`hivepilot/skill_ranker.py`) is local
 Okapi BM25 over enabled (and optionally provisional) active revisions —
 0 model queries, no pickle, body only after `disclose`.
 HP-108 (`hivepilot/skill_capabilities.py`) maps skill → HP-95 tool tokens
@@ -149,7 +149,7 @@ Telegram doors stay inbox | approvals | runs | alerts.
 - Ingest redacts registered secret values and secret-looking metadata keys before persist.
 - Each ingest emits an HP-40 `change_log` row; the ref **watermark is `change_log.id`**.
 - Packets are bounded (`max_chars` / `max_refs`); omitted refs are listed, not silently dropped.
-- A `skill_evolution` claim that cites missing or empty refs is **not admissible**. `pass_store.submit` persists PENDING first, then rejects with that reason. Applying FIX/DERIVED/CAPTURED is HP-109.
+- A `skill_evolution` claim that cites missing or empty refs is **not admissible**. `pass_store.submit` persists PENDING first, then rejects with that reason. HP-109 drafts FIX/DERIVED/CAPTURED into PASS (`hivepilot/skill_evolution.py`) without writing skill files; atomic accept is HP-111.
 
 ### HP-61 change class (mechanical vs ask)
 

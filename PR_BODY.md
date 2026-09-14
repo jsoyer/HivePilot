@@ -1,28 +1,26 @@
 ## Summary
 
-HP-108: skill→tools gate for concierge/chat. A skill maps to HP-95 catalog tokens; when the skill is off (HP-105 `enabled=False`), those tokens are absent from the chat allowlist. Cataloged skills with no trust row stay on. Pipeline stage-attach is unchanged. No keyword force-load.
+HP-109: draft-only FIX / DERIVED / CAPTURED skill-evolution proposals into the HP-97 PASS inbox. No skill file or `.skill_id` write. CAPTURED requires independent validation (execution ref + a distinct validation ref; same-run `completed` is not enough). Merge keys are idempotent. OpenSpace autonomous evolution mode is a hard no-go. Atomic accept stays HP-111.
 
-Owning issue: [HP-108](https://linear.app/js-workspace/issue/HP-108/u-14-skilltools-gate-conciergechat)
+Owning issue: [HP-109](https://linear.app/js-workspace/issue/HP-109/u-15-propositions-fixderivedcaptured-draft-only)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / [skills-first HP-103](https://linear.app/js-workspace/issue/HP-103/u-09-doctrine-skills-first-audit-top-5-runtimeskill) / plan `coworker-openspace`. Builds on HP-95 tool catalog and HP-105 `enabled`.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-97 PASS, HP-98 origins, HP-99 evidence, HP-106 FIX triple / `draft_fix_proposal`.
 
-Replay: `pytest tests/test_skill_capabilities.py tests/test_telegram_bot.py tests/test_discord_bot.py tests/test_slack_bot.py tests/test_chatops_service.py tests/test_concierge_service.py tests/test_skill_orchestrator_wiring.py tests/test_cli_config_commands.py -k attach`
+Replay: `pytest tests/test_skill_evolution.py tests/test_skill_signals.py tests/test_pass_store.py tests/test_evidence.py`
 
 ## What changed
 
-1. **`hivepilot/skill_capabilities.py`** — Coworker `skill-capabilities.ts` rewritten (Python only; no vendored TS). Map skill → tokens (`SKILL.md` `allowed-tools`, overlay, bundled `improve` default only when that skill is cataloged). `resolve_chat_tools` drops tokens whose owners are all off. `chat_tool_surface` / `on_chat_surface` mark concierge/chat runs so `_role_runner_options` filters; CLI pipelines pass through.
-2. **Concierge/chat wiring** — `resolve_role_chat_tools` on the concierge service. ChatOps / Telegram / Discord / Slack `run_task` / `run_pipeline` run under the chat surface. Classifier stays `--tools ""`.
-3. **Docs** — SKILLS / SECURITY / ARCHITECTURE / pipelines / skills-first ADR note the chat-only gate and unchanged stage-attach.
+1. **`hivepilot/skill_evolution.py`** — `propose` / `propose_fix` persist PENDING `kind=skill_evolution` via `create_pending` (never `submit` / `match_auto`). CAPTURED gate + merge-key idempotency. `apply_approved` / `preview_accept` are HP-111 hooks that refuse mutation.
+2. **`hivepilot/skill_signals.py`** — `draft_fix_proposal` stays the eligibility stub (`persisted=False`); persist is `propose_fix`.
+3. **Docs** — SKILLS / SECURITY / ARCHITECTURE note draft-only, CAPTURED independence, no autonomous apply.
 
 ## Out of scope
 
-- HP-109 FIX/DERIVED/CAPTURED apply, HP-112 host skills, HP-114 hybrid RRF
-- WhatsApp, HP-67 sandbox, vendored Coworker TS / Electron
-- Changing `PipelineStage.skills` or `hivepilot stage attach-skill`
+- HP-110 deterministic validator, HP-111 atomic accept / Pollen diff UI (hooks only)
+- HP-112, HP-114, WhatsApp, HP-67 sandbox
+- Vendored OpenSpace / pickle / cloud / `EVOLUTION_MODE=autonomous`
 
 ## Testing
 
-- [x] `pytest tests/test_skill_capabilities.py` — 24 passed
-- [x] `pytest tests/test_telegram_bot.py tests/test_discord_bot.py tests/test_slack_bot.py tests/test_chatops_service.py tests/test_concierge_service.py tests/test_skill_orchestrator_wiring.py` — 424 passed
-- [x] `pytest tests/test_skill_trust.py tests/test_skill_ranker.py tests/test_cli_config_commands.py` (incl. attach) — passed
-- [x] `ruff check` + `ruff format --check` on touched Python — clean
+- [x] `pytest tests/test_skill_evolution.py tests/test_skill_signals.py tests/test_pass_store.py tests/test_evidence.py tests/test_skill_catalog.py tests/test_presenters.py` — 97 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python

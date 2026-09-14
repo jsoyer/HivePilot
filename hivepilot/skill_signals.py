@@ -2,9 +2,9 @@
 
 OpenSpace ``skill_engine/signals`` detector + linker pattern, rewritten
 in Python. This module does **not** vendor OpenSpace, talk to OpenSpace
-cloud, persist pickle embeddings, implement HP-107 BM25, or apply
-HP-109 FIX/DERIVED/CAPTURED. HP-108 skill→tools lives in
-``hivepilot.skill_capabilities``.
+cloud, persist pickle embeddings, or implement HP-107 BM25. HP-108
+skill→tools lives in ``hivepilot.skill_capabilities``. HP-109 persists
+FIX/DERIVED/CAPTURED drafts; apply/commit is HP-111.
 
 Contracts:
 
@@ -15,8 +15,8 @@ Contracts:
   ``tool`` / ``env`` / ``permission`` are ``not_skill``. Unrecognized
   evidence is ``ambiguous`` (review, never auto-demote).
 - FIX is admissible only with a revision + causal event + representative
-  result. This module gates that triple; it does not persist or apply a
-  proposal (HP-109).
+  result. This module gates that triple. Persisting a PASS draft is
+  ``hivepilot.skill_evolution`` (HP-109); apply/commit is HP-111.
 """
 
 from __future__ import annotations
@@ -192,7 +192,7 @@ class FailureAttribution:
 
 @dataclass(frozen=True)
 class FixEligibility:
-    """FIX gate. Apply/commit is HP-109 — this only names the missing pieces."""
+    """FIX gate. Persist is HP-109; apply/commit is HP-111."""
 
     admissible: bool
     revision_id: str = ""
@@ -441,13 +441,15 @@ def assess_fix_eligibility(
 
 
 def draft_fix_proposal(attribution: FailureAttribution) -> dict[str, Any]:
-    """Describe a FIX draft. Does not persist or apply (HP-109)."""
+    """Describe a FIX draft. Persist via ``skill_evolution.propose_fix``."""
     eligibility = assess_fix_eligibility(attribution)
     return {
         "kind": "skill_evolution",
         "action": "fix",
         "status": "draft" if eligibility.admissible else "blocked",
         "admissible": eligibility.admissible,
+        "persisted": False,
+        "proposal_id": "",
         "eligibility": eligibility.to_dict(),
         "attribution": attribution.to_dict(),
     }
