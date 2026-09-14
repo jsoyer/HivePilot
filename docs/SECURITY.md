@@ -141,6 +141,11 @@ on. No keyword force-load.
 The classifier stays `--tools ""`. Pipeline stage-attach is unchanged.
 HP-112 host skills (`hivepilot/host_skills.py`) search that local catalog
 and delegate through HivePilot `run_subagent` / `spawn_peer` / pipelines.
+HP-117 (`hivepilot/skill_taxonomy.py`) is a tenant-scoped logical package
+tree: reclassify updates `logical_id → category_path` only and never
+moves skill files. Ambiguous classifier output is `needs_review` (PASS
+`taxonomy_review`); there is no disk-layout helper and no cloud browse /
+auth / upload surface.
 HP-115 (`hivepilot/browser_grant.py`) is a short-lived grant on the
 existing HP-68 loopback CDP: tied to `run_id`, issued via PASS
 `kind=tool` / `BrowserCDP`, dead when `complete_run` fires. No grant ⇒
