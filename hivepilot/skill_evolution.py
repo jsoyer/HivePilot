@@ -2,9 +2,10 @@
 
 OpenSpace ``EvolutionType`` pattern, rewritten in Python. This module does
 **not** vendor OpenSpace, talk to OpenSpace cloud, persist pickle
-embeddings, write ``.skill_id`` sidecars, implement HP-110 validator,
-HP-111 atomic accept / Pollen diff, HP-112, HP-114, or OpenSpace
-``autonomous`` evolution mode.
+embeddings, write ``.skill_id`` sidecars, implement HP-111 atomic
+accept / Pollen diff, HP-112, HP-114, or OpenSpace ``autonomous``
+evolution mode. HP-110 validation lives in
+``hivepilot.skill_evolution_validator`` and is a read-only gate.
 
 Contracts:
 
@@ -41,6 +42,7 @@ from hivepilot.pass_store import (
 )
 from hivepilot.services import events
 from hivepilot.skill_catalog import SKILL_ID_SIDECAR, logical_skill_id, snapshot_hash
+from hivepilot.skill_evolution_validator import REJECT, validate, validate_proposal
 from hivepilot.skill_signals import FailureAttribution, assess_fix_eligibility
 
 # Closed vocabularies. Adding a token is additive; renaming is a breaking change.
@@ -274,6 +276,8 @@ def propose(
     attribution: FailureAttribution | None = None,
     mode: str = "",
     auto_apply: bool = False,
+    baseline_files: Mapping[str, str] | None = None,
+    specific_approvals: Sequence[str] = (),
 ) -> EvolutionDraft:
     """Stage a draft into PASS. Never writes skill bytes or auto-applies."""
     _refuse_autonomous(mode, auto_apply)
@@ -380,8 +384,21 @@ def propose(
         "representative_result": (representative_result or "").strip(),
         "revision_id": (revision_id or "").strip(),
         "skill_id_sidecar": SKILL_ID_SIDECAR,
+        "specific_approvals": list(specific_approvals),
         "validation_ref": (validation_ref or "").strip(),
     }
+    verdict = validate(
+        files=files_copy,
+        name=skill_name,
+        baseline_files=baseline_files,
+        specific_approvals=specific_approvals,
+    )
+    payload["validation"] = verdict.to_dict()
+    if verdict.result == REJECT:
+        if "validation" not in missing:
+            missing.append("validation")
+        if not reason:
+            reason = verdict.reason or "validation_rejected"
     if reason:
         return EvolutionDraft(
             evolution_type=kind,
@@ -441,6 +458,8 @@ def propose_fix(
     name: str = "",
     mode: str = "",
     auto_apply: bool = False,
+    baseline_files: Mapping[str, str] | None = None,
+    specific_approvals: Sequence[str] = (),
 ) -> EvolutionDraft:
     """Persist a FIX draft from an HP-106 attribution. Does not apply."""
     return propose(
@@ -452,6 +471,8 @@ def propose_fix(
         attribution=attribution,
         mode=mode,
         auto_apply=auto_apply,
+        baseline_files=baseline_files,
+        specific_approvals=specific_approvals,
     )
 
 
@@ -465,6 +486,7 @@ def preview_accept(proposal_id: str) -> dict[str, Any]:
             "reason": "proposal_not_found",
         }
     payload = proposal.payload
+    verdict = validate_proposal(proposal.id)
     return {
         "proposal_id": proposal.id,
         "evolution_type": str(payload.get("evolution_type") or proposal.action),
@@ -475,6 +497,7 @@ def preview_accept(proposal_id: str) -> dict[str, Any]:
         "pass_status": proposal.status,
         "would_mutate": False,
         "reason": "hp111_atomic_accept",
+        "validation": verdict.to_dict(),
     }
 
 
