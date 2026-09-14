@@ -15,8 +15,9 @@ audit — not a second place to encode domain playbooks as Python prompt
 constants. See [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md)
 and the read-only [runtime-to-skill audit](runtime-to-skill-audit.md).
 Pipeline stage-attach (`PipelineStage.skills` /
-`hivepilot stage attach-skill`) is unchanged; HP-108 (skill→tools gate) is a
-later ticket.
+`hivepilot stage attach-skill`) is unchanged. HP-108 gates **concierge/chat
+tool tokens** from enabled skills; it does not keyword force-load or
+auto-attach a skill onto a pipeline stage.
 
 For the general plugin loading and trust model, see [PLUGINS.md](PLUGINS.md).
 
@@ -181,8 +182,7 @@ later scan then sees the new bytes as `FIXED`.
 - Pollen panel `skill-cycle` (opt-in `HIVEPILOT_SKILL_EVENTS_PANEL_ENABLED`)
   shows top/bottom measured skills.
 
-HP-79 `skill_usage_events` stays an append-only workshop log. HP-108
-skill→tools stays out of scope.
+HP-79 `skill_usage_events` stays an append-only workshop log.
 
 ## Skill trust (HP-105)
 
@@ -213,6 +213,26 @@ skill→tools stays out of scope.
   permission → `not_skill` (trust unchanged).
 - FIX is admissible only with a **revision + causal event + representative
   result**. Draft apply is HP-109; this module only gates the triple.
+
+## Skill→tools gate (HP-108)
+
+`hivepilot/skill_capabilities.py` is the Coworker skill-capabilities
+pattern rewritten locally (no vendored TS):
+
+- A skill maps to HP-95 catalog tokens (`Read`, `WebSearch`, `Bash`, …).
+  Tokens come from `SKILL.md` `allowed-tools` / `allowed_tools`, an
+  optional overlay, or the bundled `improve` default when that skill is
+  in the catalog and has no frontmatter tools.
+- Concierge/chat resolution (`resolve_chat_tools`,
+  `concierge_service.resolve_role_chat_tools`) **drops** tokens whose
+  owning skills are off. HP-105 `enabled=False` is the off switch.
+  A cataloged skill with no trust row stays on. Unknown names grant
+  nothing.
+- Unmapped role tools pass through. A token claimed by several skills
+  stays if any owner is on.
+- No query/keyword argument loads a skill. The classifier stays
+  `--tools ""`.
+- `PipelineStage.skills` / `hivepilot stage attach-skill` are unchanged.
 
 ## BM25 retrieval (HP-107)
 

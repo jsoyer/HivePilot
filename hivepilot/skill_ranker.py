@@ -3,7 +3,8 @@
 OpenSpace ``skill_engine/skill_ranker`` BM25 stage, rewritten in Python.
 This module does **not** vendor a BM25 package, call an embedding API,
 persist pickle caches, talk to OpenSpace cloud, or implement HP-114
-hybrid RRF / HP-108 skill→tools / HP-109 apply / HP-112 host skills.
+hybrid RRF / HP-109 apply / HP-112 host skills. HP-108 skill→tools
+lives in ``hivepilot.skill_capabilities``.
 
 Contracts:
 

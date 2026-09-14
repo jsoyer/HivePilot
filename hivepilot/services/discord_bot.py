@@ -10,6 +10,7 @@ import requests
 
 from hivepilot.config import settings
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
+from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -193,7 +194,8 @@ def verify_signature(body: bytes, signature: str, timestamp: str) -> bool:
 
 def _exec_run(project: str, task: str, extra: str | None) -> str:
     try:
-        results = _get_orch().run_task(
+        results = on_chat_surface(
+            _get_orch().run_task,
             project_names=[project],
             task_name=task,
             extra_prompt=extra,

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from hivepilot.config import settings
 from hivepilot.services.pending_confirmation import PendingConfirmationStore
+from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -405,7 +406,8 @@ def _register_handlers(bolt_app) -> None:
         extra = parts[2] if len(parts) > 2 else None
         respond(f"Triggering `{task}` on `{project}`...")
         try:
-            results = _get_orch().run_task(
+            results = on_chat_surface(
+                _get_orch().run_task,
                 project_names=[project],
                 task_name=task,
                 extra_prompt=extra,

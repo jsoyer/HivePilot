@@ -119,6 +119,11 @@ requires revision + causal event + representative result (apply is
 HP-109). HP-107 skill retrieval (`hivepilot/skill_ranker.py`) is local
 Okapi BM25 over enabled (and optionally provisional) active revisions —
 0 model queries, no pickle, body only after `disclose`.
+HP-108 (`hivepilot/skill_capabilities.py`) maps skill → HP-95 tool tokens
+for concierge/chat only. Skill off (HP-105 `enabled=False`) drops those
+tokens from the chat allowlist. Cataloged skills with no trust row stay
+on. No keyword force-load.
+The classifier stays `--tools ""`. Pipeline stage-attach is unchanged.
 
 ### Memory proposals HITL (HP-101)
 

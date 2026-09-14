@@ -2,8 +2,9 @@
 
 OpenSpace ``skill_engine/signals`` detector + linker pattern, rewritten
 in Python. This module does **not** vendor OpenSpace, talk to OpenSpace
-cloud, persist pickle embeddings, implement HP-107 BM25 / HP-108
-skill→tools, or apply HP-109 FIX/DERIVED/CAPTURED.
+cloud, persist pickle embeddings, implement HP-107 BM25, or apply
+HP-109 FIX/DERIVED/CAPTURED. HP-108 skill→tools lives in
+``hivepilot.skill_capabilities``.
 
 Contracts:
 

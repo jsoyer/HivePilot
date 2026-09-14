@@ -83,7 +83,8 @@ A `PipelineStage` has:
 - `skills` — skill(s) attached to this stage. This explicit attach list
   (`hivepilot stage attach-skill` / `detach-skill`) is the only way a
   pipeline stage opts into a skill. HP-103 records skills-first doctrine
-  and does **not** change this path (no keyword force-load; HP-108 is later).
+  and does **not** change this path. HP-108 gates concierge/chat tool
+  tokens only (no keyword force-load, no auto-attach).
 - `debate` — per-stage debate override
 
 Example `pipelines.yaml`:

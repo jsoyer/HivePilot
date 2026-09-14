@@ -1,26 +1,28 @@
 ## Summary
 
-HP-107: local Okapi BM25 skill retrieval. OpenSpace `skill_ranker` BM25 stage rewritten — **no** vendor BM25 package, **0 model queries**, no pickle, no cloud. Order is deterministic. HP-105 enabled / provisional filters run **before** scoring. Progressive disclosure: name+description for ranking, `SKILL.md` body only after `disclose`.
+HP-108: skill→tools gate for concierge/chat. A skill maps to HP-95 catalog tokens; when the skill is off (HP-105 `enabled=False`), those tokens are absent from the chat allowlist. Cataloged skills with no trust row stay on. Pipeline stage-attach is unchanged. No keyword force-load.
 
-Owning issue: [HP-107](https://linear.app/js-workspace/issue/HP-107/u-13-bm25-retrieval-local-deterministe)
+Owning issue: [HP-108](https://linear.app/js-workspace/issue/HP-108/u-14-skilltools-gate-conciergechat)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-98 catalog and HP-105 trust.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / [skills-first HP-103](https://linear.app/js-workspace/issue/HP-103/u-09-doctrine-skills-first-audit-top-5-runtimeskill) / plan `coworker-openspace`. Builds on HP-95 tool catalog and HP-105 `enabled`.
 
-Replay: `pytest tests/test_skill_ranker.py tests/test_skill_catalog.py tests/test_skill_trust.py`
+Replay: `pytest tests/test_skill_capabilities.py tests/test_telegram_bot.py tests/test_discord_bot.py tests/test_slack_bot.py tests/test_chatops_service.py tests/test_concierge_service.py tests/test_skill_orchestrator_wiring.py tests/test_cli_config_commands.py -k attach`
 
 ## What changed
 
-1. **`hivepilot/skill_ranker.py`** — pure-Python BM25, catalog+trust prefilter, `retrieve` / `disclose`.
-2. **`tests/test_skill_ranker.py`** — French golden ranking, filter-before-IDF, progressive disclosure, stable order.
-3. **Docs** — SKILLS / SECURITY / ARCHITECTURE note local BM25 and body-after-selection.
+1. **`hivepilot/skill_capabilities.py`** — Coworker `skill-capabilities.ts` rewritten (Python only; no vendored TS). Map skill → tokens (`SKILL.md` `allowed-tools`, overlay, bundled `improve` default only when that skill is cataloged). `resolve_chat_tools` drops tokens whose owners are all off. `chat_tool_surface` / `on_chat_surface` mark concierge/chat runs so `_role_runner_options` filters; CLI pipelines pass through.
+2. **Concierge/chat wiring** — `resolve_role_chat_tools` on the concierge service. ChatOps / Telegram / Discord / Slack `run_task` / `run_pipeline` run under the chat surface. Classifier stays `--tools ""`.
+3. **Docs** — SKILLS / SECURITY / ARCHITECTURE / pipelines / skills-first ADR note the chat-only gate and unchanged stage-attach.
 
 ## Out of scope
 
-- HP-114 hybrid embeddings / RRF, HP-112 host skills, HP-108 skill→tools, HP-109 apply
-- WhatsApp, HP-67 sandbox, vendored OpenSpace / pickle / cloud
+- HP-109 FIX/DERIVED/CAPTURED apply, HP-112 host skills, HP-114 hybrid RRF
+- WhatsApp, HP-67 sandbox, vendored Coworker TS / Electron
+- Changing `PipelineStage.skills` or `hivepilot stage attach-skill`
 
 ## Testing
 
-- [x] `pytest tests/test_skill_ranker.py tests/test_skill_catalog.py tests/test_skill_trust.py` — 45 passed
-- [x] `ruff check` + `ruff format --check` clean on touched Python
-- [x] `mypy hivepilot/skill_ranker.py` — no issues
+- [x] `pytest tests/test_skill_capabilities.py` — 24 passed
+- [x] `pytest tests/test_telegram_bot.py tests/test_discord_bot.py tests/test_slack_bot.py tests/test_chatops_service.py tests/test_concierge_service.py tests/test_skill_orchestrator_wiring.py` — 424 passed
+- [x] `pytest tests/test_skill_trust.py tests/test_skill_ranker.py tests/test_cli_config_commands.py` (incl. attach) — passed
+- [x] `ruff check` + `ruff format --check` on touched Python — clean

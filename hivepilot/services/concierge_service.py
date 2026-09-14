@@ -49,7 +49,10 @@ from typing import Any, cast
 
 from hivepilot.config import settings
 from hivepilot.models import ProjectConfig, RunnerDefinition, RunnerKind, TaskStep
+from hivepilot.roles import get_role
 from hivepilot.runners.base import RunnerPayload
+from hivepilot.skill_capabilities import resolve_chat_tools
+from hivepilot.skill_catalog import SkillCatalog
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1206,6 +1209,25 @@ def _without_follow_up(decision: ConciergeDecision) -> ConciergeDecision:
     if decision.follow_up is None:
         return decision
     return replace(decision, follow_up=None)
+
+
+def resolve_role_chat_tools(
+    role_key: str,
+    *,
+    tenant: str = "default",
+    catalog: SkillCatalog | None = None,
+    capability_map: dict[str, list[str] | tuple[str, ...]] | None = None,
+) -> list[str] | None:
+    """HP-108: filter a role allowlist for concierge/chat. Classifier stays no-tools."""
+    role = get_role(role_key)
+    if not role.allowed_tools:
+        return None
+    return resolve_chat_tools(
+        role.allowed_tools,
+        tenant=tenant,
+        catalog=catalog,
+        capability_map=capability_map,
+    )
 
 
 # ---------------------------------------------------------------------------
