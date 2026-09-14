@@ -352,6 +352,17 @@ layout helper):
 - The package tree is built from mappings. There is no function that
   materializes a category tree on disk.
 
+## Task traces export (HP-118)
+
+`hivepilot/trace_export.py` writes a **local** redacted ZIP of one project
+run (OpenSpace task-traces pattern, rewritten; no reporter, no upload):
+
+- Members: `manifest.json`, `metadata.json`, `tools.json`, `skills.json`,
+  `redaction.json` (HP-99 packet when refs cite the run).
+- Skills are the HP-104 cycle events for that `run_id`.
+- A critical finding on the run blocks export. Replay:
+  `hivepilot traces export <run_id> --output traces.zip`.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.
@@ -374,4 +385,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - HP-112 host skills: `hivepilot/host_skills.py` (`discover` / `delegate`)
 - HP-114 optional hybrid RRF: `hivepilot/skill_embeddings.py` (off by default)
 - HP-117 local package tree: `hivepilot/skill_taxonomy.py` (logical mapping; no cloud)
+- HP-118 local task-trace ZIP: `hivepilot/trace_export.py` (no upload)
 - [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine

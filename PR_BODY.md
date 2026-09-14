@@ -1,27 +1,26 @@
 ## Summary
 
-HP-117: tenant-scoped logical package-tree taxonomy. Skills are classified by a `logical_id → category_path` mapping. Reclassify updates that mapping only — directory skills stay on disk. Ambiguous classifier output is `needs_review` (HP-97 PASS `taxonomy_review`), never a silent assign. No OpenSpace cloud, no disk-layout helper.
+HP-118: local task-trace export. A project run projects to metadata / tools / skills / redaction and writes a ZIP on demand. Critical findings block the export (no archive). There is no cloud reporter or upload path.
 
-Owning issue: [HP-117](https://linear.app/js-workspace/issue/HP-117/u-23-taxonomie-package-tree-locale-no-cloud)
+Owning issue: [HP-118](https://linear.app/js-workspace/issue/HP-118/u-24-task-traces-export-local-no-upload)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-98 skill catalog / origins / revisions. Patterns only from the OpenSpace package tree (`local_category_path`) — rewritten, not vendored.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-99 evidence/redaction and HP-104 skill-cycle events. Patterns only from OpenSpace local traces.
 
-Replay: `pytest tests/test_skill_taxonomy.py tests/test_skill_catalog.py tests/test_skill_trust.py`
+Replay: `hivepilot traces export <run_id> --output traces.zip`
 
 ## What changed
 
-1. **`hivepilot/skill_taxonomy.py`** — `assign` / `reclassify` / `place` / `tree`. Mapping is tenant-scoped. Classifier: one clear path assigns; multiple / low-confidence / empty / flagged → `needs_review`.
-2. **`state_service.init_db`** — `skill_taxonomy_placements` (`PRIMARY KEY (tenant, logical_id)`).
-3. **Docs** — SKILLS / ARCHITECTURE / SECURITY record the local tree; cloud and disk materialize stay out of scope.
+1. **`hivepilot/trace_export.py`** — `project_run` / `export_zip`. Local ZIP only; remote URLs refused.
+2. **`hivepilot traces export`** — CLI on-demand write. Exit 1 on critical findings or missing run.
+3. **Docs** — SECURITY / SKILLS / ARCHITECTURE / CLI-REFERENCE record the local-only gate.
 
 ## Out of scope
 
-- Disk moves / any function that materializes a category tree on disk
-- Cloud taxonomy sync (browse / auth / upload / import)
+- Cloud reporters, upload APIs, OpenSpace sync
 - WhatsApp, HP-67, autonomous evolve
+- Dashboard download button
 
 ## Testing
 
-- [x] `pytest tests/test_skill_taxonomy.py tests/test_skill_catalog.py tests/test_skill_trust.py tests/test_pass_store.py` — 62 passed
+- [x] `pytest tests/test_trace_export.py` — redaction, critical-block, local-only, CLI
 - [x] `ruff check` + `ruff format --check` clean on touched Python
-- [x] `mypy hivepilot/skill_taxonomy.py` — no issues
