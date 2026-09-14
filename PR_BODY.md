@@ -1,32 +1,28 @@
 ## Summary
 
-HP-114: optional BM25 + cosine hybrid via reciprocal rank fusion. Default path stays HP-107 BM25 (0 embed calls, 0 network). When a provider is passed or `HIVEPILOT_SKILL_EMBEDDINGS` is on **and** a provider is registered, ranks are fused with RRF (k=60). Document vectors cache in SQLite as JSON floats, keyed by `(revision_hash, model, dims)`. **Never pickle.** Cosine does not replace BM25.
+HP-115: run-scoped browser grant on the existing HP-68 loopback CDP. A grant is tied to `run_id`, issued through the HP-97 PASS inbox (`kind=tool`, token `BrowserCDP`), and dies on `complete_run`. No grant ⇒ no CDP action. HivePilot does not embed Chromium and does not reopen HP-67.
 
-Owning issue: [HP-114](https://linear.app/js-workspace/issue/HP-114/u-20-embeddings-hybrid-rrf-optionnel-no-pickle)
+Owning issue: [HP-115](https://linear.app/js-workspace/issue/HP-115/u-21-browser-grant-task-scoped-cdp-hp-68)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-107 BM25, HP-98 revision hashes, HP-112 `discover`.
+ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-68 host_browser CDP, HP-97 PASS, HP-95 catalog. Patterns only from Coworker browser grant.
 
-Replay: `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py`
+Replay: `pytest tests/test_browser_grant.py tests/test_hp68_host_processes.py tests/test_pass_store.py`
 
 ## What changed
 
-1. **`hivepilot/skill_embeddings.py`** — `EmbeddingProvider` protocol, RRF, cosine, JSON cache. Flag off ignores a registered provider.
-2. **`hivepilot/skill_ranker.py`** — optional `provider` on `SkillRanker` / `retrieve`. Off ⇒ identical BM25 hits and scores.
-3. **`hivepilot/host_skills.py`** — `discover` uses `configured_embedding_provider()` so hybrid is opt-in on the host path.
-4. **`skill_embeddings` table** in `state_service.init_db()`.
-5. **Docs** — SKILLS / SECURITY / ARCHITECTURE.
+1. **`hivepilot/browser_grant.py`** — `request` / `approve` / `get_live` / `act` / `revoke_for_run`. Live grant is loopback-only.
+2. **`state_service.complete_run`** — fail-safe revoke so end of run = grant dead.
+3. **`tool_catalog.yaml`** — `BrowserCDP` (high / require_approval / volatile).
+4. **Docs** — SECURITY / ARCHITECTURE record the grant; HP-67 stays no-go.
 
 ## Out of scope
 
-- Shipping a mandatory or network embedding backend
-- WhatsApp, HP-67 sandbox, cloud OpenSpace, autonomous evolve
-- Vendored OpenSpace pickle / replace-only ranking
+- HP-67 Docker/E2B sandbox reopen
+- Shipping Chromium inside the product
+- WhatsApp, autonomous evolve, cloud OpenSpace
 
 ## Testing
 
-- [x] `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/test_host_skills.py` — 46 passed
+- [x] `pytest tests/test_browser_grant.py tests/test_hp68_host_processes.py tests/test_pass_store.py` — 47 passed
 - [x] `ruff check` + `ruff format --check` clean on touched Python
-- [x] `mypy hivepilot/skill_embeddings.py hivepilot/skill_ranker.py hivepilot/host_skills.py` — no issues
-- [x] CI mypy follow-up: typed `_skill(..., front=...)` and dropped `list.append(...) or` in host-skills tests (pre-existing on main, blocked `mypy hivepilot tests`)
-- [x] Local `mypy hivepilot tests` — no issues (839 files)
-- [x] CI pytest follow-up: `host_skills_enabled` + installer classification (HP-112 plugin gating) — 113 passed
+- [x] `mypy hivepilot/browser_grant.py` — no issues

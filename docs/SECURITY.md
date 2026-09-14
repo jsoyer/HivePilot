@@ -129,6 +129,11 @@ on. No keyword force-load.
 The classifier stays `--tools ""`. Pipeline stage-attach is unchanged.
 HP-112 host skills (`hivepilot/host_skills.py`) search that local catalog
 and delegate through HivePilot `run_subagent` / `spawn_peer` / pipelines.
+HP-115 (`hivepilot/browser_grant.py`) is a short-lived grant on the
+existing HP-68 loopback CDP: tied to `run_id`, issued via PASS
+`kind=tool` / `BrowserCDP`, dead when `complete_run` fires. No grant ⇒
+no CDP action. HivePilot does not embed Chromium and does not reopen
+HP-67.
 
 ### Memory proposals HITL (HP-101)
 
@@ -396,6 +401,9 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - A pending or rejected memory proposal does not mutate IsolatedJsonMemory / workspace text (HP-101).
 - Memory apply runs only after APPROVED; edit+approve applies the user text (HP-101).
 - Memory recall and user Pollen/vault writes do not go through PASS (HP-101).
+- A CDP action without a live run-scoped grant is refused (HP-115).
+- End of run (`complete_run`) kills the browser grant; a finished run cannot receive a new one (HP-115).
+- Browser grant stays loopback-only and never embeds Chromium or reopens HP-67 (HP-115).
 - Denied / traversal / pending contract cases execute zero side-effects; approve×2 is one HP-100 effect (HP-113).
 - Behavior-memory eval is opt-in nightly and must not keyword-route skills or tools (HP-113).
 

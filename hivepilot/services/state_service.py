@@ -1348,6 +1348,14 @@ def complete_run(run_id: int, status: str, detail: str | None = None) -> None:
         tenant=_complete_event_tenant,
         payload={"run_id": run_id, "status": status},
     )
+    # HP-115: end of run kills the loopback CDP grant. Fail-safe — revoke
+    # must never roll back the terminal run write.
+    try:
+        from hivepilot.browser_grant import revoke_for_run
+
+        revoke_for_run(run_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("browser_grant.revoke_failed", run_id=run_id, exc_info=True)
 
 
 def get_run(run_id: int) -> dict[str, Any] | None:
