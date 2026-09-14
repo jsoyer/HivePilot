@@ -22,5 +22,6 @@ Replay: `pytest tests/test_skill_taxonomy.py tests/test_skill_catalog.py tests/t
 
 ## Testing
 
-- [x] `pytest tests/test_skill_taxonomy.py tests/test_skill_catalog.py tests/test_skill_trust.py`
-- [x] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_skill_taxonomy.py tests/test_skill_catalog.py tests/test_skill_trust.py tests/test_pass_store.py` — 62 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/skill_taxonomy.py` — no issues

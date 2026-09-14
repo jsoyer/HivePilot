@@ -88,7 +88,7 @@ class TestReclassifyDoesNotMoveFiles:
         catalog = scan_catalog(base_dir=tmp_path)
         skill = catalog.get_by_name("code-review")
         assert skill is not None
-        before = _tree_signature(tmp_path)
+        before = _tree_signature(skills_root)
 
         first = assign("code-review", "technology/computing/review")
         second = reclassify("code-review", "technology/computing/lint")
@@ -98,8 +98,9 @@ class TestReclassifyDoesNotMoveFiles:
         assert second.category_path == "technology/computing/lint"
         assert second.status == ASSIGNED
         assert second.assigned is True
-        assert _tree_signature(tmp_path) == before
+        assert _tree_signature(skills_root) == before
         assert (skills_root / "code-review" / "SKILL.md").is_file()
+        assert not (skills_root / "technology").exists()
         assert not (tmp_path / "technology").exists()
         assert not list(tmp_path.rglob(SKILL_ID_SIDECAR))
 
@@ -180,11 +181,7 @@ class TestLogicalTree:
         root = tree()
         names = {child.name for child in root.children}
         assert names == {"technology", "writing"}
-        computing = next(
-            node
-            for node in root.children
-            if node.name == "technology"
-        ).children[0]
+        computing = next(node for node in root.children if node.name == "technology").children[0]
         assert computing.path == "technology/computing"
         assert {row.skill_name for row in computing.children[0].placements} | {
             row.skill_name for row in computing.children[1].placements

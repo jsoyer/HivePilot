@@ -117,7 +117,9 @@ class PlacementDecision:
         return {
             "action": self.action,
             "placement": self.placement.to_dict(),
-            "classification": None if self.classification is None else self.classification.to_dict(),
+            "classification": None
+            if self.classification is None
+            else self.classification.to_dict(),
             "proposal_id": self.proposal_id,
         }
 
@@ -335,9 +337,7 @@ def get(
     state_service.init_db()
     with db.connect() as conn:
         row = conn.execute(
-            db.ph(
-                "SELECT * FROM skill_taxonomy_placements WHERE tenant = ? AND logical_id = ?"
-            ),
+            db.ph("SELECT * FROM skill_taxonomy_placements WHERE tenant = ? AND logical_id = ?"),
             (tenant_key, logical),
         ).fetchone()
     if row is None:
