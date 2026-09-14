@@ -21,6 +21,6 @@ Replay: `pytest tests/test_host_skills.py tests/test_skill_ranker.py tests/test_
 
 ## Testing
 
-- [ ] `pytest tests/test_host_skills.py tests/test_skill_ranker.py tests/test_delegation.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
-- [ ] `mypy hivepilot/host_skills.py`
+- [x] `pytest tests/test_host_skills.py tests/test_skill_ranker.py tests/test_delegation.py tests/test_skill_capabilities.py tests/test_skill_catalog.py` — 80 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/host_skills.py` — no issues

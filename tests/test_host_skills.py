@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -142,7 +143,7 @@ class TestDiscoverUsesLocalRanker:
 
     def test_disabled_rows_are_absent(self) -> None:
         catalog = _catalog()
-        hidden, _ = _record(
+        hidden = _record(
             catalog,
             "masque",
             "terme unique masque pour le déploiement",
@@ -246,9 +247,7 @@ class TestDelegateUsesHivePilotApis:
         assert report.output is None
 
     def test_peer_calls_spawn_peer(self) -> None:
-        with patch(
-            "hivepilot.host_skills.spawn_peer", return_value=42
-        ) as spawn:
+        with patch("hivepilot.host_skills.spawn_peer", return_value=42) as spawn:
             report = delegate("peer", project="api", task="docs", role="cto", tenant="acme")
         spawn.assert_called_once_with("api", "docs", "cto", tenant="acme")
         assert report.status == "spawned"
@@ -338,11 +337,7 @@ class TestDelegateUsesHivePilotApis:
 
 class TestBundledPlugin:
     def test_register_publishes_both_specs(self) -> None:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location(
-            "hp_host_skills_plugin", _PLUGIN_SOURCE
-        )
+        spec = importlib.util.spec_from_file_location("hp_host_skills_plugin", _PLUGIN_SOURCE)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
