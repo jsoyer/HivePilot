@@ -28,3 +28,5 @@ Replay: `pytest tests/test_skill_embeddings.py tests/test_skill_ranker.py tests/
 - [x] `ruff check` + `ruff format --check` clean on touched Python
 - [x] `mypy hivepilot/skill_embeddings.py hivepilot/skill_ranker.py hivepilot/host_skills.py` — no issues
 - [x] CI mypy follow-up: typed `_skill(..., front=...)` and dropped `list.append(...) or` in host-skills tests (pre-existing on main, blocked `mypy hivepilot tests`)
+- [x] Local `mypy hivepilot tests` — no issues (839 files)
+- [x] CI pytest follow-up: `host_skills_enabled` + installer classification (HP-112 plugin gating) — 113 passed
