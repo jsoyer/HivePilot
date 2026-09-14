@@ -23,6 +23,6 @@ Replay: `pytest tests/test_browser_grant.py tests/test_hp68_host_processes.py te
 
 ## Testing
 
-- [ ] `pytest tests/test_browser_grant.py tests/test_hp68_host_processes.py tests/test_pass_store.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
-- [ ] `mypy hivepilot/browser_grant.py`
+- [x] `pytest tests/test_browser_grant.py tests/test_hp68_host_processes.py tests/test_pass_store.py` — 47 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/browser_grant.py` — no issues
