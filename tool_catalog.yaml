@@ -79,3 +79,10 @@ tools:
     defaultPolicy: require_approval
     volatile: false
     idempotency: false
+  # HP-115 — run-scoped grant on the existing HP-68 loopback CDP.
+  # Actions stay HITL unless match_auto + mechanical agree. No Chromium.
+  - token: BrowserCDP
+    risk: high
+    defaultPolicy: require_approval
+    volatile: true
+    idempotency: false
