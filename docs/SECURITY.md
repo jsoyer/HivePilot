@@ -149,7 +149,7 @@ Telegram doors stay inbox | approvals | runs | alerts.
 - Ingest redacts registered secret values and secret-looking metadata keys before persist.
 - Each ingest emits an HP-40 `change_log` row; the ref **watermark is `change_log.id`**.
 - Packets are bounded (`max_chars` / `max_refs`); omitted refs are listed, not silently dropped.
-- A `skill_evolution` claim that cites missing or empty refs is **not admissible**. `pass_store.submit` persists PENDING first, then rejects with that reason. HP-109 drafts FIX/DERIVED/CAPTURED into PASS (`hivepilot/skill_evolution.py`) without writing skill files; atomic accept is HP-111. HP-110 (`hivepilot/skill_evolution_validator.py`) is a read-only safety load: traversal/symlink, size, UTF-8, frontmatter, and secrets reject; widening allowed-tools / hooks / shell / permissions without a specific approval is `needs_human_review`. The validator never writes.
+- A `skill_evolution` claim that cites missing or empty refs is **not admissible**. `pass_store.submit` persists PENDING first, then rejects with that reason. HP-109 drafts FIX/DERIVED/CAPTURED into PASS (`hivepilot/skill_evolution.py`) without writing skill files. HP-110 (`hivepilot/skill_evolution_validator.py`) is a read-only safety load: traversal/symlink, size, UTF-8, frontmatter, and secrets reject; widening allowed-tools / hooks / shell / permissions without a specific approval is `needs_human_review`. The validator never writes. HP-111 (`hivepilot/skill_evolution_accept.py`) writes only after PASS approve: reject blocks, `needs_human_review` stays HITL, stale digest/etag is refused, double accept is idempotent, and a sibling journal recovers an interrupted multi-file commit.
 
 ### HP-61 change class (mechanical vs ask)
 

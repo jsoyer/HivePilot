@@ -2,16 +2,16 @@
 
 OpenSpace ``EvolutionType`` pattern, rewritten in Python. This module does
 **not** vendor OpenSpace, talk to OpenSpace cloud, persist pickle
-embeddings, write ``.skill_id`` sidecars, implement HP-111 atomic
-accept / Pollen diff, HP-112, HP-114, or OpenSpace ``autonomous``
-evolution mode. HP-110 validation lives in
-``hivepilot.skill_evolution_validator`` and is a read-only gate.
+embeddings, write ``.skill_id`` sidecars, implement HP-112, HP-114, or
+OpenSpace ``autonomous`` evolution mode. HP-110 validation lives in
+``hivepilot.skill_evolution_validator`` and is a read-only gate. HP-111
+atomic accept lives in ``hivepilot.skill_evolution_accept``.
 
 Contracts:
 
-- Draft only. Admissible proposals land in the HP-97 PASS inbox
-  (``kind=skill_evolution``). No skill file is written. Catalog
-  ``record`` is not called. Workshop accept is not called.
+- Draft only until HITL approve + explicit accept. Admissible proposals
+  land in the HP-97 PASS inbox (``kind=skill_evolution``). ``propose``
+  never writes skill files.
 - CAPTURED requires independent validation: an execution evidence ref
   plus a distinct validation ref. Whole-task ``completed`` on the same
   run is not sufficient. A caller flag is not enough.
@@ -19,7 +19,7 @@ Contracts:
   same key returns the existing card (any status).
 - Never auto-commit. ``create_pending`` only (no ``submit`` /
   ``match_auto``). Autonomous mode tokens are refused.
-  ``apply_approved`` is an HP-111 hook that always refuses mutation.
+  ``apply_approved`` writes only after PASS ``APPROVED`` (HITL).
 """
 
 from __future__ import annotations
@@ -27,10 +27,12 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from hivepilot.evidence import assess_evolution_claim, get_ref
 from hivepilot.pass_store import (
+    APPROVED,
     PENDING,
     SKILL_EVOLUTION_KIND,
     PassProposal,
@@ -41,7 +43,14 @@ from hivepilot.pass_store import (
     get as get_proposal,
 )
 from hivepilot.services import events
-from hivepilot.skill_catalog import SKILL_ID_SIDECAR, logical_skill_id, snapshot_hash
+from hivepilot.services.skill_workshop_service import unified_files_diff
+from hivepilot.skill_catalog import (
+    SKILL_ID_SIDECAR,
+    SkillCatalog,
+    logical_skill_id,
+    snapshot_hash,
+)
+from hivepilot.skill_evolution_accept import ApplyResult, accept_approved
 from hivepilot.skill_evolution_validator import REJECT, validate, validate_proposal
 from hivepilot.skill_signals import FailureAttribution, assess_fix_eligibility
 
@@ -102,24 +111,7 @@ class CapturedEligibility:
         }
 
 
-@dataclass(frozen=True)
-class ApplyRefusal:
-    """HP-111 hook. Mutation is always refused on this ticket."""
-
-    ok: bool
-    mutated: bool
-    code: str
-    reason: str
-    proposal_id: str = ""
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "ok": self.ok,
-            "mutated": self.mutated,
-            "code": self.code,
-            "reason": self.reason,
-            "proposal_id": self.proposal_id,
-        }
+ApplyRefusal = ApplyResult
 
 
 @dataclass(frozen=True)
@@ -386,6 +378,8 @@ def propose(
         "skill_id_sidecar": SKILL_ID_SIDECAR,
         "specific_approvals": list(specific_approvals),
         "validation_ref": (validation_ref or "").strip(),
+        "base_files": _copy_files(baseline_files),
+        "base_digest": snapshot_hash(_copy_files(baseline_files)) if baseline_files else "",
     }
     verdict = validate(
         files=files_copy,
@@ -477,7 +471,7 @@ def propose_fix(
 
 
 def preview_accept(proposal_id: str) -> dict[str, Any]:
-    """Describe what HP-111 would commit. Never mutates disk or catalog."""
+    """Describe what accept would commit. Never mutates disk or catalog."""
     proposal = get_proposal(proposal_id)
     if proposal is None:
         return {
@@ -487,6 +481,16 @@ def preview_accept(proposal_id: str) -> dict[str, Any]:
         }
     payload = proposal.payload
     verdict = validate_proposal(proposal.id)
+    applied = bool(payload.get("applied"))
+    would_mutate = proposal.status == APPROVED and not applied and verdict.result != REJECT
+    if applied:
+        reason = "already_applied"
+    elif proposal.status != APPROVED:
+        reason = "hitl_required"
+    elif verdict.result == REJECT:
+        reason = verdict.reason or "validation_rejected"
+    else:
+        reason = "ready"
     return {
         "proposal_id": proposal.id,
         "evolution_type": str(payload.get("evolution_type") or proposal.action),
@@ -495,23 +499,97 @@ def preview_accept(proposal_id: str) -> dict[str, Any]:
         "content_hash": str(payload.get("content_hash") or ""),
         "merge_key": str(payload.get("merge_key") or ""),
         "pass_status": proposal.status,
-        "would_mutate": False,
-        "reason": "hp111_atomic_accept",
+        "applied": applied,
+        "would_mutate": would_mutate,
+        "reason": reason,
         "validation": verdict.to_dict(),
+        "diffs": file_diffs(proposal.id),
+        "lineage": lineage_graph(proposal.id),
     }
 
 
-def apply_approved(proposal_id: str = "", *, proposal: PassProposal | None = None) -> ApplyRefusal:
-    """HP-111 hook. Always refuses write/commit, even after PASS approve."""
-    row_id = (proposal_id or "").strip()
-    if proposal is not None:
-        row_id = proposal.id
-    return ApplyRefusal(
-        ok=False,
-        mutated=False,
-        code="hp111_atomic_accept",
-        reason="human approve required; atomic accept is HP-111",
-        proposal_id=row_id,
+def file_diffs(proposal_id: str) -> list[dict[str, Any]]:
+    """Per-file unified diffs for Pollen. Empty when the proposal is missing."""
+    proposal = get_proposal(proposal_id)
+    if proposal is None:
+        return []
+    payload = proposal.payload
+    before = payload.get("base_files") if isinstance(payload.get("base_files"), dict) else {}
+    after = payload.get("files") if isinstance(payload.get("files"), dict) else {}
+    diffs: list[dict[str, Any]] = []
+    for rel in sorted(set(before) | set(after)):
+        old = before.get(rel, "") if isinstance(before.get(rel, ""), str) else ""
+        new = after.get(rel, "") if isinstance(after.get(rel, ""), str) else ""
+        if old == new:
+            continue
+        if not isinstance(rel, str):
+            continue
+        diffs.append(
+            {
+                "path": rel,
+                "before": old,
+                "after": new,
+                "unified": unified_files_diff({rel: old}, {rel: new}),
+            }
+        )
+    return diffs
+
+
+def lineage_graph(proposal_id: str) -> dict[str, Any]:
+    """Parent → draft DAG for Pollen ``@xyflow``. Missing proposal → empty."""
+    proposal = get_proposal(proposal_id)
+    if proposal is None:
+        return {"nodes": [], "edges": []}
+    payload = proposal.payload
+    name = str(payload.get("name") or proposal.project or proposal.id)
+    logical = str(payload.get("logical_id") or (logical_skill_id(name) if name else proposal.id))
+    origin = str(payload.get("origin") or payload.get("evolution_type") or proposal.action)
+    parents = [
+        str(item).strip()
+        for item in (payload.get("parent_logical_ids") or [])
+        if str(item).strip()
+    ]
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, str]] = []
+    for parent in parents:
+        nodes.append(
+            {
+                "id": parent,
+                "label": parent,
+                "kind": "parent",
+                "origin": "",
+            }
+        )
+        edges.append({"source": parent, "target": logical})
+    nodes.append(
+        {
+            "id": logical,
+            "label": name,
+            "kind": "draft",
+            "origin": origin,
+            "proposal_id": proposal.id,
+        }
+    )
+    return {"nodes": nodes, "edges": edges}
+
+
+def apply_approved(
+    proposal_id: str = "",
+    *,
+    proposal: PassProposal | None = None,
+    skill_root: Path | None = None,
+    catalog: SkillCatalog | None = None,
+    expected_digest: str = "",
+    actor: str = "",
+) -> ApplyResult:
+    """HP-111 accept. Writes only after PASS approve; double-accept is a no-op."""
+    return accept_approved(
+        proposal_id,
+        proposal=proposal,
+        skill_root=skill_root,
+        catalog=catalog,
+        expected_digest=expected_digest,
+        actor=actor,
     )
 
 

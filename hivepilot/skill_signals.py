@@ -16,7 +16,8 @@ Contracts:
   evidence is ``ambiguous`` (review, never auto-demote).
 - FIX is admissible only with a revision + causal event + representative
   result. This module gates that triple. Persisting a PASS draft is
-  ``hivepilot.skill_evolution`` (HP-109); apply/commit is HP-111.
+  ``hivepilot.skill_evolution`` (HP-109); apply/commit is HP-111
+  (``hivepilot.skill_evolution_accept``).
 """
 
 from __future__ import annotations

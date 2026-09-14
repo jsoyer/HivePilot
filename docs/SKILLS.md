@@ -263,8 +263,7 @@ pattern rewritten locally (no vendored TS):
 - Merge keys are deterministic and idempotent. A second propose with the
   same key returns the existing card.
 - `create_pending` only — no `submit` / `match_auto`, no OpenSpace
-  `autonomous` evolution mode. `apply_approved` is an HP-111 hook that
-  always refuses mutation.
+  `autonomous` evolution mode.
 
 ## Evolution validator (HP-110)
 
@@ -282,8 +281,22 @@ are structural.
   `permissions:…`) is refused (`needs_human_review`). `approve` / `*` is
   not specific.
 - `propose` calls `validate` before persist: reject does not land in PASS;
-  privilege review still drafts. `validate()` / `validate_proposal()` are
-  the HP-111 hooks and never apply.
+  privilege review still drafts. `validate()` / `validate_proposal()` never
+  apply.
+
+## Atomic accept (HP-111)
+
+`hivepilot/skill_evolution_accept.py` commits an APPROVED draft after HITL:
+
+- `apply_approved` writes directory skill files only when PASS status is
+  `APPROVED`. PENDING stays HITL. Rejected rows cannot be accepted.
+- `validate_proposal()` runs before any write: reject blocks; 
+  `needs_human_review` still requires the human approve.
+- Expected digest / etag and a drifted on-disk baseline are stale (no write).
+- Double accept of the same digest is idempotent.
+- Interrupted accepts recover from a sibling `.hp111` journal + staging tree.
+- Pollen → Operate → **Skills** shows per-file diffs and an `@xyflow` lineage
+  DAG. Approve / reject first; Accept stays disabled until APPROVED.
 
 ## Skill workshop (HP-79)
 
@@ -303,4 +316,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - [CONFIGURATION.md](CONFIGURATION.md) — full config file reference
 - [PIPELINES-AND-ROLES.md](PIPELINES-AND-ROLES.md) — pipeline stages, task steps, and roles
 - [adr/2026-09-13-skills-first.md](adr/2026-09-13-skills-first.md) — HP-103 doctrine (capability vs runtime)
+- HP-111 atomic accept: `hivepilot/skill_evolution_accept.py` + Pollen workshop diffs / lineage
 - [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine

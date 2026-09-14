@@ -20,7 +20,7 @@ Statuses: PENDING | APPROVED | REJECTED | EDITED | EXPIRED.
 admissible (missing or foreign-tenant evidence refs). Memory
 apply-after-approve is ``hivepilot.memory_proposals`` (HP-101). This
 module does not apply tool calls. Skill-evolution drafts are HP-109;
-atomic accept is HP-111.
+atomic accept is ``hivepilot.skill_evolution_accept`` (HP-111).
 HP-105 trust reviews use ``create_pending`` (no auto-decide).
 Idempotent ``side_effects`` + ``pending_tool`` resume live in
 ``hivepilot.side_effects`` / ``hivepilot.checkpoints`` (HP-100).
@@ -350,6 +350,34 @@ def stage_edit(
     stored = get(proposal_id)
     if stored is None or stored.status != PENDING:
         raise PassStoreError(f"failed to stage edit for {proposal_id}")
+    return stored
+
+
+def update_payload(proposal_id: str, payload: Mapping[str, Any]) -> PassProposal:
+    """Replace payload without changing status.
+
+    HP-111 uses this after atomic accept to mark ``applied`` on an
+    already-APPROVED row. It is not a decision and does not run a
+    side-effect.
+    """
+    _ensure_table()
+    if payload is None:
+        raise PassStoreError("payload is required")
+    body = _parse_payload(dict(payload))
+    with db.connect() as conn:
+        row = conn.execute(
+            db.ph("SELECT * FROM pass_proposals WHERE id=?"),
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            raise PassStoreError(f"proposal not found: {proposal_id}")
+        conn.execute(
+            db.ph("UPDATE pass_proposals SET payload=? WHERE id=?"),
+            (json.dumps(body, ensure_ascii=False, sort_keys=True), proposal_id),
+        )
+    stored = get(proposal_id)
+    if stored is None:
+        raise PassStoreError(f"failed to update payload for {proposal_id}")
     return stored
 
 

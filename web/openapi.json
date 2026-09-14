@@ -2675,6 +2675,220 @@
         "title": "ScheduleOut",
         "type": "object"
       },
+      "SkillEvolutionAcceptBody": {
+        "properties": {
+          "actor": {
+            "default": "operator",
+            "title": "Actor",
+            "type": "string"
+          },
+          "expected_digest": {
+            "default": "",
+            "title": "Expected Digest",
+            "type": "string"
+          },
+          "skill_root": {
+            "default": "",
+            "title": "Skill Root",
+            "type": "string"
+          }
+        },
+        "title": "SkillEvolutionAcceptBody",
+        "type": "object"
+      },
+      "SkillEvolutionCard": {
+        "properties": {
+          "applied": {
+            "default": false,
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "content_hash": {
+            "default": "",
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "diffs": {
+            "items": {
+              "$ref": "#/components/schemas/SkillEvolutionFileDiff"
+            },
+            "title": "Diffs",
+            "type": "array"
+          },
+          "evolution_type": {
+            "default": "",
+            "title": "Evolution Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "skill_evolution",
+            "title": "Kind",
+            "type": "string"
+          },
+          "lineage": {
+            "$ref": "#/components/schemas/SkillEvolutionLineage"
+          },
+          "merge_key": {
+            "default": "",
+            "title": "Merge Key",
+            "type": "string"
+          },
+          "name": {
+            "default": "",
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "validation": {
+            "additionalProperties": true,
+            "title": "Validation",
+            "type": "object"
+          },
+          "would_mutate": {
+            "default": false,
+            "title": "Would Mutate",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "SkillEvolutionCard",
+        "type": "object"
+      },
+      "SkillEvolutionDecision": {
+        "properties": {
+          "actor": {
+            "default": "operator",
+            "title": "Actor",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "SkillEvolutionDecision",
+        "type": "object"
+      },
+      "SkillEvolutionFileDiff": {
+        "properties": {
+          "after": {
+            "default": "",
+            "title": "After",
+            "type": "string"
+          },
+          "before": {
+            "default": "",
+            "title": "Before",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "unified": {
+            "default": "",
+            "title": "Unified",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "SkillEvolutionFileDiff",
+        "type": "object"
+      },
+      "SkillEvolutionLineage": {
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/SkillEvolutionLineageEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/SkillEvolutionLineageNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          }
+        },
+        "title": "SkillEvolutionLineage",
+        "type": "object"
+      },
+      "SkillEvolutionLineageEdge": {
+        "properties": {
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "target"
+        ],
+        "title": "SkillEvolutionLineageEdge",
+        "type": "object"
+      },
+      "SkillEvolutionLineageNode": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "origin": {
+            "default": "",
+            "title": "Origin",
+            "type": "string"
+          },
+          "proposal_id": {
+            "default": "",
+            "title": "Proposal Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ],
+        "title": "SkillEvolutionLineageNode",
+        "type": "object"
+      },
       "SkillProposalCreate": {
         "properties": {
           "files": {
