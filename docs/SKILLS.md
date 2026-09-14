@@ -266,6 +266,25 @@ pattern rewritten locally (no vendored TS):
   `autonomous` evolution mode. `apply_approved` is an HP-111 hook that
   always refuses mutation.
 
+## Evolution validator (HP-110)
+
+`hivepilot/skill_evolution_validator.py` is the OpenSpace evolution/validator
+pattern rewritten locally (no cloud, no pickle). Regex alone is not the
+gate: path containment, YAML parse, privilege-set diff, UTF-8, and size
+are structural.
+
+- Result ∈ {`approve`, `reject`, `needs_human_review`}. **Zero mutation.**
+- Rejects traversal / symlink escape, oversized files, non-UTF-8, pickle,
+  malformed frontmatter, and secret material (registered values, secret
+  keys, PEM / credential filenames).
+- Extending `allowed-tools` / hooks / shell / permissions without a
+  **specific** approval (`allowed-tools:Bash`, `hooks:…`, `shell`,
+  `permissions:…`) is refused (`needs_human_review`). `approve` / `*` is
+  not specific.
+- `propose` calls `validate` before persist: reject does not land in PASS;
+  privilege review still drafts. `validate()` / `validate_proposal()` are
+  the HP-111 hooks and never apply.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.
