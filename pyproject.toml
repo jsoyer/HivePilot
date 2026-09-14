@@ -265,6 +265,7 @@ dev = [
 [tool.pytest.ini_options]
 markers = [
     "bundled_plugins: let the loader see the in-wheel plugin directory",
+    "behavior_memory: HP-113 opt-in nightly behavior-memory eval (not default PR CI)",
 ]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

@@ -143,6 +143,23 @@ one ``decide_approval()``, same ``approval_id`` on both surfaces, keyboards and
 cards only on the Approvals door, owner+TTL via ``pending_confirmation``. Four
 Telegram doors stay inbox | approvals | runs | alerts.
 
+### Eval contract + behavior memory (HP-113)
+
+`hivepilot/eval_contract.py` is a deterministic, 0-model harness (Coworker
+tool-safety eval pattern, rewritten; no vendored TS, no LLM). Default PR CI
+runs it. Cases are explicit (`gate` × `surface` × `token`/`path`) — the
+harness does not keyword-route a chat utterance onto a skill or tool.
+
+| Gate | Effect |
+| --- | --- |
+| `denied` / `traversal` / `pending` | `effect_count == 0` |
+| `approve_twice` | `effect_count == 1` via the HP-100 `idempotency_key` |
+
+`hivepilot/eval_behavior_memory.py` is the richer HITL memory suite. It is
+**not** default PR CI. Opt in with `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1` and
+the `behavior_memory` pytest marker, or dispatch `.github/workflows/nightly.yml`
+(scheduled runs also require repository variable `HIVEPILOT_BEHAVIOR_MEMORY_EVAL=1`).
+
 ### Evidence refs (HP-99) — tenant-scoped, redacted, watermarked
 
 `hivepilot/evidence.py` is a local evidence registry (OpenSpace `evidence/*` pattern, rewritten; no cloud, no pickle):
@@ -376,6 +393,8 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - A pending or rejected memory proposal does not mutate IsolatedJsonMemory / workspace text (HP-101).
 - Memory apply runs only after APPROVED; edit+approve applies the user text (HP-101).
 - Memory recall and user Pollen/vault writes do not go through PASS (HP-101).
+- Denied / traversal / pending contract cases execute zero side-effects; approve×2 is one HP-100 effect (HP-113).
+- Behavior-memory eval is opt-in nightly and must not keyword-route skills or tools (HP-113).
 
 ## See also
 
