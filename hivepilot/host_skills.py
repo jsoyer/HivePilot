@@ -1,9 +1,11 @@
 """HP-112 host skills — local skill-discovery + delegate-task.
 
 OpenSpace host_skills pattern, rewritten in Python. Discovery is HP-107
-BM25 over the HP-98 catalog. Delegate is HivePilot ``run_subagent`` /
-``spawn_peer`` / ``Orchestrator.run_pipeline``. This module does not
-vendor OpenSpace, persist pickle, or call a remote skill host.
+BM25 over the HP-98 catalog, with optional HP-114 hybrid RRF when an
+embedding provider is explicitly enabled. Delegate is HivePilot
+``run_subagent`` / ``spawn_peer`` / ``Orchestrator.run_pipeline``. This
+module does not vendor OpenSpace, persist pickle, or call a remote
+skill host.
 
 Contracts:
 
@@ -27,6 +29,10 @@ from typing import Any
 
 from hivepilot.services.delegation import run_subagent, spawn_peer
 from hivepilot.skill_catalog import SkillCatalog, SkillListing, scan_catalog
+from hivepilot.skill_embeddings import (
+    EmbeddingProvider,
+    configured_embedding_provider,
+)
 from hivepilot.skill_ranker import DEFAULT_TOP_K, SkillDisclosure, SkillHit, SkillRanker
 
 HOST_SKILL_NAMES: tuple[str, ...] = ("skill-discovery", "delegate-task")
@@ -39,7 +45,8 @@ _pipeline_runner: PipelineRunner | None = None
 _DISCOVERY_MD = """# Skill Discovery
 
 Find reusable HivePilot skills on this host. Search is local BM25 over
-the HP-98 catalog. HP-105 enabled / provisional filters run before
+the HP-98 catalog (optional hybrid RRF when an embedding provider is
+explicitly enabled). HP-105 enabled / provisional filters run before
 scoring. Hits are cards — name, description, score — without the skill
 body. Call disclose after you select a revision.
 
@@ -255,6 +262,7 @@ def discover(
     plugin_manager: SkillListing | None = None,
     plugin_skills: Iterable[Mapping[str, Any]] | None = None,
     base_dir: Path | None = None,
+    provider: EmbeddingProvider | None = None,
 ) -> DiscoveryReport:
     """Rank local catalog skills. Never attaches a skill to a stage."""
     resolved = _resolve_catalog(
@@ -263,7 +271,8 @@ def discover(
         plugin_skills=plugin_skills,
         base_dir=base_dir,
     )
-    ranker = SkillRanker(resolved, tenant=tenant)
+    active = configured_embedding_provider() if provider is None else provider
+    ranker = SkillRanker(resolved, tenant=tenant, provider=active)
     hits = ranker.retrieve(
         query,
         top_k=top_k,
