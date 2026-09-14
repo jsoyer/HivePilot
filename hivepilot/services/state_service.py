@@ -629,6 +629,28 @@ def init_db() -> None:
             )
             """
         )
+        # HP-117 local package-tree taxonomy. Logical mapping only —
+        # reclassify never moves skill files. Tenant-scoped; no cloud.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS skill_taxonomy_placements (
+                tenant TEXT NOT NULL DEFAULT 'default',
+                logical_id TEXT NOT NULL,
+                skill_name TEXT NOT NULL DEFAULT '',
+                category_path TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'unplaced',
+                candidates TEXT NOT NULL DEFAULT '[]',
+                reason TEXT NOT NULL DEFAULT '',
+                created_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (tenant, logical_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_skill_taxonomy_path "
+            "ON skill_taxonomy_placements (tenant, status, category_path)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS tokens (

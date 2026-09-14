@@ -336,6 +336,22 @@ locally (no remote skill host, no pickle):
 - Bundled plugin `host_skills` publishes `skill-discovery` and
   `delegate-task` SkillSpecs. They grant no HP-95 tool tokens.
 
+## Package-tree taxonomy (HP-117)
+
+`hivepilot/skill_taxonomy.py` is the OpenSpace package-tree /
+`local_category_path` pattern rewritten locally (no cloud, no disk
+layout helper):
+
+- Placement is a **logical** tenant-scoped mapping
+  `logical_id → category_path`. Reclassify updates that mapping only.
+  Directory skills stay where HP-98 scanned them.
+- One clear classifier path assigns. Ambiguous output (multiple paths,
+  low confidence, empty/invalid, or an explicit flag) is
+  `needs_review` — never a silent assign. Review opens a HP-97 PASS
+  card (`kind=skill_evolution`, `action=taxonomy_review`).
+- The package tree is built from mappings. There is no function that
+  materializes a category tree on disk.
+
 ## Skill workshop (HP-79)
 
 Skills improve by **proposal**, not by silent rewrite.
@@ -357,4 +373,5 @@ Skills improve by **proposal**, not by silent rewrite.
 - HP-111 atomic accept: `hivepilot/skill_evolution_accept.py` + Pollen workshop diffs / lineage
 - HP-112 host skills: `hivepilot/host_skills.py` (`discover` / `delegate`)
 - HP-114 optional hybrid RRF: `hivepilot/skill_embeddings.py` (off by default)
+- HP-117 local package tree: `hivepilot/skill_taxonomy.py` (logical mapping; no cloud)
 - [runtime-to-skill-audit.md](runtime-to-skill-audit.md) — read-only top 5 still in the engine
