@@ -23,4 +23,6 @@ Replay: `pytest tests/test_workspace_paths.py tests/test_schedule_create.py test
 
 ## Testing
 
-- [ ] `pytest tests/test_workspace_paths.py tests/test_schedule_create.py tests/test_skill_evolution_validator.py tests/test_pass_store.py tests/test_tool_catalog.py`
+- [x] `pytest tests/test_workspace_paths.py tests/test_schedule_create.py tests/test_skill_evolution_validator.py tests/test_pass_store.py tests/test_tool_catalog.py tests/test_eval_contract.py` — 105 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/workspace_paths.py hivepilot/schedule_create.py hivepilot/skill_evolution_validator.py` — no issues
