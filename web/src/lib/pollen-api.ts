@@ -2919,3 +2919,68 @@ export function acceptSkillProposal(id: string): Promise<SkillProposal> {
 export function rejectSkillProposal(id: string): Promise<SkillProposal> {
   return postJson<SkillProposal>(`/v1/skills/proposals/${encodeURIComponent(id)}/reject`, {})
 }
+
+// ---------------------------------------------------------------------------
+// Skill evolution (HP-111) — multi-file diff + lineage. HITL then accept.
+// ---------------------------------------------------------------------------
+
+export interface SkillEvolutionFileDiff {
+  path: string
+  before: string
+  after: string
+  unified: string
+}
+
+export interface SkillEvolutionLineageNode {
+  id: string
+  label: string
+  kind: string
+  origin?: string
+  proposal_id?: string
+}
+
+export interface SkillEvolutionLineageEdge {
+  source: string
+  target: string
+}
+
+export interface SkillEvolutionLineage {
+  nodes: SkillEvolutionLineageNode[]
+  edges: SkillEvolutionLineageEdge[]
+}
+
+export interface SkillEvolutionCard {
+  id: string
+  kind: string
+  status: string
+  name: string
+  evolution_type: string
+  origin: string
+  content_hash: string
+  merge_key: string
+  applied: boolean
+  would_mutate: boolean
+  reason: string
+  validation: Record<string, unknown>
+  diffs: SkillEvolutionFileDiff[]
+  lineage: SkillEvolutionLineage
+}
+
+export function fetchSkillEvolutions(status?: string): Promise<SkillEvolutionCard[]> {
+  const params = status ? `?${new URLSearchParams({ status }).toString()}` : ''
+  return apiFetch<SkillEvolutionCard[]>(`/v1/skill-evolutions${params}`, { on403: 'forbidden' })
+}
+
+export function approveSkillEvolution(id: string): Promise<SkillEvolutionCard> {
+  return postJson<SkillEvolutionCard>(`/v1/skill-evolutions/${encodeURIComponent(id)}/approve`, {})
+}
+
+export function rejectSkillEvolution(id: string): Promise<SkillEvolutionCard> {
+  return postJson<SkillEvolutionCard>(`/v1/skill-evolutions/${encodeURIComponent(id)}/reject`, {})
+}
+
+export function acceptSkillEvolution(id: string, expectedDigest: string): Promise<SkillEvolutionCard> {
+  return postJson<SkillEvolutionCard>(`/v1/skill-evolutions/${encodeURIComponent(id)}/accept`, {
+    expected_digest: expectedDigest,
+  })
+}

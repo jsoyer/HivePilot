@@ -2,7 +2,7 @@
 
 OpenSpace ``skill_engine/evidence/*`` pattern, rewritten in Python. This
 module does **not** vendor OpenSpace, talk to OpenSpace cloud, persist
-pickle embeddings, or implement HP-111 atomic accept of FIX/DERIVED/CAPTURED.
+pickle embeddings, or auto-apply FIX/DERIVED/CAPTURED (HP-111 owns accept).
 
 Contracts:
 

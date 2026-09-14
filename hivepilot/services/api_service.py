@@ -29,7 +29,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from hivepilot import roles
 from hivepilot.config import settings
 from hivepilot.orchestrator import Orchestrator
-from hivepilot.pass_store import PassStoreError
+from hivepilot.pass_store import (
+    SKILL_EVOLUTION_KIND,
+    PassStoreError,
+)
+from hivepilot.pass_store import (
+    decide as pass_decide,
+)
+from hivepilot.pass_store import (
+    get as get_pass_proposal,
+)
+from hivepilot.pass_store import (
+    inbox as pass_inbox,
+)
 from hivepilot.presenters import (
     POLLEN,
     PresenterError,
@@ -59,6 +71,13 @@ from hivepilot.services import (
     token_service,
 )
 from hivepilot.services.metrics import registry, run_duration_seconds
+from hivepilot.skill_dirs import skill_scan_dirs
+from hivepilot.skill_evolution import apply_approved, preview_accept
+from hivepilot.skill_evolution_accept import (
+    HITL_REQUIRED,
+    STALE_DIGEST,
+    SkillEvolutionAcceptError,
+)
 from hivepilot.ui.plugin_persist import persist_plugins_disabled
 from hivepilot.utils.validation import MAX_PROMPT_LEN, check_prompt_injection, sanitize_prompt
 
@@ -1647,6 +1666,195 @@ def reject_skill_proposal_endpoint(
     except SkillWorkshopError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return _skill_proposal_out(row)
+
+
+# ---------------------------------------------------------------------------
+# Skill evolution (HP-111). HITL approve/reject, then atomic accept.
+# GET list/detail -> read. approve/reject/accept -> approve rank.
+# ---------------------------------------------------------------------------
+
+
+class SkillEvolutionFileDiff(BaseModel):
+    path: str
+    before: str = ""
+    after: str = ""
+    unified: str = ""
+
+
+class SkillEvolutionLineageNode(BaseModel):
+    id: str
+    label: str
+    kind: str
+    origin: str = ""
+    proposal_id: str = ""
+
+
+class SkillEvolutionLineageEdge(BaseModel):
+    source: str
+    target: str
+
+
+class SkillEvolutionLineage(BaseModel):
+    nodes: list[SkillEvolutionLineageNode] = Field(default_factory=list)
+    edges: list[SkillEvolutionLineageEdge] = Field(default_factory=list)
+
+
+class SkillEvolutionCard(BaseModel):
+    id: str
+    kind: str = SKILL_EVOLUTION_KIND
+    status: str
+    name: str = ""
+    evolution_type: str = ""
+    origin: str = ""
+    content_hash: str = ""
+    merge_key: str = ""
+    applied: bool = False
+    would_mutate: bool = False
+    reason: str = ""
+    validation: dict[str, Any] = Field(default_factory=dict)
+    diffs: list[SkillEvolutionFileDiff] = Field(default_factory=list)
+    lineage: SkillEvolutionLineage = Field(default_factory=SkillEvolutionLineage)
+
+
+class SkillEvolutionDecision(BaseModel):
+    actor: str = "operator"
+    reason: str = ""
+
+
+class SkillEvolutionAcceptBody(BaseModel):
+    actor: str = "operator"
+    expected_digest: str = ""
+    skill_root: str = ""
+
+
+def _skill_evolution_tenant(caller: token_service.TokenEntry) -> str | None:
+    return None if caller.role == "admin" else (caller.tenant or "default")
+
+
+def _skill_evolution_card(proposal_id: str) -> SkillEvolutionCard:
+    preview = preview_accept(proposal_id)
+    lineage = preview.get("lineage") or {"nodes": [], "edges": []}
+    return SkillEvolutionCard(
+        id=str(preview.get("proposal_id") or proposal_id),
+        status=str(preview.get("pass_status") or ""),
+        name=str(preview.get("name") or ""),
+        evolution_type=str(preview.get("evolution_type") or ""),
+        origin=str(preview.get("origin") or ""),
+        content_hash=str(preview.get("content_hash") or ""),
+        merge_key=str(preview.get("merge_key") or ""),
+        applied=bool(preview.get("applied")),
+        would_mutate=bool(preview.get("would_mutate")),
+        reason=str(preview.get("reason") or ""),
+        validation=dict(preview.get("validation") or {}),
+        diffs=[SkillEvolutionFileDiff(**item) for item in preview.get("diffs") or []],
+        lineage=SkillEvolutionLineage(
+            nodes=[SkillEvolutionLineageNode(**node) for node in lineage.get("nodes") or []],
+            edges=[SkillEvolutionLineageEdge(**edge) for edge in lineage.get("edges") or []],
+        ),
+    )
+
+
+def _resolve_evolution_root(name: str, explicit: str = "") -> Path | None:
+    if explicit.strip():
+        return Path(explicit.strip())
+    cleaned = (name or "").strip()
+    if not cleaned:
+        return None
+    roots = skill_scan_dirs()
+    if not roots:
+        return None
+    return roots[0] / cleaned
+
+
+@v1.get("/skill-evolutions")
+def list_skill_evolutions_endpoint(
+    status_filter: str | None = Query(None, alias="status"),
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> list[SkillEvolutionCard]:
+    tenant = _skill_evolution_tenant(caller)
+    try:
+        rows = pass_inbox(kind=SKILL_EVOLUTION_KIND, status=status_filter, tenant=tenant)
+    except PassStoreError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return [_skill_evolution_card(row.id) for row in rows]
+
+
+@v1.get("/skill-evolutions/{proposal_id}")
+def get_skill_evolution_endpoint(
+    proposal_id: str,
+    caller: token_service.TokenEntry = Depends(require_role("read")),
+) -> SkillEvolutionCard:
+    row = get_pass_proposal(proposal_id)
+    tenant = _skill_evolution_tenant(caller)
+    if row is None or row.kind != SKILL_EVOLUTION_KIND:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+    if tenant is not None and row.tenant != tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+    return _skill_evolution_card(row.id)
+
+
+@v1.post("/skill-evolutions/{proposal_id}/approve")
+def approve_skill_evolution_endpoint(
+    proposal_id: str,
+    body: SkillEvolutionDecision | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> SkillEvolutionCard:
+    actor = (body.actor if body else None) or caller.note or caller.role
+    reason = (body.reason if body else "") or ""
+    try:
+        pass_decide(proposal_id, "approve", actor=str(actor), reason=reason)
+    except PassStoreError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _skill_evolution_card(proposal_id)
+
+
+@v1.post("/skill-evolutions/{proposal_id}/reject")
+def reject_skill_evolution_endpoint(
+    proposal_id: str,
+    body: SkillEvolutionDecision | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> SkillEvolutionCard:
+    actor = (body.actor if body else None) or caller.note or caller.role
+    reason = (body.reason if body else "") or ""
+    try:
+        pass_decide(proposal_id, "reject", actor=str(actor), reason=reason)
+    except PassStoreError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return _skill_evolution_card(proposal_id)
+
+
+@v1.post("/skill-evolutions/{proposal_id}/accept")
+def accept_skill_evolution_endpoint(
+    proposal_id: str,
+    body: SkillEvolutionAcceptBody | None = None,
+    caller: token_service.TokenEntry = Depends(require_role("approve")),
+) -> SkillEvolutionCard:
+    actor = (body.actor if body else None) or caller.note or caller.role
+    expected = (body.expected_digest if body else "") or ""
+    explicit_root = (body.skill_root if body else "") or ""
+    row = get_pass_proposal(proposal_id)
+    if row is None or row.kind != SKILL_EVOLUTION_KIND:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+    dest = _resolve_evolution_root(str(row.payload.get("name") or ""), explicit_root)
+    try:
+        result = apply_approved(
+            proposal_id,
+            skill_root=dest,
+            expected_digest=expected,
+            actor=str(actor),
+        )
+    except SkillEvolutionAcceptError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not result.ok:
+        code = (
+            status.HTTP_409_CONFLICT
+            if result.code == STALE_DIGEST
+            else status.HTTP_403_FORBIDDEN
+            if result.code == HITL_REQUIRED
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=result.reason)
+    return _skill_evolution_card(proposal_id)
 
 
 # ---------------------------------------------------------------------------

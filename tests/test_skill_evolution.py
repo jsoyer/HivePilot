@@ -325,12 +325,13 @@ class TestNoAutonomousApply:
         )
         assert draft.persisted is True
         decide(draft.proposal_id, "approve", actor="reviewer")
+        preview = preview_accept(draft.proposal_id)
+        assert preview["would_mutate"] is True
+        assert preview["reason"] == "ready"
         refusal = apply_approved(draft.proposal_id)
         assert refusal.ok is False
         assert refusal.mutated is False
-        assert refusal.code == "hp111_atomic_accept"
-        preview = preview_accept(draft.proposal_id)
-        assert preview["would_mutate"] is False
+        assert refusal.code == "skill_root_required"
         assert (skills / "SKILL.md").read_text(encoding="utf-8") == body
         assert not (skills / SKILL_ID_SIDECAR).exists()
         catalog = SkillCatalog()

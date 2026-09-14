@@ -1107,6 +1107,149 @@ export interface components {
             /** Task */
             task?: string | null;
         };
+        /** SkillEvolutionAcceptBody */
+        SkillEvolutionAcceptBody: {
+            /**
+             * Actor
+             * @default operator
+             */
+            actor: string;
+            /**
+             * Expected Digest
+             * @default
+             */
+            expected_digest: string;
+            /**
+             * Skill Root
+             * @default
+             */
+            skill_root: string;
+        };
+        /** SkillEvolutionCard */
+        SkillEvolutionCard: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /**
+             * Content Hash
+             * @default
+             */
+            content_hash: string;
+            /** Diffs */
+            diffs?: components["schemas"]["SkillEvolutionFileDiff"][];
+            /**
+             * Evolution Type
+             * @default
+             */
+            evolution_type: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default skill_evolution
+             */
+            kind: string;
+            lineage?: components["schemas"]["SkillEvolutionLineage"];
+            /**
+             * Merge Key
+             * @default
+             */
+            merge_key: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+            /** Status */
+            status: string;
+            /** Validation */
+            validation?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Would Mutate
+             * @default false
+             */
+            would_mutate: boolean;
+        };
+        /** SkillEvolutionDecision */
+        SkillEvolutionDecision: {
+            /**
+             * Actor
+             * @default operator
+             */
+            actor: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** SkillEvolutionFileDiff */
+        SkillEvolutionFileDiff: {
+            /**
+             * After
+             * @default
+             */
+            after: string;
+            /**
+             * Before
+             * @default
+             */
+            before: string;
+            /** Path */
+            path: string;
+            /**
+             * Unified
+             * @default
+             */
+            unified: string;
+        };
+        /** SkillEvolutionLineage */
+        SkillEvolutionLineage: {
+            /** Edges */
+            edges?: components["schemas"]["SkillEvolutionLineageEdge"][];
+            /** Nodes */
+            nodes?: components["schemas"]["SkillEvolutionLineageNode"][];
+        };
+        /** SkillEvolutionLineageEdge */
+        SkillEvolutionLineageEdge: {
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+        };
+        /** SkillEvolutionLineageNode */
+        SkillEvolutionLineageNode: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /**
+             * Origin
+             * @default
+             */
+            origin: string;
+            /**
+             * Proposal Id
+             * @default
+             */
+            proposal_id: string;
+        };
         /** SkillProposalCreate */
         SkillProposalCreate: {
             /** Files */
