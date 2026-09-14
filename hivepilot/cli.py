@@ -24,6 +24,7 @@ from hivepilot.services.project_service import (
     resolve_project_target,
     resolve_targets,
 )
+from hivepilot.trace_export import CriticalFindingsBlock, TraceExportError, export_zip
 from hivepilot.utils.logging import get_logger
 
 app = typer.Typer(help="HivePilot advanced orchestrator")
@@ -258,6 +259,8 @@ skills_app = typer.Typer(help="Inspect plugin-contributed skills")
 app.add_typer(skills_app, name="skills")
 scan_app = typer.Typer(help="Supply-chain security scanning (SBOM + vulnerability scan)")
 app.add_typer(scan_app, name="scan")
+traces_app = typer.Typer(help="Local task-trace export (no upload)")
+app.add_typer(traces_app, name="traces")
 drift_app = typer.Typer(help="Infrastructure drift detection")
 app.add_typer(drift_app, name="drift")
 playbooks_app = typer.Typer(help="Multi-agent collaboration playbook templates")
@@ -3262,6 +3265,25 @@ def scan_vulns(
     if fail_on is not None and scan_service.exceeds_severity(result, fail_on.strip().lower()):
         typer.echo(f"\nFound findings at or above '--fail-on {fail_on}' severity.", err=True)
         raise typer.Exit(code=1)
+
+
+@traces_app.command("export")
+def traces_export(
+    run_id: int = typer.Argument(..., help="Persisted project run id"),
+    output: Path = typer.Option(..., "--output", "-o", help="Local ZIP path"),
+    tenant: str = typer.Option("default", "--tenant", help="Tenant that owns the run"),
+) -> None:
+    """Write a redacted local task-trace ZIP. Critical findings refuse export."""
+    try:
+        path = export_zip(run_id, output, tenant=tenant)
+    except CriticalFindingsBlock as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except TraceExportError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(f"local traces zip: {path}")
 
 
 @scan_app.command("sbom")

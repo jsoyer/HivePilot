@@ -357,6 +357,14 @@ or a nudge.
 | `vulns` | Run a vulnerability scan. | No |
 | `sbom` | Generate a Software Bill of Materials. Writes a file. | **Yes** (writes output) |
 
+## `traces` — local task-trace export (HP-118)
+
+Redacted project-run ZIP. Critical findings refuse the write. No upload.
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `export <run_id>` | Write metadata / tools / skills / redaction to a local ZIP (`--output`). | **Yes** (writes a local file) |
+
 ## `drift` — infrastructure drift
 
 | Command | Purpose | Mutating? |

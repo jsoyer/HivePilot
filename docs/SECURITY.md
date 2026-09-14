@@ -154,6 +154,20 @@ HP-67.
 HP-116 confines workspace paths (`hivepilot/workspace_paths.py`) and
 routes `schedules.create` through PASS with class ≠ mechanical
 (`hivepilot/schedule_create.py`).
+HP-118 (`hivepilot/trace_export.py`) assembles a redacted project-run
+projection (metadata / tools / skills / evidence packet) into a **local
+ZIP on demand**. Critical findings block the export (no archive written).
+There is no cloud reporter or upload path.
+
+### Task traces export (HP-118) — local ZIP, no upload
+
+`hivepilot traces export <run_id> --output traces.zip` is on-demand only:
+
+- Projection is tenant-scoped and run through `redact_value` before ZIP.
+- Tools come from persisted steps plus HP-99 `tool_event` refs for that run.
+- Skills come from HP-104 `list_skill_events(run_id=…)`.
+- Critical structured-verdict findings refuse the write. Destination must
+  be a local filesystem path.
 
 ### Memory proposals HITL (HP-101)
 
