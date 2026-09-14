@@ -1,0 +1,29 @@
+name: Nightly evals
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  behavior-memory:
+    name: Behavior memory eval (opt-in)
+    # Off until the repository variable is set, or a human dispatches the job.
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.HIVEPILOT_BEHAVIOR_MEMORY_EVAL == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install project + dev extras
+        run: pip install -e ".[dev]"
+
+      - name: pytest behavior memory
+        env:
+          HIVEPILOT_BEHAVIOR_MEMORY_EVAL: "1"
+        run: python -m pytest tests/test_eval_behavior_memory_nightly.py -q -m behavior_memory

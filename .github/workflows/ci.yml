@@ -68,7 +68,8 @@ jobs:
         run: pip install -e ".[dev,notifications]"
 
       - name: pytest
-        run: python -m pytest -q
+        # HP-113: behavior-memory eval is opt-in nightly, not default PR CI.
+        run: python -m pytest -q -m "not behavior_memory"
 
   postgres:
     name: Test (postgres dialect)
