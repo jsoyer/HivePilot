@@ -16,6 +16,7 @@ from hivepilot.skill_evolution import (
     DERIVED,
     DRAFT,
     FIX,
+    EvolutionDraft,
     SkillEvolutionError,
     apply_approved,
     assess_captured_eligibility,
@@ -200,22 +201,36 @@ class TestCapturedGate:
         assert card.payload["validation_ref"] == "val-4"
 
 
+def _fix_draft() -> EvolutionDraft:
+    return propose(
+        evolution_type=FIX,
+        name="faulty",
+        revision_id="rev-fix",
+        causal_event_id="evt-1",
+        representative_result="result-1",
+        evidence_refs=["idem-ev"],
+        files={"SKILL.md": "# fix\n"},
+    )
+
+
+def _derived_draft() -> EvolutionDraft:
+    return propose(
+        evolution_type=DERIVED,
+        name="child",
+        parent_logical_ids=["parent"],
+        evidence_refs=["idem-ev2"],
+        files={"SKILL.md": "# child\n"},
+    )
+
+
 class TestMergeKeyIdempotency:
     def test_same_payload_returns_same_card(self) -> None:
         _ref("idem-ev")
-        kwargs = {
-            "evolution_type": FIX,
-            "name": "faulty",
-            "revision_id": "rev-fix",
-            "causal_event_id": "evt-1",
-            "representative_result": "result-1",
-            "evidence_refs": ["idem-ev"],
-            "files": {"SKILL.md": "# fix\n"},
-        }
-        first = propose(**kwargs)
-        second = propose(**kwargs)
+        first = _fix_draft()
+        second = _fix_draft()
         assert first.proposal_id == second.proposal_id
         assert first.merge_key == second.merge_key
+        assert first.payload is not None
         assert first.merge_key == evolution_merge_key(
             evolution_type=FIX,
             name="faulty",
@@ -225,20 +240,15 @@ class TestMergeKeyIdempotency:
             content_hash=first.payload["content_hash"],
         )
         assert len(inbox(kind="skill_evolution", status=None)) == 1
-        assert find_by_merge_key(first.merge_key).id == first.proposal_id
+        stored = find_by_merge_key(first.merge_key)
+        assert stored is not None
+        assert stored.id == first.proposal_id
 
     def test_idempotent_after_approve(self) -> None:
         _ref("idem-ev2")
-        kwargs = {
-            "evolution_type": DERIVED,
-            "name": "child",
-            "parent_logical_ids": ["parent"],
-            "evidence_refs": ["idem-ev2"],
-            "files": {"SKILL.md": "# child\n"},
-        }
-        first = propose(**kwargs)
+        first = _derived_draft()
         decide(first.proposal_id, "approve", actor="reviewer")
-        again = propose(**kwargs)
+        again = _derived_draft()
         assert again.proposal_id == first.proposal_id
         assert again.persisted is True
         assert len(inbox(kind="skill_evolution", status=None)) == 1
