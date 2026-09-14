@@ -79,6 +79,18 @@ Do not fold those axes into risk tiers. HP-58 `GET /v1/tools` stays a typed-tool
 
 Isolated memory is JSON **data** (`role=data`), never system/instruction text and never merged into `extra_prompt`. A payload that *looks* like an instruction stays inside the data envelope. HITL memory proposals are HP-101 (`hivepilot/memory_proposals.py`).
 
+### Workspace path confine + `schedules.create` HITL (HP-116)
+
+`hivepilot/workspace_paths.py` is the choke point for agent file paths (Coworker workspace-path pattern, rewritten; no vendored TS):
+
+- relative only (no `/`, `~`, drive letter)
+- `..` is refused even when resolve would stay inside the root
+- `realpath` / symlink resolution must remain inside the workspace root
+
+HP-110 skill-evolution path checks reuse that lexical + realpath helper and still add hidden-file / `.` rules on top.
+
+`schedules.create` (`hivepilot/schedule_create.py`) is a standing-automation tool. Catalog default is high / `require_approval`. The stored HP-86 class is always `product_fork` (never `mechanical`), so `match_auto` stays HITL even if a rule claims mechanical and `tool_policies` widens to `allow`. YAML is written only after PASS `APPROVED`.
+
 ### PASS store (HP-97) — one inbox, decide before side-effect
 
 `hivepilot/pass_store.py` is the unified Approvals inbox (ADR HP-94 / plan coworker-openspace). It extends HP-61 rules rather than adding a second control plane.
@@ -134,6 +146,9 @@ existing HP-68 loopback CDP: tied to `run_id`, issued via PASS
 `kind=tool` / `BrowserCDP`, dead when `complete_run` fires. No grant ⇒
 no CDP action. HivePilot does not embed Chromium and does not reopen
 HP-67.
+HP-116 confines workspace paths (`hivepilot/workspace_paths.py`) and
+routes `schedules.create` through PASS with class ≠ mechanical
+(`hivepilot/schedule_create.py`).
 
 ### Memory proposals HITL (HP-101)
 
@@ -404,6 +419,8 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) and [DASHBOARD.md](./DASHBOARD.md).
 - A CDP action without a live run-scoped grant is refused (HP-115).
 - End of run (`complete_run`) kills the browser grant; a finished run cannot receive a new one (HP-115).
 - Browser grant stays loopback-only and never embeds Chromium or reopens HP-67 (HP-115).
+- A workspace path that is absolute, contains `..`, or whose realpath/symlink leaves the root is refused (HP-116).
+- `schedules.create` is PASS HITL; stored class is never `mechanical` (HP-116).
 - Denied / traversal / pending contract cases execute zero side-effects; approve×2 is one HP-100 effect (HP-113).
 - Behavior-memory eval is opt-in nightly and must not keyword-route skills or tools (HP-113).
 

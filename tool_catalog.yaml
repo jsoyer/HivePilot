@@ -86,3 +86,9 @@ tools:
     defaultPolicy: require_approval
     volatile: true
     idempotency: false
+  # HP-116 — standing automation. Always PASS; class ≠ mechanical.
+  - token: schedules.create
+    risk: high
+    defaultPolicy: require_approval
+    volatile: false
+    idempotency: false
