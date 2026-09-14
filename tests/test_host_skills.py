@@ -229,9 +229,12 @@ class TestDelegateUsesHivePilotApis:
 
     def test_subagent_calls_run_subagent(self) -> None:
         seen: list[tuple[str, str]] = []
-        delegation.register_subagent_executor(
-            lambda role, prompt: seen.append((role, prompt)) or f"{role}:{prompt}"
-        )
+
+        def _capture(role: str, prompt: str) -> str:
+            seen.append((role, prompt))
+            return f"{role}:{prompt}"
+
+        delegation.register_subagent_executor(_capture)
         report = delegate("subagent", role="ceo", prompt="résume")
         assert seen == [("ceo", "résume")]
         assert report == DelegateReport(

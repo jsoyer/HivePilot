@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,17 @@ from hivepilot.skill_evolution_validator import (
 SAFE_BODY = "# safe skill\n"
 
 
-def _skill(body: str = SAFE_BODY, **front) -> dict[str, str]:
-    if not front:
+def _skill(
+    body: str = SAFE_BODY,
+    front: Mapping[str, str | Sequence[str]] | None = None,
+    **extra: str,
+) -> dict[str, str]:
+    merged: dict[str, str | Sequence[str]] = dict(front or {})
+    merged.update(extra)
+    if not merged:
         return {"SKILL.md": body}
     lines = ["---"]
-    for key, value in front.items():
+    for key, value in merged.items():
         if isinstance(value, list):
             lines.append(f"{key}:")
             lines.extend(f"  - {item}" for item in value)
@@ -133,7 +140,7 @@ class TestSecrets:
 
 class TestPrivilegeApprovals:
     def test_new_bash_without_approval_needs_review(self) -> None:
-        result = validate(files=_skill(**{"allowed-tools": ["Bash"]}), name="wide")
+        result = validate(files=_skill(front={"allowed-tools": ["Bash"]}), name="wide")
         assert result.result == NEEDS_HUMAN_REVIEW
         assert result.mutated is False
         assert any(code.startswith("privilege_") for code in _codes(result))
@@ -142,7 +149,7 @@ class TestPrivilegeApprovals:
 
     def test_generic_approval_is_not_specific(self) -> None:
         result = validate(
-            files=_skill(**{"allowed-tools": ["Bash"]}),
+            files=_skill(front={"allowed-tools": ["Bash"]}),
             name="wide",
             specific_approvals=["approve", "*", "all"],
         )
@@ -150,7 +157,7 @@ class TestPrivilegeApprovals:
 
     def test_specific_approval_allows_named_extension(self) -> None:
         result = validate(
-            files=_skill(**{"allowed-tools": ["Bash"]}),
+            files=_skill(front={"allowed-tools": ["Bash"]}),
             name="wide",
             specific_approvals=["allowed-tools:Bash", "shell"],
         )
@@ -160,7 +167,7 @@ class TestPrivilegeApprovals:
     def test_hooks_and_permissions_need_named_approval(self) -> None:
         result = validate(
             files={
-                **_skill(**{"permission_mode": "bypassPermissions", "hooks": ["PreToolUse"]}),
+                **_skill(front={"permission_mode": "bypassPermissions", "hooks": ["PreToolUse"]}),
                 "hooks/pre.sh": "#!/bin/sh\necho hi\n",
             },
             name="elevated",
@@ -172,8 +179,8 @@ class TestPrivilegeApprovals:
         assert "privilege_shell" in codes
 
     def test_baseline_keeps_existing_tools(self) -> None:
-        baseline = _skill(**{"allowed-tools": ["Read", "Bash"]})
-        proposed = _skill(**{"allowed-tools": ["Read", "Bash"]})
+        baseline = _skill(front={"allowed-tools": ["Read", "Bash"]})
+        proposed = _skill(front={"allowed-tools": ["Read", "Bash"]})
         result = validate(files=proposed, name="stable", baseline_files=baseline)
         assert result.result == APPROVE
         assert result.privilege_extensions == ()
@@ -238,7 +245,7 @@ class TestProposeGate:
             causal_event_id="evt-1",
             representative_result="result-1",
             evidence_refs=["priv-ev"],
-            files=_skill(**{"allowed-tools": ["Bash"]}),
+            files=_skill(front={"allowed-tools": ["Bash"]}),
         )
         assert draft.persisted is True
         assert draft.payload is not None
