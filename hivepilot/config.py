@@ -1001,6 +1001,11 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_SHADCN_ENABLED / _IMPROVE_ENABLED
     shadcn_enabled: bool = False
     improve_enabled: bool = False
+    # HP-112 host skills (skill-discovery + delegate-task). Default on so
+    # discover/delegate stay available when plugins load; flip False to
+    # hide the SkillSpecs. Required by TestAllPluginStemsHaveEnabledFlag.
+    # env: HIVEPILOT_HOST_SKILLS_ENABLED
+    host_skills_enabled: bool = True
     # Built-in agent runners are individually disable-able (plugin-arch-overhaul
     # Sprint 01). Default True — turning one off removes it from RUNNER_MAP via
     # the _BUILTIN_RUNNERS gate in hivepilot/registry.py. Infra runners
