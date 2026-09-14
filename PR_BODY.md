@@ -22,5 +22,6 @@ Replay: `pytest tests/test_skill_evolution_validator.py tests/test_skill_evoluti
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_evolution_validator.py tests/test_skill_evolution.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_skill_evolution_validator.py tests/test_skill_evolution.py tests/test_pass_store.py tests/test_evidence.py` — 76 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `mypy hivepilot/skill_evolution_validator.py hivepilot/skill_evolution.py` — no issues
