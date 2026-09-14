@@ -16,7 +16,6 @@ from hivepilot.skill_evolution import (
     DERIVED,
     DRAFT,
     FIX,
-    SKILL_ID_SIDECAR as EVOLUTION_SIDECAR,
     SkillEvolutionError,
     apply_approved,
     assess_captured_eligibility,
@@ -288,7 +287,6 @@ class TestNoAutonomousApply:
         )
         assert (skills / "SKILL.md").read_text(encoding="utf-8") == body
         assert not (skills / SKILL_ID_SIDECAR).exists()
-        assert not (skills / EVOLUTION_SIDECAR).exists()
         catalog = SkillCatalog()
         assert len(catalog) == 0
 

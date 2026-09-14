@@ -22,5 +22,5 @@ Replay: `pytest tests/test_skill_evolution.py tests/test_skill_signals.py tests/
 
 ## Testing
 
-- [ ] `pytest tests/test_skill_evolution.py tests/test_skill_signals.py tests/test_pass_store.py tests/test_evidence.py tests/test_skill_catalog.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_skill_evolution.py tests/test_skill_signals.py tests/test_pass_store.py tests/test_evidence.py tests/test_skill_catalog.py tests/test_presenters.py` — 97 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python

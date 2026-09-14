@@ -34,8 +34,10 @@ from hivepilot.pass_store import (
     SKILL_EVOLUTION_KIND,
     PassProposal,
     create_pending,
-    get as get_proposal,
     inbox,
+)
+from hivepilot.pass_store import (
+    get as get_proposal,
 )
 from hivepilot.services import events
 from hivepilot.skill_catalog import SKILL_ID_SIDECAR, logical_skill_id, snapshot_hash
