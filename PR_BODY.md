@@ -1,31 +1,29 @@
 ## Summary
 
-HP-130a — config-only door → bot token map for Inbox / Approvals / Runs / Alerts. Optional per-door env vars fall back to the existing shared `HIVEPILOT_TELEGRAM_BOT_TOKEN` so a single-bot deploy is unchanged. No multi-bot polling, topic routing, systemd split, or STREAM_TOPICS cutover.
+HP-130b — runtime multi-Application Telegram polling. Builds on HP-130a (`eefd90c` / PR #694): when two or more distinct door tokens resolve from `telegram_bot_token_for_door` / `telegram_door_bot_tokens`, `hivepilot telegram start` (polling) runs one python-telegram-bot Application per unique token, each bound to the door(s) that use it. Shared handlers are parameterized by `door`. A single shared token keeps the current one-bot path.
 
-Owning issue: [HP-130](https://linear.app/js-workspace/issue/HP-130/4-door-bots-telegram-inboxapprovalsrunsalerts) (slice 130a)
+Owning issue: [HP-130](https://linear.app/js-workspace/issue/HP-130/4-door-bots-telegram-inboxapprovalsrunsalerts) (slice 130b)
 
-Replay: `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py -q`
+Replay: `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_ask.py -q`
 
 ## What changed
 
-1. **`Settings`** — `telegram_bot_token_{inbox,approvals,runs,alerts}` (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` …). Secret-typed (repr / `config get` masked). Four env vars, not a JSON map, so systemd `EnvironmentFile` stays `KEY=value`.
-2. **`telegram_doors`** — `telegram_bot_token_for_door` / `telegram_door_bot_tokens` resolve door-specific token → `telegram_bot_token` → `TELEGRAM_BOT_TOKEN`. Blank overrides and unknown keys use the shared fallback.
-3. **Docs** — `.env.example`, systemd/OpenRC telegram env examples, INTEGRATIONS / SECURITY / CLI-REFERENCE.
+1. **`telegram_doors.telegram_door_token_groups`** — groups `PERSISTENT_DOORS` by distinct BotFather token (door order preserved; doors with no token omitted).
+2. **`telegram_bot.run_polling`** — `len(groups) <= 1` still calls `_token()` + `_build_application(token)` + `app.run_polling(drop_pending_updates=True)`. Two or more groups build one Application each (`_build_application(token, doors=…)`) and poll them on one loop (`_run_polling_many`).
+3. **Shared handlers** — `_shared_handler` / `_bind_application_doors` / `_door_of` parameterize the existing command/message/callback handlers by door. Single-bot path passes `doors=None` so the registered functions are unchanged.
+4. **Docs** — INTEGRATIONS, CLI-REFERENCE, SECURITY, `.env.example`, systemd/OpenRC telegram env examples. Webhook stays single-token.
 
 ## Out of scope (later slices)
 
-- 130b multi-Application polling
-- 130c route without `message_thread_id`
-- 130d systemd multi-unit deploy
-- 130e cutover / disable `STREAM_TOPICS`
+- 130c route without `message_thread_id` / ignore STREAM_TOPICS for doors
+- 130d systemd multi-unit
+- 130e cutover / wipe topics
 - Creating `run:{id}` forum topics — P0 stop-bleed stays intact
-
-## Live registry (noxysdevbot) — 130a does not wipe
-
-Forum doors remain until 130e. Live registry still has `inbox=2118` … `alerts=2121` (and `_inbox_welcome=2123`) under `/var/lib/hivepilot/data/hivepilot/stream_topics.json`. `hivepilot topics list` can falsely show empty without `HIVEPILOT_BASE_DIR=/var/lib/hivepilot/data`. Orphan forum topics stay until cutover.
+- Webhook / FastAPI multi-bot
 
 ## Testing
 
-- [x] `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py tests/test_cli_config_get.py::TestConfigGet tests/test_telegram_bot.py tests/test_telegram_channel.py tests/test_stream_topics.py` — 231 passed (fallback, per-door override, env mapping, secret mask, no Telegram regression)
+- [x] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_ask.py tests/test_telegram_channel.py tests/test_telegram_stop_bleed.py` — 213 passed (grouping, single-token path unchanged, multi-token builds N apps / correct door binding)
+- [x] Wider Telegram + config-get/secret-repr suite — 383 passed
 - [x] `ruff check` on touched Python
-- [x] `hivepilot lint` — only pre-existing missing example project paths in this environment (`/home/ubuntu/dev/example-api`, …); no new lint findings from 130a
+- [x] `hivepilot lint` — only pre-existing missing example project paths (`/home/ubuntu/dev/example-api`, …); no new lint findings from 130b

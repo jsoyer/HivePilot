@@ -131,6 +131,32 @@ def telegram_door_bot_tokens(
     }
 
 
+def telegram_door_token_groups(
+    cfg: Settings | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Group persistent doors by distinct BotFather token (HP-130b).
+
+    Order follows ``PERSISTENT_DOORS``. Doors with no resolved token are
+    omitted. One shared token yields a single group of every door that
+    resolved to it; two or more distinct tokens yield one group per token,
+    each bound to the door(s) that use it.
+    """
+    resolved = telegram_door_bot_tokens(cfg, environ=environ)
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for door in PERSISTENT_DOORS:
+        token = resolved.get(door)
+        if not token:
+            continue
+        if token not in grouped:
+            grouped[token] = []
+            order.append(token)
+        grouped[token].append(door)
+    return [(token, tuple(grouped[token])) for token in order]
+
+
 def approval_actions_allowed(door: str) -> bool:
     """Pollen cards and Telegram approval keyboards stay on Approvals."""
     return door == APPROVALS

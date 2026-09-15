@@ -506,6 +506,178 @@ class TestRunPollingNoCurrentLoop:
         assert call_order == ["ensure_event_loop", "run_polling"]
 
 
+# ---------------------------------------------------------------------------
+# HP-130b — runtime multi-Application polling
+# ---------------------------------------------------------------------------
+
+
+class TestSharedHandlersParameterizedByDoor:
+    def test_shared_handler_is_identity_when_unbound(self) -> None:
+        assert telegram_bot._shared_handler(telegram_bot._cmd_help, None) is telegram_bot._cmd_help
+
+    def test_single_door_binding_is_visible_to_handler(self) -> None:
+        seen: dict[str, Any] = {}
+
+        async def handler(update: Any, context: Any) -> None:
+            seen["door"] = telegram_bot._door_of(context)
+            seen["doors"] = telegram_bot._doors_of(context)
+
+        bound = telegram_bot._shared_handler(handler, ("inbox",))
+        context = MagicMock()
+        context.application.bot_data = {}
+        asyncio.run(bound(MagicMock(), context))
+        assert seen["door"] == "inbox"
+        assert seen["doors"] == ("inbox",)
+        assert context.application.bot_data["door"] == "inbox"
+        assert context.application.bot_data["doors"] == ("inbox",)
+
+    def test_shared_token_app_binds_all_its_doors(self) -> None:
+        seen: dict[str, Any] = {}
+
+        async def handler(update: Any, context: Any) -> None:
+            seen["door"] = telegram_bot._door_of(context)
+            seen["doors"] = telegram_bot._doors_of(context)
+
+        bound = telegram_bot._shared_handler(handler, ("approvals", "runs"))
+        context = MagicMock()
+        context.application.bot_data = {}
+        asyncio.run(bound(MagicMock(), context))
+        assert seen["door"] is None
+        assert seen["doors"] == ("approvals", "runs")
+        assert "door" not in context.application.bot_data
+        assert context.application.bot_data["doors"] == ("approvals", "runs")
+
+    def test_bind_application_doors_sets_singular_door_only_for_one_door(self) -> None:
+        app = MagicMock()
+        app.bot_data = {}
+        telegram_bot._bind_application_doors(app, ("alerts",))
+        assert app.bot_data == {"doors": ("alerts",), "door": "alerts"}
+        telegram_bot._bind_application_doors(app, ("inbox", "alerts"))
+        assert app.bot_data == {"doors": ("inbox", "alerts")}
+
+
+class TestMultiApplicationPolling:
+    def test_single_token_path_still_uses_token_build_and_run_polling(self) -> None:
+        fake_app = MagicMock()
+        with (
+            patch.object(telegram_bot, "telegram_door_token_groups", return_value=[]),
+            patch.object(telegram_bot, "_token", return_value="123:ABC"),
+            patch.object(telegram_bot, "_build_application", return_value=fake_app) as build,
+            patch.object(telegram_bot, "_run_polling_many") as run_many,
+        ):
+            telegram_bot.run_polling()
+
+        build.assert_called_once_with("123:ABC")
+        fake_app.run_polling.assert_called_once_with(drop_pending_updates=True)
+        run_many.assert_not_called()
+
+    def test_shared_token_group_keeps_single_bot_path(self) -> None:
+        fake_app = MagicMock()
+        groups = [("shared-token", ("inbox", "approvals", "runs", "alerts"))]
+        with (
+            patch.object(telegram_bot, "telegram_door_token_groups", return_value=groups),
+            patch.object(telegram_bot, "_token", return_value="shared-token"),
+            patch.object(telegram_bot, "_build_application", return_value=fake_app) as build,
+            patch.object(telegram_bot, "_run_polling_many") as run_many,
+        ):
+            telegram_bot.run_polling()
+
+        build.assert_called_once_with("shared-token")
+        fake_app.run_polling.assert_called_once_with(drop_pending_updates=True)
+        run_many.assert_not_called()
+
+    def test_multi_token_builds_one_app_per_unique_token(self) -> None:
+        groups = [
+            ("tok-inbox", ("inbox",)),
+            ("tok-appr", ("approvals",)),
+            ("tok-runs", ("runs",)),
+            ("tok-alert", ("alerts",)),
+        ]
+        built: list[tuple[str, tuple[str, ...] | None]] = []
+
+        def fake_build(token: str, doors: tuple[str, ...] | None = None) -> MagicMock:
+            app = MagicMock()
+            built.append((token, doors))
+            return app
+
+        with (
+            patch.object(telegram_bot, "telegram_door_token_groups", return_value=groups),
+            patch.object(telegram_bot, "_token") as mock_token,
+            patch.object(telegram_bot, "_build_application", side_effect=fake_build),
+            patch.object(telegram_bot, "_run_polling_many") as run_many,
+        ):
+            telegram_bot.run_polling()
+
+        mock_token.assert_not_called()
+        assert built == groups
+        run_many.assert_called_once()
+        assert len(run_many.call_args.args[0]) == 4
+
+    def test_multi_token_binds_doors_that_share_a_token(self) -> None:
+        groups = [
+            ("tok-inbox", ("inbox",)),
+            ("tok-shared", ("approvals", "runs")),
+            ("tok-alert", ("alerts",)),
+        ]
+        built: list[tuple[str, tuple[str, ...] | None]] = []
+
+        def fake_build(token: str, doors: tuple[str, ...] | None = None) -> MagicMock:
+            built.append((token, doors))
+            return MagicMock()
+
+        with (
+            patch.object(telegram_bot, "telegram_door_token_groups", return_value=groups),
+            patch.object(telegram_bot, "_build_application", side_effect=fake_build),
+            patch.object(telegram_bot, "_run_polling_many"),
+        ):
+            telegram_bot.run_polling()
+
+        assert built == groups
+
+    def test_build_application_source_parameterizes_shared_handlers(self) -> None:
+        src = inspect.getsource(telegram_bot._build_application)
+        assert "_shared_handler" in src
+        assert "_bind_application_doors" in src
+        assert "doors" in src
+
+
+class TestRunPollingMany:
+    def test_starts_each_updater_then_stops(self) -> None:
+        def _fake_app() -> MagicMock:
+            app = MagicMock()
+            app.initialize = AsyncMock()
+            app.start = AsyncMock()
+            app.stop = AsyncMock()
+            app.shutdown = AsyncMock()
+            app.running = True
+            app.updater = MagicMock()
+            app.updater.start_polling = AsyncMock()
+            app.updater.stop = AsyncMock()
+            app.updater.running = True
+            return app
+
+        apps = [_fake_app(), _fake_app()]
+
+        class _ImmediateEvent:
+            async def wait(self) -> None:
+                return None
+
+            def set(self) -> None:
+                return None
+
+        telegram_bot._ensure_event_loop()
+        with patch.object(asyncio, "Event", return_value=_ImmediateEvent()):
+            telegram_bot._run_polling_many(apps)
+
+        for app in apps:
+            app.initialize.assert_awaited_once()
+            app.start.assert_awaited_once()
+            app.updater.start_polling.assert_awaited_once_with(drop_pending_updates=True)
+            app.updater.stop.assert_awaited_once()
+            app.stop.assert_awaited_once()
+            app.shutdown.assert_awaited_once()
+
+
 class TestRunWebhookNoCurrentLoop:
     """Same 3.14 loop-guarantee, for the built-in-server webhook path."""
 

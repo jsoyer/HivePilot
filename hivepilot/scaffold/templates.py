@@ -168,6 +168,7 @@ _ENV_EXAMPLE = """\
 # --- Telegram bot (optional) ---
 HIVEPILOT_TELEGRAM_BOT_TOKEN=
 # Optional per-door tokens; unset doors fall back to the shared token.
+# Distinct tokens: one polling Application each (HP-130b).
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS=

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 import subprocess
 import unicodedata
 import uuid
@@ -24,6 +25,7 @@ from hivepilot.services.telegram_doors import (
     APPROVALS,
     concierge_action_prompt,
     concierge_answer_text,
+    telegram_door_token_groups,
 )
 from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils.logging import get_logger
@@ -2248,7 +2250,63 @@ async def _on_error(update: Any, context: Any) -> None:
     logger.error("telegram.unhandled_error", error=str(error), exc_info=error)
 
 
-def _build_application(token: str):
+def _bot_data_of(context: Any) -> dict[str, Any]:
+    application = getattr(context, "application", None)
+    bot_data = getattr(application, "bot_data", None)
+    if isinstance(bot_data, dict):
+        return bot_data
+    fallback = getattr(context, "bot_data", None)
+    return fallback if isinstance(fallback, dict) else {}
+
+
+def _bind_application_doors(app: Any, doors: tuple[str, ...]) -> None:
+    """Record which Pollen door(s) this Application serves (HP-130b)."""
+    app.bot_data["doors"] = doors
+    if len(doors) == 1:
+        app.bot_data["door"] = doors[0]
+    else:
+        app.bot_data.pop("door", None)
+
+
+def _doors_of(context: Any) -> tuple[str, ...]:
+    """Doors bound to the Application that received this update."""
+    bot_data = _bot_data_of(context)
+    doors = bot_data.get("doors")
+    if isinstance(doors, tuple):
+        return doors
+    door = bot_data.get("door")
+    return (door,) if isinstance(door, str) and door else ()
+
+
+def _door_of(context: Any) -> str | None:
+    """Single door bound to this Application, or ``None`` when shared/unbound."""
+    doors = _doors_of(context)
+    return doors[0] if len(doors) == 1 else None
+
+
+def _shared_handler(handler: Any, doors: tuple[str, ...] | None) -> Any:
+    """Return *handler* unchanged, or the same function bound to *doors*.
+
+    Single-bot path passes ``doors=None`` so registration stays byte-identical.
+    Multi-token apps wrap the shared handlers so ``_door_of`` / ``_doors_of``
+    see the Application's door binding on every update.
+    """
+    if not doors:
+        return handler
+
+    async def bound(update: Any, context: Any) -> Any:
+        application = getattr(context, "application", None)
+        if application is not None:
+            _bind_application_doors(application, doors)
+        return await handler(update, context)
+
+    bound.__name__ = getattr(handler, "__name__", "bound")
+    bound.__qualname__ = getattr(handler, "__qualname__", "bound")
+    bound.__wrapped__ = handler
+    return bound
+
+
+def _build_application(token: str, doors: tuple[str, ...] | None = None):
     try:
         from telegram.ext import Application, CallbackQueryHandler, CommandHandler
     except ImportError as exc:
@@ -2257,58 +2315,64 @@ def _build_application(token: str):
         ) from exc
 
     app = Application.builder().token(token).build()
+    if doors:
+        _bind_application_doors(app, doors)
+
+    def bind(handler: Any) -> Any:
+        return _shared_handler(handler, doors)
+
     try:
         ensure_pollen_doors()
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.doors.bootstrap_failed", error=str(exc))
-    app.add_handler(CommandHandler("start", _cmd_help))
-    app.add_handler(CommandHandler("help", _cmd_help))
-    app.add_handler(CommandHandler("run", _cmd_run))
-    app.add_handler(CommandHandler("diff", _cmd_diff))
-    app.add_handler(CommandHandler("rollback", _cmd_rollback))
-    app.add_handler(CommandHandler("approvals", _cmd_approvals))
-    app.add_handler(CommandHandler("approve", _cmd_approve))
-    app.add_handler(CommandHandler("deny", _cmd_deny))
-    app.add_handler(CommandHandler("status", _cmd_status))
-    app.add_handler(CommandHandler("interactions", _cmd_interactions))
-    app.add_handler(CommandHandler("pipelines", _cmd_pipelines))
-    app.add_handler(CommandHandler("projects", _cmd_projects))
-    app.add_handler(CommandHandler("tasks", _cmd_tasks))
-    app.add_handler(CommandHandler("runpipeline", _cmd_run_pipeline))
-    app.add_handler(CommandHandler("debate", _cmd_debate))
-    app.add_handler(CommandHandler("steps", _cmd_steps))
-    app.add_handler(CommandHandler("ask", _cmd_ask))
-    app.add_handler(CommandHandler("ceo", _ALIAS_HANDLERS["ceo"]))
-    app.add_handler(CommandHandler("alienor", _ALIAS_HANDLERS["alienor"]))
-    app.add_handler(CommandHandler("cos", _ALIAS_HANDLERS["cos"]))
-    app.add_handler(CommandHandler("jules", _ALIAS_HANDLERS["jules"]))
-    app.add_handler(CommandHandler("cto", _ALIAS_HANDLERS["cto"]))
-    app.add_handler(CommandHandler("blaise", _ALIAS_HANDLERS["blaise"]))
-    app.add_handler(CommandHandler("dev", _ALIAS_HANDLERS["dev"]))
-    app.add_handler(CommandHandler("developer", _ALIAS_HANDLERS["developer"]))
-    app.add_handler(CommandHandler("gustave", _ALIAS_HANDLERS["gustave"]))
-    app.add_handler(CommandHandler("review", _ALIAS_HANDLERS["review"]))
-    app.add_handler(CommandHandler("reviewer", _ALIAS_HANDLERS["reviewer"]))
-    app.add_handler(CommandHandler("victor", _ALIAS_HANDLERS["victor"]))
-    app.add_handler(CommandHandler("ciso", _ALIAS_HANDLERS["ciso"]))
-    app.add_handler(CommandHandler("hugo", _ALIAS_HANDLERS["hugo"]))
-    app.add_handler(CommandHandler("qa", _ALIAS_HANDLERS["qa"]))
-    app.add_handler(CommandHandler("marie", _ALIAS_HANDLERS["marie"]))
-    app.add_handler(CommandHandler("docs", _ALIAS_HANDLERS["docs"]))
-    app.add_handler(CommandHandler("documentation", _ALIAS_HANDLERS["documentation"]))
-    app.add_handler(CommandHandler("theo", _ALIAS_HANDLERS["theo"]))
-    app.add_handler(CommandHandler("audit", _ALIAS_HANDLERS["audit"]))
-    app.add_handler(CommandHandler("henri", _ALIAS_HANDLERS["henri"]))
+    app.add_handler(CommandHandler("start", bind(_cmd_help)))
+    app.add_handler(CommandHandler("help", bind(_cmd_help)))
+    app.add_handler(CommandHandler("run", bind(_cmd_run)))
+    app.add_handler(CommandHandler("diff", bind(_cmd_diff)))
+    app.add_handler(CommandHandler("rollback", bind(_cmd_rollback)))
+    app.add_handler(CommandHandler("approvals", bind(_cmd_approvals)))
+    app.add_handler(CommandHandler("approve", bind(_cmd_approve)))
+    app.add_handler(CommandHandler("deny", bind(_cmd_deny)))
+    app.add_handler(CommandHandler("status", bind(_cmd_status)))
+    app.add_handler(CommandHandler("interactions", bind(_cmd_interactions)))
+    app.add_handler(CommandHandler("pipelines", bind(_cmd_pipelines)))
+    app.add_handler(CommandHandler("projects", bind(_cmd_projects)))
+    app.add_handler(CommandHandler("tasks", bind(_cmd_tasks)))
+    app.add_handler(CommandHandler("runpipeline", bind(_cmd_run_pipeline)))
+    app.add_handler(CommandHandler("debate", bind(_cmd_debate)))
+    app.add_handler(CommandHandler("steps", bind(_cmd_steps)))
+    app.add_handler(CommandHandler("ask", bind(_cmd_ask)))
+    app.add_handler(CommandHandler("ceo", bind(_ALIAS_HANDLERS["ceo"])))
+    app.add_handler(CommandHandler("alienor", bind(_ALIAS_HANDLERS["alienor"])))
+    app.add_handler(CommandHandler("cos", bind(_ALIAS_HANDLERS["cos"])))
+    app.add_handler(CommandHandler("jules", bind(_ALIAS_HANDLERS["jules"])))
+    app.add_handler(CommandHandler("cto", bind(_ALIAS_HANDLERS["cto"])))
+    app.add_handler(CommandHandler("blaise", bind(_ALIAS_HANDLERS["blaise"])))
+    app.add_handler(CommandHandler("dev", bind(_ALIAS_HANDLERS["dev"])))
+    app.add_handler(CommandHandler("developer", bind(_ALIAS_HANDLERS["developer"])))
+    app.add_handler(CommandHandler("gustave", bind(_ALIAS_HANDLERS["gustave"])))
+    app.add_handler(CommandHandler("review", bind(_ALIAS_HANDLERS["review"])))
+    app.add_handler(CommandHandler("reviewer", bind(_ALIAS_HANDLERS["reviewer"])))
+    app.add_handler(CommandHandler("victor", bind(_ALIAS_HANDLERS["victor"])))
+    app.add_handler(CommandHandler("ciso", bind(_ALIAS_HANDLERS["ciso"])))
+    app.add_handler(CommandHandler("hugo", bind(_ALIAS_HANDLERS["hugo"])))
+    app.add_handler(CommandHandler("qa", bind(_ALIAS_HANDLERS["qa"])))
+    app.add_handler(CommandHandler("marie", bind(_ALIAS_HANDLERS["marie"])))
+    app.add_handler(CommandHandler("docs", bind(_ALIAS_HANDLERS["docs"])))
+    app.add_handler(CommandHandler("documentation", bind(_ALIAS_HANDLERS["documentation"])))
+    app.add_handler(CommandHandler("theo", bind(_ALIAS_HANDLERS["theo"])))
+    app.add_handler(CommandHandler("audit", bind(_ALIAS_HANDLERS["audit"])))
+    app.add_handler(CommandHandler("henri", bind(_ALIAS_HANDLERS["henri"])))
     from telegram.ext import MessageHandler, filters
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _cmd_mention))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bind(_cmd_mention)))
     app.add_handler(
-        CallbackQueryHandler(_callback_approval, pattern=r"^(approve|deny|challenge):\d+$")
+        CallbackQueryHandler(bind(_callback_approval), pattern=r"^(approve|deny|challenge):\d+$")
     )
     app.add_handler(
-        CallbackQueryHandler(_callback_pass_approval, pattern=r"^pass:(approve|deny|edit):")
+        CallbackQueryHandler(bind(_callback_pass_approval), pattern=r"^pass:(approve|deny|edit):")
     )
-    app.add_handler(CallbackQueryHandler(_concierge_callback, pattern=r"^concierge:(yes|no):"))
+    app.add_handler(CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):"))
     # Graceful error handler: a Telegram polling Conflict (another instance
     # polling the same token) or a transient network error logs ONE concise
     # warning line instead of a repeating 40-line traceback; genuinely
@@ -2347,14 +2411,81 @@ def _ensure_event_loop() -> None:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
 
+def _run_polling_many(apps: list[Any]) -> None:
+    """Poll several PTB Applications on one event loop until SIGINT/SIGTERM.
+
+    ``Application.run_polling`` is blocking and owns the loop, so N bots
+    cannot each call it. PTB v20's supported multi-bot shape is
+    initialize → start → updater.start_polling on a shared loop.
+    """
+    if not apps:
+        return
+    _ensure_event_loop()
+
+    async def _serve() -> None:
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(sig, stop.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+        initialized: list[Any] = []
+        polling: list[Any] = []
+        try:
+            for app in apps:
+                await app.initialize()
+                initialized.append(app)
+                await app.start()
+                updater = app.updater
+                if updater is None:
+                    raise RuntimeError("Telegram Application has no updater")
+                await updater.start_polling(drop_pending_updates=True)
+                polling.append(app)
+            await stop.wait()
+        finally:
+            for app in reversed(polling):
+                updater = app.updater
+                if updater is not None and getattr(updater, "running", False):
+                    try:
+                        await updater.stop()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("telegram.polling.stop_failed", error=str(exc))
+            for app in reversed(initialized):
+                try:
+                    if getattr(app, "running", False):
+                        await app.stop()
+                    await app.shutdown()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("telegram.polling.shutdown_failed", error=str(exc))
+
+    asyncio.get_event_loop().run_until_complete(_serve())
+
+
 def run_polling() -> None:
-    """Start the bot in long-polling mode. Blocking. No public URL required."""
+    """Start the bot in long-polling mode. Blocking. No public URL required.
+
+    One shared token (every door resolves to the same BotFather token) keeps
+    the current single-Application path. Two or more distinct door tokens
+    start one Application per unique token, each bound to the door(s) that
+    use it (HP-130b). Topic routing is unchanged (HP-130c).
+    """
     _ensure_event_loop()
     _quiet_http_logging()
-    token = _token()
-    logger.info("telegram.polling.start")
-    app = _build_application(token)
-    app.run_polling(drop_pending_updates=True)
+    groups = telegram_door_token_groups()
+    if len(groups) <= 1:
+        token = _token()
+        logger.info("telegram.polling.start")
+        app = _build_application(token)
+        app.run_polling(drop_pending_updates=True)
+        return
+    logger.info(
+        "telegram.polling.start",
+        applications=len(groups),
+        doors=[list(doors) for _, doors in groups],
+    )
+    apps = [_build_application(token, doors=doors) for token, doors in groups]
+    _run_polling_many(apps)
 
 
 # ---------------------------------------------------------------------------

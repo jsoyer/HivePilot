@@ -585,7 +585,8 @@ class Settings(BaseSettings):
     # telegram_bot_token so a single-bot deploy is unchanged. Four explicit
     # env vars (not a JSON map) so systemd EnvironmentFile stays KEY=value.
     # env: HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX / _APPROVALS / _RUNS / _ALERTS.
-    # Multi-bot polling is HP-130b — these fields are config-only here.
+    # HP-130b: polling starts one Application per distinct door token;
+    # a single shared token keeps the current one-bot path.
     telegram_bot_token_inbox: str | None = None
     telegram_bot_token_approvals: str | None = None
     telegram_bot_token_runs: str | None = None
