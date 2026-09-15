@@ -35,6 +35,7 @@ from hivepilot.services.telegram_doors import (
     speaker_plain,
     telegram_bot_token_for_door,
     telegram_door_bot_tokens,
+    telegram_door_token_groups,
 )
 
 
@@ -302,3 +303,58 @@ def test_door_token_env_vars_map_onto_settings(monkeypatch: pytest.MonkeyPatch) 
         RUNS: "runs-from-env",
         ALERTS: "alerts-from-env",
     }
+
+
+def test_door_token_groups_single_shared_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(_env_file=None, telegram_bot_token="shared-token")  # type: ignore[call-arg]
+    assert telegram_door_token_groups(cfg) == [
+        ("shared-token", PERSISTENT_DOORS),
+    ]
+
+
+def test_door_token_groups_one_app_per_distinct_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+        telegram_bot_token_approvals="approvals-token",
+        telegram_bot_token_runs="runs-token",
+        telegram_bot_token_alerts="alerts-token",
+    )
+    assert telegram_door_token_groups(cfg) == [
+        ("inbox-token", (INBOX,)),
+        ("approvals-token", (APPROVALS,)),
+        ("runs-token", (RUNS,)),
+        ("alerts-token", (ALERTS,)),
+    ]
+
+
+def test_door_token_groups_bind_doors_that_share_a_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+        telegram_bot_token_alerts="alerts-token",
+    )
+    assert telegram_door_token_groups(cfg) == [
+        ("inbox-token", (INBOX,)),
+        ("shared-token", (APPROVALS, RUNS)),
+        ("alerts-token", (ALERTS,)),
+    ]
+
+
+def test_door_token_groups_omit_doors_without_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(_env_file=None, telegram_bot_token=None)  # type: ignore[call-arg]
+    assert telegram_door_token_groups(cfg) == []
+    cfg_inbox = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token=None,
+        telegram_bot_token_inbox="inbox-only",
+    )
+    assert telegram_door_token_groups(cfg_inbox) == [("inbox-only", (INBOX,))]

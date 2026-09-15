@@ -19,7 +19,8 @@ export PATH="/root/.local/bin:/opt/hivepilot/venv/bin:$PATH"
 export HIVEPILOT_BASE_DIR=/data
 export HIVEPILOT_TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 # Optional per-door tokens (Inbox / Approvals / Runs / Alerts). Unset
-# doors use HIVEPILOT_TELEGRAM_BOT_TOKEN above.
+# doors use HIVEPILOT_TELEGRAM_BOT_TOKEN above. Distinct tokens start
+# one polling Application each (HP-130b); one shared token stays one bot.
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX=<inbox-bot-token>
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS=<approvals-bot-token>
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS=<runs-bot-token>
