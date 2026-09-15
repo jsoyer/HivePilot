@@ -266,7 +266,9 @@ the value for masking too, so a cached value can never leak.
 vars (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` …) over a JSON map so systemd
 `EnvironmentFile` stays `KEY=value`. Unset door tokens fall back to
 `HIVEPILOT_TELEGRAM_BOT_TOKEN`. Polling may start one Application per
-distinct token (HP-130b); never log the token values.
+distinct token (HP-130b). Multi-token send/receive picks the door bot
+via `telegram_bot_token_for_door` and does not use forum thread ids for
+the four doors (HP-130c); never log the token values.
 
 Secrets backends ship as plugins: Infisical, 1Password (Connect **and** direct
 service-account), Bitwarden, Vaultwarden (via the `bw` CLI, masked), and **KMS**

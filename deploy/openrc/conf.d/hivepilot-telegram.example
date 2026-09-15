@@ -20,7 +20,8 @@ export HIVEPILOT_BASE_DIR=/data
 export HIVEPILOT_TELEGRAM_BOT_TOKEN=<telegram-bot-token>
 # Optional per-door tokens (Inbox / Approvals / Runs / Alerts). Unset
 # doors use HIVEPILOT_TELEGRAM_BOT_TOKEN above. Distinct tokens start
-# one polling Application each (HP-130b); one shared token stays one bot.
+# one polling Application each (HP-130b) and route the four doors by bot
+# without forum message_thread_id (HP-130c); one shared token stays topics.
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX=<inbox-bot-token>
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS=<approvals-bot-token>
 # export HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS=<runs-bot-token>

@@ -587,6 +587,9 @@ class Settings(BaseSettings):
     # env: HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX / _APPROVALS / _RUNS / _ALERTS.
     # HP-130b: polling starts one Application per distinct door token;
     # a single shared token keeps the current one-bot path.
+    # HP-130c: 2+ distinct tokens send/receive the four doors by bot
+    # identity (no forum message_thread_id). Single shared token keeps
+    # telegram_stream_topics / message_thread_id until 130e cutover.
     telegram_bot_token_inbox: str | None = None
     telegram_bot_token_approvals: str | None = None
     telegram_bot_token_runs: str | None = None

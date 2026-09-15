@@ -36,6 +36,7 @@ from hivepilot.services.telegram_doors import (
     telegram_bot_token_for_door,
     telegram_door_bot_tokens,
     telegram_door_token_groups,
+    telegram_multi_token_mode,
 )
 
 
@@ -358,3 +359,107 @@ def test_door_token_groups_omit_doors_without_a_token(monkeypatch: pytest.Monkey
         telegram_bot_token_inbox="inbox-only",
     )
     assert telegram_door_token_groups(cfg_inbox) == [("inbox-only", (INBOX,))]
+
+
+def test_multi_token_mode_false_for_shared_or_single_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    shared = Settings(_env_file=None, telegram_bot_token="shared-token")  # type: ignore[call-arg]
+    assert telegram_multi_token_mode(shared) is False
+    inbox_only = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token=None,
+        telegram_bot_token_inbox="inbox-only",
+    )
+    assert telegram_multi_token_mode(inbox_only) is False
+    empty = Settings(_env_file=None, telegram_bot_token=None)  # type: ignore[call-arg]
+    assert telegram_multi_token_mode(empty) is False
+
+
+def test_multi_token_mode_true_for_two_plus_distinct_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+        telegram_bot_token_alerts="alerts-token",
+    )
+    assert telegram_multi_token_mode(cfg) is True
+    four = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+        telegram_bot_token_approvals="approvals-token",
+        telegram_bot_token_runs="runs-token",
+        telegram_bot_token_alerts="alerts-token",
+    )
+    assert telegram_multi_token_mode(four) is True
+
+
+def test_notify_telegram_multi_token_sends_by_door_without_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hivepilot.services import notification_service as ns
+
+    sent: list[dict] = []
+
+    def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None, door=None):
+        sent.append(
+            {
+                "msg": message,
+                "chat_id": chat_id,
+                "thread": message_thread_id,
+                "door": door,
+            }
+        )
+
+    monkeypatch.setattr(ns, "telegram_multi_token_mode", lambda *a, **k: True)
+    monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100111, raising=False)
+    monkeypatch.setattr(ns, "_send_telegram", fake_send)
+    monkeypatch.setattr(ns, "door_thread", lambda door: 10 if door == ALERTS else 11)
+
+    ns._notify_telegram("❌ run 9 failed on acme")
+    assert sent == [
+        {
+            "msg": "❌ run 9 failed on acme",
+            "chat_id": -100111,
+            "thread": None,
+            "door": ALERTS,
+        }
+    ]
+
+    sent.clear()
+    ns._notify_telegram("hello from concierge")
+    assert sent == [
+        {
+            "msg": "hello from concierge",
+            "chat_id": -100111,
+            "thread": None,
+            "door": INBOX,
+        }
+    ]
+
+
+def test_notify_telegram_single_token_stream_topics_still_uses_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: one shared token + STREAM_TOPICS keeps door_thread ids."""
+    from hivepilot.services import notification_service as ns
+
+    sent: list[dict] = []
+
+    def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None):
+        sent.append({"msg": message, "chat_id": chat_id, "thread": message_thread_id})
+
+    monkeypatch.setattr(ns, "telegram_multi_token_mode", lambda *a, **k: False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
+    monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", -100111, raising=False)
+    monkeypatch.setattr(ns, "_send_telegram", fake_send)
+    monkeypatch.setattr(ns, "door_thread", lambda door: 10 if door == ALERTS else 11)
+
+    ns._notify_telegram("❌ run 9 failed on acme")
+    assert sent == [{"msg": "❌ run 9 failed on acme", "chat_id": -100111, "thread": 10}]

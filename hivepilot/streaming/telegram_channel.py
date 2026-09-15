@@ -18,6 +18,7 @@ whatever is currently bound there -- including anything a test monkeypatched.
 from __future__ import annotations
 
 from hivepilot.services import notification_service as ns
+from hivepilot.services.telegram_doors import RUNS, telegram_multi_token_mode
 from hivepilot.streaming.base import StreamChannelRegistry, ThreadRef
 
 
@@ -32,6 +33,11 @@ class TelegramStreamChannel:
         return bool(ns.settings.telegram_stream_live)
 
     def ensure_agent_thread(self, agent_key: str, title: str) -> ThreadRef | None:
+        if telegram_multi_token_mode():
+            chat_id = ns.settings.telegram_stream_chat_id
+            if not chat_id:
+                return None
+            return ThreadRef(channel=self.name, container=chat_id, thread_id=None)
         if not (ns.settings.telegram_stream_topics and ns.settings.telegram_stream_chat_id):
             return None
         thread_id = ns._ensure_topic_thread(agent_key, title)
@@ -46,12 +52,16 @@ class TelegramStreamChannel:
     def send(self, thread: ThreadRef | None, text: str, *, rich: bool = False) -> None:
         chat_id = thread.container if thread is not None else ns.settings.telegram_stream_chat_id
         message_thread_id = thread.thread_id if thread is not None else None
+        door = RUNS if telegram_multi_token_mode() else None
+        if door:
+            message_thread_id = None
         ns._send_chunks(
             text,
             chat_id=chat_id,
             message_thread_id=message_thread_id,
             parse_mode="HTML" if rich else None,
             html_aware=rich,
+            door=door,
         )
 
     def format(self, markdown: str) -> str:

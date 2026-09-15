@@ -9,7 +9,7 @@ optional extra or credentials and are off until configured.
 Requires `pip install "hivepilot[notifications]"` plus:
 
 - `HIVEPILOT_TELEGRAM_BOT_TOKEN` — bot token from `@BotFather`
-- `HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS` — optional per-door tokens (HP-130a). Unset doors fall back to the shared token so a single-bot deploy is unchanged. When 2+ distinct tokens are set, `hivepilot telegram start` (polling) runs one Application per unique token, each bound to the door(s) that use it (HP-130b). One shared token keeps the current one-bot process. Webhook mode stays single-token. Topic routing is unchanged (HP-130c).
+- `HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS` — optional per-door tokens (HP-130a). Unset doors fall back to the shared token so a single-bot deploy is unchanged. When 2+ distinct tokens are set, `hivepilot telegram start` (polling) runs one Application per unique token, each bound to the door(s) that use it (HP-130b). Send/receive for Inbox/Approvals/Runs/Alerts then uses the door bot and does **not** set forum `message_thread_id` (HP-130c). One shared token keeps the current one-bot process and the `HIVEPILOT_TELEGRAM_STREAM_TOPICS` / `message_thread_id` path. Webhook mode stays single-token.
 - `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` — comma-separated or JSON array of allowed chat IDs, e.g. `123456,789012` or `[123456,789012]`; empty means open
 
 Start the bot:
@@ -40,6 +40,12 @@ for running a pipeline, listing steps/interactions, and approving gated actions 
 
 ### Four doors (HP-92)
 
+When two or more distinct door tokens are set, those four doors are the
+bots themselves: stream and notifications pick the door via
+`telegram_bot_token_for_door` / `classify_notification_door` and do not
+send `message_thread_id`. Approvals keyboards stay on the Approvals bot.
+The single-token deploy still uses forum topics:
+
 When `HIVEPILOT_TELEGRAM_STREAM_TOPICS=true` in a forum group, HivePilot uses the same
 four persistent topics as the Pollen web doors — **Inbox**, **Approvals**, **Runs**,
 **Alerts**. Inbox holds talk / classify / confirm (pinned welcome; not a General dump).
@@ -50,7 +56,8 @@ Alerts is failed + degraded + classifier. System/concierge messages use 🐝;
 hand-offs use the role-charte emojis below. Telegram still creates a built-in
 General topic — HivePilot does not use it as a catch-all.
 
-Startup (`ensure_pollen_doors`) is a no-op when any door is already registered.
+Startup (`ensure_pollen_doors`) is a no-op when any door is already registered,
+and is skipped entirely in multi-token mode (doors are bots, not topics).
 Mint an empty set once with:
 
 ```bash
