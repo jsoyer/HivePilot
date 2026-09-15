@@ -1057,9 +1057,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
     chat_id = update.message.chat.id
     inbound_door = _door_of(context)
     thread_id = (
-        None
-        if telegram_multi_token_mode()
-        else getattr(update.message, "message_thread_id", None)
+        None if telegram_multi_token_mode() else getattr(update.message, "message_thread_id", None)
     )
     _challenge_composite_key = _challenge_key(chat_id, thread_id, door=inbound_door)
     if _challenge_composite_key in _pending_challenges:
@@ -2442,7 +2440,9 @@ def _build_application(token: str, doors: tuple[str, ...] | None = None):
     app.add_handler(
         CallbackQueryHandler(bind(_callback_pass_approval), pattern=r"^pass:(approve|deny|edit):")
     )
-    app.add_handler(CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):"))
+    app.add_handler(
+        CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):")
+    )
     # Graceful error handler: a Telegram polling Conflict (another instance
     # polling the same token) or a transient network error logs ONE concise
     # warning line instead of a repeating 40-line traceback; genuinely

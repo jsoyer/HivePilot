@@ -23,5 +23,5 @@ Replay: `hivepilot run example-api docs --dry-run`
 
 ## Testing
 
-- [x] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_channel.py tests/test_stream_topics.py tests/test_approval_forum_topic.py tests/test_telegram_stop_bleed.py tests/test_notification_service.py`
-- [x] `hivepilot lint` (or the subset of ruff on touched Python)
+- [x] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_channel.py tests/test_stream_topics.py tests/test_approval_forum_topic.py tests/test_telegram_stop_bleed.py tests/test_notification_service.py tests/test_human_challenge.py tests/test_telegram_ask.py tests/test_telegram_pass_presenter.py` — 330 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
