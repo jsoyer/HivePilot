@@ -157,6 +157,21 @@ def telegram_door_token_groups(
     return [(token, tuple(grouped[token])) for token in order]
 
 
+def telegram_multi_token_mode(
+    cfg: Settings | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> bool:
+    """True when 2+ distinct door tokens are configured (HP-130c).
+
+    Multi-token mode sends and receives Inbox/Approvals/Runs/Alerts by
+    door-bot identity and does not use forum ``message_thread_id`` for
+    those doors. A single shared token keeps the legacy
+    ``telegram_stream_topics`` path.
+    """
+    return len(telegram_door_token_groups(cfg, environ=environ)) >= 2
+
+
 def approval_actions_allowed(door: str) -> bool:
     """Pollen cards and Telegram approval keyboards stay on Approvals."""
     return door == APPROVALS

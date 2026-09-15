@@ -31,6 +31,8 @@ from hivepilot.services.telegram_doors import (
     soft_card_from_report,
     speaker_html,
     speaker_plain,
+    telegram_bot_token_for_door,
+    telegram_multi_token_mode,
 )
 from hivepilot.utils.logging import get_logger
 
@@ -235,8 +237,17 @@ def _send_telegram(
     message_thread_id: int | None = None,
     parse_mode: str | None = None,
     entities: list[dict[str, Any]] | None = None,
+    door: str | None = None,
 ) -> None:
-    token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    if door:
+        token = telegram_bot_token_for_door(door) or settings.telegram_bot_token
+        token = token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    else:
+        token = settings.telegram_bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
+    # HP-130c: four door bots identify Inbox/Approvals/Runs/Alerts. Forum
+    # thread ids are leftover from the single-bot topics path.
+    if telegram_multi_token_mode():
+        message_thread_id = None
     chat_id = (
         chat_id or settings.telegram_notification_chat_id or os.environ.get("TELEGRAM_CHAT_ID")
     )
@@ -283,12 +294,21 @@ def _notify_telegram(message: str) -> None:
     Failed / degraded / classifier → Alerts; otherwise Inbox. Does not dump
     into Telegram's built-in General topic. ``_send_telegram`` stays the
     low-level send used by streams and tests.
+
+    HP-130c: two or more distinct door tokens send via that door's bot and
+    omit ``message_thread_id``. A single shared token keeps the
+    ``telegram_stream_topics`` lookup.
     """
+    door = classify_notification_door(message)
     chat_id: int | str | None = None
     thread_id: int | None = None
+    if telegram_multi_token_mode():
+        chat_id = settings.telegram_stream_chat_id
+        _send_telegram(message, chat_id=chat_id, message_thread_id=None, door=door)
+        return
     if settings.telegram_stream_topics is True and settings.telegram_stream_chat_id:
         chat_id = settings.telegram_stream_chat_id
-        thread_id = door_thread(classify_notification_door(message))
+        thread_id = door_thread(door)
     _send_telegram(message, chat_id=chat_id, message_thread_id=thread_id)
 
 
@@ -897,7 +917,10 @@ def _ensure_topic_thread(agent_key: str, title: str, *, allow_create: bool = Fal
 
     Persistent doors require ``allow_create=True`` (bootstrap). ``run:{id}``
     is never created. Best-effort: any failure returns None (never raises).
+    Multi-token mode (HP-130c) does not mint or look up forum topics.
     """
+    if telegram_multi_token_mode():
+        return None
     token = settings.telegram_bot_token
     chat_id = settings.telegram_stream_chat_id
     if not token or not chat_id:
@@ -944,7 +967,13 @@ _WELCOME_REGISTRY_KEY = "_inbox_welcome"
 
 
 def door_thread(door: str) -> int | None:
-    """Lookup a persistent Pollen door. Never creates or remints."""
+    """Lookup a persistent Pollen door. Never creates or remints.
+
+    Multi-token mode (HP-130c) does not route the four doors by forum
+    thread id — callers get ``None`` and send via the door bot instead.
+    """
+    if telegram_multi_token_mode():
+        return None
     return _load_topics().get(door)
 
 
@@ -965,6 +994,8 @@ def ensure_pollen_doors() -> dict[str, int]:
     doors stay missing. Mint an empty set only via ``bootstrap_pollen_doors``.
     """
     landed: dict[str, int] = {}
+    if telegram_multi_token_mode():
+        return landed
     if not (settings.telegram_stream_topics is True and settings.telegram_stream_chat_id):
         return landed
     landed = _existing_pollen_doors()
@@ -980,6 +1011,12 @@ def bootstrap_pollen_doors(*, confirm: bool = False) -> dict[str, int]:
     Dry-run unless *confirm*. A partial registry is a no-op — reminting
     the missing names would duplicate topics Telegram cannot dedupe.
     """
+    if telegram_multi_token_mode():
+        logger.info(
+            "stream.topics.bootstrap_skipped_multi_token",
+            detail="door bots identify Inbox/Approvals/Runs/Alerts; forum topics are not minted",
+        )
+        return {}
     existing = _existing_pollen_doors()
     if existing:
         logger.warning(
@@ -1300,27 +1337,25 @@ def _telegram_send(
     message_thread_id: int | None,
     parse_mode: str | None,
     entities: list[dict[str, Any]] | None = None,
+    door: str | None = None,
 ) -> None:
-    """Call ``_send_telegram`` without passing ``entities=`` when unused.
+    """Call ``_send_telegram`` without passing unused kwargs.
 
     Existing tests patch ``_send_telegram`` with a fixed arity that rejects
-    an unexpected ``entities`` kwarg. Only attach it when we actually have
-    a custom-emoji entity list (HP-16).
+    unexpected ``entities`` / ``door`` kwargs. Only attach them when set
+    (HP-16 custom emoji, HP-130c door-bot token).
     """
+    extra: dict[str, Any] = {}
     if entities:
-        _send_telegram(
-            chunk,
-            chat_id=chat_id,
-            message_thread_id=message_thread_id,
-            parse_mode=parse_mode,
-            entities=entities,
-        )
-        return
+        extra["entities"] = entities
+    if door:
+        extra["door"] = door
     _send_telegram(
         chunk,
         chat_id=chat_id,
         message_thread_id=message_thread_id,
         parse_mode=parse_mode,
+        **extra,
     )
 
 
@@ -1332,6 +1367,7 @@ def _deliver_threadless(
     agent_key: str | None,
     entities: list[dict[str, Any]] | None = None,
     exclude_thread_id: int | None = None,
+    door: str | None = None,
 ) -> None:
     """Fallback send after a dead/closed topic.
 
@@ -1348,6 +1384,7 @@ def _deliver_threadless(
             message_thread_id=thread_id,
             parse_mode=parse_mode,
             entities=entities if parse_mode is None else None,
+            door=door,
         )
     except _NotConfigured:
         raise
@@ -1360,6 +1397,7 @@ def _deliver_threadless(
                     message_thread_id=None,
                     parse_mode=parse_mode,
                     entities=entities if parse_mode is None else None,
+                    door=door,
                 )
                 logger.info(
                     "stream.topic_self_heal_delivered_inbox_failed_threadless",
@@ -1372,7 +1410,12 @@ def _deliver_threadless(
                 pass
         plain = _strip_html(chunk) if parse_mode else chunk
         _telegram_send(
-            plain, chat_id=chat_id, message_thread_id=None, parse_mode=None, entities=None
+            plain,
+            chat_id=chat_id,
+            message_thread_id=None,
+            parse_mode=None,
+            entities=None,
+            door=door,
         )
         logger.info(
             "stream.topic_self_heal_delivered_threadless_plain",
@@ -1401,6 +1444,7 @@ def _send_one_chunk(
     agent_key: str | None,
     topic_title: str | None,
     entities: list[dict[str, Any]] | None = None,
+    door: str | None = None,
 ) -> int | None:
     """Send a single *chunk*, self-healing a dead/closed registry topic id
     and never losing the message. Returns the ``message_thread_id`` that
@@ -1415,6 +1459,7 @@ def _send_one_chunk(
             message_thread_id=message_thread_id,
             parse_mode=parse_mode,
             entities=entities if parse_mode is None else None,
+            door=door,
         )
         # Log the SUCCESS, not only the failures. A delivered message recorded
         # nothing, so an empty log was compatible with both "the roles are
@@ -1454,6 +1499,7 @@ def _send_one_chunk(
                 agent_key=agent_key,
                 entities=entities if parse_mode is None else None,
                 exclude_thread_id=message_thread_id,
+                door=door,
             )
             return None
 
@@ -1485,6 +1531,7 @@ def _send_one_chunk(
                     agent_key=agent_key,
                     entities=entities if parse_mode is None else None,
                     exclude_thread_id=message_thread_id,
+                    door=door,
                 )
                 return None
             new_thread_id = _ensure_topic_thread(
@@ -1504,6 +1551,7 @@ def _send_one_chunk(
                         message_thread_id=new_thread_id,
                         parse_mode=parse_mode,
                         entities=entities if parse_mode is None else None,
+                        door=door,
                     )
                     return new_thread_id
                 except Exception as retry_exc:  # noqa: BLE001
@@ -1523,6 +1571,7 @@ def _send_one_chunk(
                 agent_key=agent_key,
                 entities=entities if parse_mode is None else None,
                 exclude_thread_id=message_thread_id,
+                door=door,
             )
             return None
 
@@ -1553,6 +1602,7 @@ def _send_one_chunk(
                     message_thread_id=message_thread_id,
                     parse_mode=None,
                     entities=None,
+                    door=door,
                 )
                 return message_thread_id
             raise
@@ -1566,11 +1616,12 @@ def _send_one_chunk(
             error=str(exc),
         )
         try:
-            _send_telegram(
+            _telegram_send(
                 _strip_html(chunk),
                 chat_id=chat_id,
                 message_thread_id=message_thread_id,
                 parse_mode=None,
+                door=door,
             )
         except Exception as fallback_exc:  # noqa: BLE001
             logger.error(
@@ -1600,6 +1651,7 @@ def _send_chunks(
     agent_key: str | None = None,
     topic_title: str | None = None,
     entities: list[dict[str, Any]] | None = None,
+    door: str | None = None,
 ) -> None:
     """Split *text* and send each chunk, in order, to the same chat + topic.
 
@@ -1632,6 +1684,7 @@ def _send_chunks(
             agent_key=agent_key,
             topic_title=topic_title,
             entities=chunk_entities,
+            door=door,
         )
 
 
@@ -1643,6 +1696,14 @@ def _resolve_stream_topic(
     target: str | None,
 ) -> tuple[str | None, str | None, int | None]:
     """Pick a Pollen door. Never General, never a role topic, never ``run:{id}``."""
+    if telegram_multi_token_mode():
+        if run_id is not None:
+            logger.info(
+                "stream.run_index_only",
+                run_id=run_id,
+                detail="run topics are not created; the turn is indexed on the Runs door bot",
+            )
+        return RUNS, door_title(RUNS), None
     if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
         return None, None, None
     if run_id is not None:
@@ -1778,6 +1839,13 @@ def _stream_agent_turn_telegram(
         # Live agent stream goes to its dedicated channel when set, else
         # falls back to the main notification chat. Never truncated: split
         # into as many ordered messages as needed (same chat + topic).
+        stream_door = (
+            stream_agent_key
+            if telegram_multi_token_mode()
+            and stream_agent_key
+            and is_persistent_door(stream_agent_key)
+            else None
+        )
         _send_chunks(
             message_text,
             chat_id=chat_id,
@@ -1787,6 +1855,7 @@ def _stream_agent_turn_telegram(
             agent_key=stream_agent_key,
             topic_title=stream_topic_title,
             entities=stream_entities,
+            door=stream_door,
         )
     except _NotConfigured:
         pass  # Telegram not set up — streaming is best-effort

@@ -25,7 +25,9 @@ from hivepilot.services.telegram_doors import (
     APPROVALS,
     concierge_action_prompt,
     concierge_answer_text,
+    telegram_bot_token_for_door,
     telegram_door_token_groups,
+    telegram_multi_token_mode,
 )
 from hivepilot.skill_capabilities import on_chat_surface
 from hivepilot.utils.logging import get_logger
@@ -73,7 +75,12 @@ _pending_challenges: PendingConfirmationStore[tuple[int, str]] = PendingConfirma
 )
 
 
-def _challenge_key(chat_id: int, thread_id: int | None) -> int | tuple[int, int]:
+def _challenge_key(
+    chat_id: int,
+    thread_id: int | None,
+    *,
+    door: str | None = None,
+) -> int | tuple[int, int] | tuple[int, str]:
     """Return the `_pending_challenges` key for *chat_id*/*thread_id*.
 
     A composite `(chat_id, thread_id)` key when inside a FORUM topic
@@ -82,7 +89,12 @@ def _challenge_key(chat_id: int, thread_id: int | None) -> int | tuple[int, int]
     A bare `chat_id` key otherwise (DM, non-forum group, or the General
     topic) -- byte-identical to the pre-fix behaviour for every chat that
     isn't a forum topic.
+
+    HP-130c multi-token mode keys by `(chat_id, door)` instead of a forum
+    thread id — the door bot is the routing identity.
     """
+    if telegram_multi_token_mode() and door:
+        return (chat_id, door)
     return (chat_id, thread_id) if thread_id is not None else chat_id
 
 
@@ -135,6 +147,19 @@ def _token() -> str:
     return token
 
 
+def _approval_bot_token() -> str:
+    """BotFather token used to send Approvals keyboards (HP-130c).
+
+    Multi-token mode uses the Approvals door token. A single shared token
+    keeps ``_token()`` so existing tests and the current deploy stay put.
+    """
+    if telegram_multi_token_mode():
+        token = telegram_bot_token_for_door(APPROVALS)
+        if token:
+            return token
+    return _token()
+
+
 def _is_allowed(chat_id: int) -> bool:
     """Return True if chat_id is whitelisted (open to all when list is empty)."""
     allowed = settings.telegram_allowed_chat_ids
@@ -170,14 +195,17 @@ def _approval_chat_id() -> int | None:
 
     Resolution order: `telegram_approval_chat_id` (explicit operator choice)
     -> the     forum stream group (`telegram_stream_chat_id`) when
-    `telegram_stream_topics` is on -> `_notification_chat_id()` (the DM),
+    `telegram_stream_topics` is on, or when multi-token door bots are
+    active (HP-130c) -> `_notification_chat_id()` (the DM),
     exactly as before. A deployment that sets neither new knob keeps
     today's DM behaviour byte-for-byte. Persistent doors are looked up,
     never reminted.
     """
     if settings.telegram_approval_chat_id:
         return settings.telegram_approval_chat_id
-    if settings.telegram_stream_topics and settings.telegram_stream_chat_id:
+    if settings.telegram_stream_chat_id and (
+        telegram_multi_token_mode() or settings.telegram_stream_topics
+    ):
         return settings.telegram_stream_chat_id
     return _notification_chat_id()
 
@@ -194,6 +222,8 @@ def _approval_message_thread_id(chat_id: int | None) -> int | None:
     forum at all). Looks up the persistent Approvals door in the registry
     and never remints it. A missing/stale door falls back to Inbox or DM.
     """
+    if telegram_multi_token_mode():
+        return None
     if not (settings.telegram_stream_topics and settings.telegram_stream_chat_id):
         return None
     if chat_id != settings.telegram_stream_chat_id:
@@ -868,9 +898,13 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
 
     chat_id = update.message.chat.id
     default_target = settings.default_target
-    conversation_id = _concierge_conversation_id(
-        chat_id, getattr(update.message, "message_thread_id", None)
-    )
+    door = _door_of(context)
+    if telegram_multi_token_mode():
+        thread_id = None
+        conversation_id = f"telegram:{chat_id}:{door}" if door else f"telegram:{chat_id}"
+    else:
+        thread_id = getattr(update.message, "message_thread_id", None)
+        conversation_id = _concierge_conversation_id(chat_id, thread_id)
     user_id = _concierge_user_id(update.message)
 
     loop = asyncio.get_event_loop()
@@ -910,7 +944,6 @@ async def _handle_concierge_mention(update: Any, context: Any, text: str) -> Non
     # anyone.
     token = uuid.uuid4().hex[:8]
     _pending_concierge.store(chat_id, user_id, (token, decision))
-    thread_id = getattr(update.message, "message_thread_id", None)
     await _send_concierge_keyboard_message(
         context.bot,
         chat_id=chat_id,
@@ -1022,8 +1055,11 @@ async def _cmd_mention(update: Any, context: Any) -> None:
     # compat (entries stored before this fix, or a non-forum chat where
     # `_challenge_key` already collapses to the bare `chat_id`).
     chat_id = update.message.chat.id
-    thread_id = getattr(update.message, "message_thread_id", None)
-    _challenge_composite_key = _challenge_key(chat_id, thread_id)
+    inbound_door = _door_of(context)
+    thread_id = (
+        None if telegram_multi_token_mode() else getattr(update.message, "message_thread_id", None)
+    )
+    _challenge_composite_key = _challenge_key(chat_id, thread_id, door=inbound_door)
     if _challenge_composite_key in _pending_challenges:
         pending_key: int | tuple[int, int] | None = _challenge_composite_key
     elif chat_id in _pending_challenges:
@@ -1454,6 +1490,9 @@ async def _cmd_rollback(update, context) -> None:
 async def _cmd_approvals(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
+    if not _approvals_bound(context):
+        await update.message.reply_text("Approvals stay on the Approvals bot.")
+        return
     from hivepilot.services import state_service
 
     try:
@@ -1510,6 +1549,9 @@ def _dispatch_approval(run_id: int, approve: bool, approver: str, reason: str | 
 async def _cmd_approve(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
         return
+    if not _approvals_bound(context):
+        await update.message.reply_text("Approvals stay on the Approvals bot.")
+        return
     args = context.args
     if not args:
         await update.message.reply_text("Usage: /approve <run_id>")
@@ -1530,6 +1572,9 @@ async def _cmd_approve(update, context) -> None:
 
 async def _cmd_deny(update, context) -> None:
     if not _require_allowed(update.effective_chat.id):
+        return
+    if not _approvals_bound(context):
+        await update.message.reply_text("Approvals stay on the Approvals bot.")
         return
     args = context.args
     if not args:
@@ -1710,6 +1755,9 @@ async def _callback_approval(update, context) -> None:
     if not _require_allowed(query.message.chat.id):
         await query.edit_message_text("Unauthorized.")
         return
+    if not _approvals_bound(context):
+        await query.edit_message_text("Approvals stay on the Approvals bot.")
+        return
 
     data = query.data  # e.g. "approve:42" or "deny:42"
     try:
@@ -1728,7 +1776,11 @@ async def _callback_approval(update, context) -> None:
         # pending entry by `(chat_id, thread_id)` instead of bare `chat_id`
         # means a challenge started in one topic can never be clobbered or
         # answered by a message in a different topic of the same group.
-        thread_id = getattr(query.message, "message_thread_id", None)
+        thread_id = (
+            None
+            if telegram_multi_token_mode()
+            else getattr(query.message, "message_thread_id", None)
+        )
         # Owner binding: only the Telegram id that pressed this button may
         # answer it -- a missing id (fail closed) means `store()` records
         # nothing, so the follow-up prompt below is sent but can never be
@@ -1738,7 +1790,7 @@ async def _callback_approval(update, context) -> None:
         # guard, not an expected runtime path.
         owner_user_id = _concierge_user_id(query)
         _pending_challenges.store(
-            _challenge_key(chat_id, thread_id),
+            _challenge_key(chat_id, thread_id, door=_door_of(context)),
             owner_user_id,
             (run_id, f"telegram:{approver}"),
         )
@@ -1850,7 +1902,7 @@ def notify_pass_approval(*, owner_id: str, tenant: str | None = None) -> int:
     if not chat_id:
         raise RuntimeError("No Telegram notification chat_id configured")
     message_thread_id = _approval_message_thread_id(chat_id)
-    token = _token()
+    token = _approval_bot_token()
 
     async def _send() -> None:
         from telegram import Bot
@@ -1896,6 +1948,9 @@ async def _callback_pass_approval(update, context) -> None:
     await query.answer()
     if not _require_allowed(query.message.chat.id):
         await query.edit_message_text("Unauthorized.")
+        return
+    if not _approvals_bound(context):
+        await query.edit_message_text("Approvals stay on the Approvals bot.")
         return
     try:
         result = decide_approval(
@@ -1944,7 +1999,7 @@ def notify_approval_required(
         raise RuntimeError("No Telegram notification chat_id configured")
 
     message_thread_id = _approval_message_thread_id(chat_id)
-    token = _token()
+    token = _approval_bot_token()
 
     async def _send():
         from telegram import Bot
@@ -2284,6 +2339,18 @@ def _door_of(context: Any) -> str | None:
     return doors[0] if len(doors) == 1 else None
 
 
+def _approvals_bound(context: Any) -> bool:
+    """Whether this Application may send/receive Approvals keyboards (HP-130c).
+
+    Single-token (legacy topics) stays open. Multi-token requires the
+    Approvals door on this Application — Inbox/Runs/Alerts bots must not
+    present or honour approval keyboards.
+    """
+    if not telegram_multi_token_mode():
+        return True
+    return APPROVALS in _doors_of(context)
+
+
 def _shared_handler(handler: Any, doors: tuple[str, ...] | None) -> Any:
     """Return *handler* unchanged, or the same function bound to *doors*.
 
@@ -2322,7 +2389,8 @@ def _build_application(token: str, doors: tuple[str, ...] | None = None):
         return _shared_handler(handler, doors)
 
     try:
-        ensure_pollen_doors()
+        if not telegram_multi_token_mode():
+            ensure_pollen_doors()
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.doors.bootstrap_failed", error=str(exc))
     app.add_handler(CommandHandler("start", bind(_cmd_help)))
@@ -2372,7 +2440,9 @@ def _build_application(token: str, doors: tuple[str, ...] | None = None):
     app.add_handler(
         CallbackQueryHandler(bind(_callback_pass_approval), pattern=r"^pass:(approve|deny|edit):")
     )
-    app.add_handler(CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):"))
+    app.add_handler(
+        CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):")
+    )
     # Graceful error handler: a Telegram polling Conflict (another instance
     # polling the same token) or a transient network error logs ONE concise
     # warning line instead of a repeating 40-line traceback; genuinely
@@ -2468,7 +2538,9 @@ def run_polling() -> None:
     One shared token (every door resolves to the same BotFather token) keeps
     the current single-Application path. Two or more distinct door tokens
     start one Application per unique token, each bound to the door(s) that
-    use it (HP-130b). Topic routing is unchanged (HP-130c).
+    use it (HP-130b). Multi-token send/receive routes by door bot and
+    does not use forum ``message_thread_id`` for the four doors (HP-130c).
+    A single shared token keeps the legacy ``telegram_stream_topics`` path.
     """
     _ensure_event_loop()
     _quiet_http_logging()

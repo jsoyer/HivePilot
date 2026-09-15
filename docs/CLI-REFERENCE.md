@@ -267,8 +267,9 @@ Optional per-door bot tokens (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` /
 `HIVEPILOT_TELEGRAM_BOT_TOKEN` when unset. When two or more distinct
 tokens are configured, `telegram start` in polling mode runs one
 python-telegram-bot Application per unique token, each bound to the
-door(s) that use it (HP-130b). One shared token keeps the current
-single-bot path. Webhook mode remains single-token. See
+door(s) that use it (HP-130b). Those door bots send and receive without
+forum `message_thread_id` (HP-130c). One shared token keeps the current
+single-bot topics path. Webhook mode remains single-token. See
 [INTEGRATIONS.md](./INTEGRATIONS.md) and
 `deploy/systemd/env/hivepilot-telegram.env.example`.
 

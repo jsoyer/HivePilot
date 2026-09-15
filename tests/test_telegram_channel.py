@@ -93,3 +93,43 @@ class TestFormat:
         result = TelegramStreamChannel().format("**bold**")
         assert result == "<b>bold</b>"
         assert result == ns._format_for_telegram_html("**bold**")
+
+
+class TestMultiTokenRouting:
+    def test_ensure_agent_thread_skips_forum_topics(self, monkeypatch) -> None:
+        monkeypatch.setattr(ns.settings, "telegram_stream_topics", True, raising=False)
+        monkeypatch.setattr(ns.settings, "telegram_stream_chat_id", 999, raising=False)
+        with (
+            patch(
+                "hivepilot.streaming.telegram_channel.telegram_multi_token_mode",
+                return_value=True,
+            ),
+            patch(
+                "hivepilot.services.notification_service._ensure_topic_thread",
+            ) as mock_ensure,
+        ):
+            ref = TelegramStreamChannel().ensure_agent_thread("cto", "Blaise (CTO)")
+        mock_ensure.assert_not_called()
+        assert ref == ThreadRef(channel="telegram", container=999, thread_id=None)
+
+    def test_send_uses_runs_door_without_thread(self, monkeypatch) -> None:
+        captured: dict = {}
+
+        def _fake_send_chunks(text, *, chat_id, message_thread_id, parse_mode, html_aware, **kw):
+            captured.update(
+                chat_id=chat_id,
+                message_thread_id=message_thread_id,
+                door=kw.get("door"),
+            )
+
+        monkeypatch.setattr(ns, "_send_chunks", _fake_send_chunks)
+        thread = ThreadRef(channel="telegram", container=-100999, thread_id=7)
+        with patch(
+            "hivepilot.streaming.telegram_channel.telegram_multi_token_mode",
+            return_value=True,
+        ):
+            TelegramStreamChannel().send(thread, "hi", rich=False)
+
+        assert captured["chat_id"] == -100999
+        assert captured["message_thread_id"] is None
+        assert captured["door"] == "runs"

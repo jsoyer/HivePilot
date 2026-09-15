@@ -2050,3 +2050,110 @@ class TestConciergeOfferScoping:
 
         assert "user_id" in kwargs  # explicitly passed, not merely absent
         assert kwargs["user_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# HP-130c — route by door bot, not forum thread id
+# ---------------------------------------------------------------------------
+
+
+class TestMultiTokenDoorRouting:
+    def test_approval_thread_id_is_none_even_when_topics_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", True)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
+        with (
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True),
+            patch.object(telegram_bot, "door_thread", return_value=777) as mock_door,
+        ):
+            assert telegram_bot._approval_message_thread_id(-100111) is None
+        mock_door.assert_not_called()
+
+    def test_approval_chat_uses_stream_group_without_topics(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "telegram_approval_chat_id", None)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", False)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_notification_chat_id", 555)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_allowed_chat_ids", [])
+        with patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True):
+            assert telegram_bot._approval_chat_id() == -100111
+
+    def test_approvals_bound_only_on_approvals_app(self) -> None:
+        inbox = MagicMock()
+        inbox.application.bot_data = {"doors": ("inbox",), "door": "inbox"}
+        approvals = MagicMock()
+        approvals.application.bot_data = {"doors": ("approvals",), "door": "approvals"}
+        shared = MagicMock()
+        shared.application.bot_data = {"doors": ("approvals", "runs")}
+        with patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True):
+            assert telegram_bot._approvals_bound(inbox) is False
+            assert telegram_bot._approvals_bound(approvals) is True
+            assert telegram_bot._approvals_bound(shared) is True
+        with patch.object(telegram_bot, "telegram_multi_token_mode", return_value=False):
+            assert telegram_bot._approvals_bound(inbox) is True
+
+    def test_cmd_approvals_refuses_inbox_door(self) -> None:
+        update = _make_update()
+        context = _make_context()
+        context.application.bot_data = {"doors": ("inbox",), "door": "inbox"}
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True),
+        ):
+            asyncio.run(telegram_bot._cmd_approvals(update, context))
+        update.message.reply_text.assert_awaited_once()
+        assert "Approvals stay on the Approvals bot" in update.message.reply_text.call_args[0][0]
+
+    def test_callback_approval_refuses_inbox_door(self) -> None:
+        query = MagicMock()
+        query.message = MagicMock()
+        query.message.chat.id = 123
+        query.data = "approve:42"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        context = MagicMock()
+        context.application.bot_data = {"doors": ("inbox",), "door": "inbox"}
+        with (
+            patch.object(telegram_bot, "_require_allowed", return_value=True),
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True),
+        ):
+            asyncio.run(telegram_bot._callback_approval(update, context))
+        query.edit_message_text.assert_awaited_once()
+        assert "Approvals stay on the Approvals bot" in query.edit_message_text.call_args[0][0]
+
+    def test_approval_bot_token_uses_approvals_door_in_multi_token(self) -> None:
+        with (
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True),
+            patch.object(
+                telegram_bot, "telegram_bot_token_for_door", return_value="approvals-tok"
+            ) as door_tok,
+            patch.object(telegram_bot, "_token", return_value="shared-tok") as shared,
+        ):
+            assert telegram_bot._approval_bot_token() == "approvals-tok"
+        door_tok.assert_called_once_with("approvals")
+        shared.assert_not_called()
+
+    def test_approval_bot_token_stays_shared_in_single_token(self) -> None:
+        with (
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=False),
+            patch.object(telegram_bot, "_token", return_value="shared-tok") as shared,
+        ):
+            assert telegram_bot._approval_bot_token() == "shared-tok"
+        shared.assert_called_once()
+
+    def test_challenge_key_uses_door_not_thread_in_multi_token(self) -> None:
+        with patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True):
+            assert telegram_bot._challenge_key(-100111, 2118, door="approvals") == (
+                -100111,
+                "approvals",
+            )
+        with patch.object(telegram_bot, "telegram_multi_token_mode", return_value=False):
+            assert telegram_bot._challenge_key(-100111, 2118, door="approvals") == (
+                -100111,
+                2118,
+            )

@@ -134,6 +134,21 @@ class TestApprovalMessageThreadId:
 
         assert thread_id is None
 
+    def test_multi_token_mode_never_uses_forum_thread(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_topics", True)
+        monkeypatch.setattr(telegram_bot.settings, "telegram_stream_chat_id", -100111)
+
+        with (
+            patch.object(telegram_bot, "telegram_multi_token_mode", return_value=True),
+            patch.object(telegram_bot, "door_thread", return_value=777) as mock_door,
+        ):
+            thread_id = telegram_bot._approval_message_thread_id(-100111)
+
+        assert thread_id is None
+        mock_door.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # _send_approval_keyboard_message — message_thread_id plumbing

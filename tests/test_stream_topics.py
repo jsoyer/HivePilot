@@ -472,3 +472,134 @@ class TestStreamAgentTurnTopics:
         mock_ensure.assert_not_called()
         assert all(c.args[0] != "run:42" for c in mock_ensure.call_args_list)
         assert sent and sent[0]["message_thread_id"] == 88
+
+
+# ---------------------------------------------------------------------------
+# HP-130c — multi-token send without forum thread ids
+# ---------------------------------------------------------------------------
+
+
+class TestSendTelegramMultiToken:
+    def _make_settings(self, **kw):
+        s = MagicMock()
+        s.telegram_bot_token = "shared-tok"
+        s.telegram_notification_chat_id = 123
+        s.telegram_allowed_chat_ids = []
+        for k, v in kw.items():
+            setattr(s, k, v)
+        return s
+
+    def test_omits_thread_id_and_uses_door_token(self):
+        captured: dict = {}
+
+        def fake_post(url, json=None, timeout=None):
+            captured["url"] = url
+            captured["payload"] = json
+            r = MagicMock()
+            r.ok = True
+            r.raise_for_status = lambda: None
+            return r
+
+        with (
+            patch("hivepilot.services.notification_service.requests.post", fake_post),
+            patch("hivepilot.services.notification_service.settings", self._make_settings()),
+            patch(
+                "hivepilot.services.notification_service.telegram_multi_token_mode",
+                return_value=True,
+            ),
+            patch(
+                "hivepilot.services.notification_service.telegram_bot_token_for_door",
+                return_value="alerts-tok",
+            ),
+        ):
+            _send_telegram("hello", chat_id=123, message_thread_id=777, door="alerts")
+
+        assert "message_thread_id" not in captured["payload"]
+        assert captured["url"] == "https://api.telegram.org/botalerts-tok/sendMessage"
+
+    def test_single_token_still_includes_thread_id(self):
+        captured: dict = {}
+
+        def fake_post(url, json=None, timeout=None):
+            captured["url"] = url
+            captured["payload"] = json
+            r = MagicMock()
+            r.ok = True
+            return r
+
+        with (
+            patch("hivepilot.services.notification_service.requests.post", fake_post),
+            patch("hivepilot.services.notification_service.settings", self._make_settings()),
+            patch(
+                "hivepilot.services.notification_service.telegram_multi_token_mode",
+                return_value=False,
+            ),
+        ):
+            _send_telegram("hello", chat_id=123, message_thread_id=777)
+
+        assert captured["payload"]["message_thread_id"] == 777
+        assert captured["url"] == "https://api.telegram.org/botshared-tok/sendMessage"
+
+
+class TestStreamAgentTurnMultiToken:
+    def _make_settings(self):
+        s = MagicMock()
+        s.telegram_stream_live = True
+        s.telegram_stream_topics = True
+        s.telegram_stream_chat_id = 999
+        s.telegram_stream_rich = False
+        s.telegram_bot_token = "tok"
+        s.telegram_notification_chat_id = None
+        s.telegram_allowed_chat_ids = []
+        return s
+
+    def test_multi_token_streams_runs_door_without_thread(self):
+        sent: list[dict] = []
+
+        def fake_send(message, chat_id=None, message_thread_id=None, parse_mode=None, door=None):
+            sent.append(
+                {
+                    "message_thread_id": message_thread_id,
+                    "door": door,
+                    "chat_id": chat_id,
+                }
+            )
+
+        with (
+            patch("hivepilot.services.notification_service.settings", self._make_settings()),
+            patch(
+                "hivepilot.services.notification_service.telegram_multi_token_mode",
+                return_value=True,
+            ),
+            patch(
+                "hivepilot.services.notification_service._ensure_topic_thread",
+            ) as mock_ensure,
+            patch(
+                "hivepilot.services.notification_service.door_thread",
+                return_value=88,
+            ),
+            patch("hivepilot.services.notification_service._send_telegram", fake_send),
+        ):
+            stream_agent_turn(
+                actor="Blaise (CTO)",
+                stage="planning",
+                run_id=42,
+                run_slug="acme-api",
+            )
+
+        mock_ensure.assert_not_called()
+        assert sent
+        assert sent[0]["message_thread_id"] is None
+        assert sent[0]["door"] == "runs"
+        assert sent[0]["chat_id"] == 999
+
+    def test_ensure_topic_thread_is_noop_in_multi_token(self):
+        with (
+            patch(
+                "hivepilot.services.notification_service.telegram_multi_token_mode",
+                return_value=True,
+            ),
+            patch("hivepilot.services.notification_service._load_topics") as load,
+        ):
+            assert _ensure_topic_thread("runs", "Runs", allow_create=True) is None
+        load.assert_not_called()
