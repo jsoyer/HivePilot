@@ -36,5 +36,5 @@ HP-130e — explicit, safe cutover/cleanup after multi-token door bots (130c). W
 
 ## Testing
 
-- [ ] `pytest tests/test_telegram_cutover.py tests/test_topics_admin.py tests/test_telegram_stop_bleed.py tests/test_doctor_liveness.py tests/test_deploy_systemd_templates.py tests/test_deploy_openrc_templates.py`
-- [ ] `ruff check` + `ruff format --check` on touched Python
+- [x] `pytest tests/test_telegram_cutover.py tests/test_topics_admin.py tests/test_telegram_stop_bleed.py tests/test_telegram_doors.py tests/test_doctor_liveness.py tests/test_deploy_systemd_templates.py tests/test_deploy_openrc_templates.py tests/test_stream_topics.py tests/test_telegram_channel.py tests/test_approval_forum_topic.py` — 213 passed
+- [x] `ruff check` clean on touched Python

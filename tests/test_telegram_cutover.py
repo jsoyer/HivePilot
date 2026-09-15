@@ -219,7 +219,8 @@ class TestCutoverCli:
 
         assert result.exit_code == 0, result.output
         assert "Refusing to mint" in result.output
-        assert "createForumTopic" not in result.output
+        assert "topics cutover" in result.output
+        assert topics_admin.list_topics() == {}
 
     def test_wipe_sync_followup_skips_bootstrap_in_multi_token(
         self, tmp_path, monkeypatch: pytest.MonkeyPatch
