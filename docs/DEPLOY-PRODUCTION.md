@@ -273,7 +273,10 @@ if no bot token is provided. Optional door tokens
 **not** a cutover: if already set in the environment, `setup-openrc.sh`
 writes them into every generated `conf.d` so api / scheduler / telegram
 agree. Leave them unset to keep the live single-bot / forum-topic path.
-Leftover topics 2118–2121 stay until HP-130e. See
+There is no automatic cutover. After Jerome's four BotFather tokens +
+CoS GO: `hivepilot topics cutover --yes`, then prune or delete leftover
+topics 2118–2121. See
+[INTEGRATIONS.md](INTEGRATIONS.md#cutover--cleanup-hp-130e) and
 [`deploy/openrc/README.md`](../deploy/openrc/README.md#telegram-one-service-four-optional-door-tokens-hp-130d).
 
 **What it installs**: the same 3 services + `conf.d` env files described

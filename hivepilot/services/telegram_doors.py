@@ -167,7 +167,8 @@ def telegram_multi_token_mode(
     Multi-token mode sends and receives Inbox/Approvals/Runs/Alerts by
     door-bot identity and does not use forum ``message_thread_id`` for
     those doors. A single shared token keeps the legacy
-    ``telegram_stream_topics`` path.
+    ``telegram_stream_topics`` path until operators set four door tokens
+    and run the HP-130e cutover (never automatic on deploy/restart).
     """
     return len(telegram_door_token_groups(cfg, environ=environ)) >= 2
 

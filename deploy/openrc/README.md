@@ -49,9 +49,16 @@ needs Jerome's four BotFather tokens (not in this repo).
 
 There is **no automatic cutover**. Copying these templates does not switch
 the live bot, does not wipe the topic registry, and does not delete
-leftover forum topics **2118–2121**. Those orphans stay until HP-130e.
-Do not change production `noxysdevbot` env or restart services from this
-slice.
+leftover forum topics **2118–2121**. Do not change production
+`noxysdevbot` env or restart services until Jerome's four BotFather
+tokens + CoS GO.
+
+**After CoS GO (HP-130e, still not automatic):** set the four tokens in
+`shared.env`, restart **api + scheduler + telegram** together, then
+`hivepilot topics cutover --yes` (local JSON + SQLite only). Delete
+orphan topics 2118–2121 in the Telegram client or
+`hivepilot topics prune 2118 2119 2120 2121 --yes`. Do not bootstrap.
+See [INTEGRATIONS.md](../../docs/INTEGRATIONS.md#cutover--cleanup-hp-130e).
 
 ## Why Socket Mode / gateway mode (outbound-only)
 

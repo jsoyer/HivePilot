@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
+from hivepilot.services.telegram_doors import telegram_multi_token_mode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from hivepilot.services.config_doctor import DoctorFinding
@@ -43,6 +44,7 @@ _CHECK_VAULT = "vault_liveness"
 _CHECK_HOOKS = "registered_hooks"
 _CHECK_PLUGINS = "plugins_written_vs_installed"
 _CHECK_TOPICS = "orphan_topic_keys"
+_CHECK_CUTOVER = "stale_forum_registry_multi_token"
 
 
 def _mk(severity: str, check: str, message: str, why: str, fix: str) -> DoctorFinding:
@@ -463,6 +465,42 @@ def check_orphan_topic_keys() -> list[DoctorFinding]:
             "Bot API offers no way to list them.",
             "Delete these topics in Telegram, or declare the ones worth keeping "
             "in HIVEPILOT_STREAM_TOPIC_EXTRA_KEYS.",
+        )
+    ]
+
+
+def check_stale_forum_registry_multi_token() -> list[DoctorFinding]:
+    """Leftover forum ids after door-bot cutover (HP-130e).
+
+    Multi-token mode does not route Inbox/Approvals/Runs/Alerts by
+    ``message_thread_id``. A non-empty local registry still protects those
+    ids from ``topics prune`` and confuses operators. This check never
+    wipes or deletes — cutover is an explicit CLI step after CoS GO.
+    """
+    if not telegram_multi_token_mode():
+        return []
+
+    from hivepilot.services.notification_service import _load_topics
+
+    try:
+        registry = _load_topics()
+    except Exception:  # noqa: BLE001
+        return []
+    if not registry:
+        return []
+
+    listed = ", ".join(f"{k} (thread {registry[k]})" for k in sorted(registry))
+    return [
+        _mk(
+            "info",
+            _CHECK_CUTOVER,
+            f"multi-token mode is on but {len(registry)} leftover forum "
+            f"topic id(s) remain in the local registry: {listed}",
+            "Door bots no longer use message_thread_id; leftover ids still "
+            "protect prune and can resurrect from the SQLite mirror.",
+            "After CoS GO: `hivepilot topics cutover --yes`, then delete "
+            "orphan topics 2118–2121 in Telegram or "
+            "`hivepilot topics prune 2118 2119 2120 2121 --yes`.",
         )
     ]
 

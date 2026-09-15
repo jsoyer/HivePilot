@@ -371,6 +371,47 @@ class TestOrphanTopicKeys:
         assert _severities(findings) == {"warning"}
 
 
+class TestStaleForumRegistryMultiToken:
+    """HP-130e: leftover forum ids after door-bot cutover are a hint, not a wipe."""
+
+    def _registry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mapping: dict) -> None:
+        path = tmp_path / "stream_topics.json"
+        path.write_text(json.dumps(mapping), encoding="utf-8")
+        import hivepilot.services.notification_service as ns
+
+        monkeypatch.setattr(ns, "_topics_registry_path", lambda: path)
+        monkeypatch.setattr(ns, "_mirror_reconciled", False)
+
+    def test_quiet_on_legacy_single_token(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._registry(tmp_path, monkeypatch, {"inbox": 2118})
+        monkeypatch.setattr(dl, "telegram_multi_token_mode", lambda *a, **k: False)
+
+        assert dl.check_stale_forum_registry_multi_token() == []
+
+    def test_quiet_when_multi_token_and_registry_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._registry(tmp_path, monkeypatch, {})
+        monkeypatch.setattr(dl, "telegram_multi_token_mode", lambda *a, **k: True)
+
+        assert dl.check_stale_forum_registry_multi_token() == []
+
+    def test_names_leftover_ids_and_points_at_cutover(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._registry(tmp_path, monkeypatch, {"inbox": 2118, "alerts": 2121})
+        monkeypatch.setattr(dl, "telegram_multi_token_mode", lambda *a, **k: True)
+
+        findings = dl.check_stale_forum_registry_multi_token()
+
+        assert "inbox (thread 2118)" in _messages(findings)
+        assert "alerts (thread 2121)" in _messages(findings)
+        assert "topics cutover" in findings[0].fix
+        assert findings[0].severity == "info"
+
+
 class TestAgentPrivilege:
     """Agents read a client's PR diff — untrusted input — and run shell
     commands. As root, the tool allowlist guards a door that is not the only

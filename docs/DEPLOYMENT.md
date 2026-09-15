@@ -82,9 +82,11 @@ Bare-metal templates keep a single `hivepilot-telegram` unit (systemd or
 OpenRC) running `telegram start --mode polling`. Optional
 `HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` belong in
 shared env so every service agrees. Leave them unset to keep the live
-single-bot / forum-topic path. There is no automatic cutover; leftover
-forum topics 2118–2121 stay until HP-130e. See
-[INTEGRATIONS.md](INTEGRATIONS.md#deploy-packaging-hp-130d) and
+single-bot / forum-topic path. There is no automatic cutover. After
+Jerome's four BotFather tokens + CoS GO: set them in shared.env, restart
+api+scheduler+telegram, then `hivepilot topics cutover --yes` and prune
+or delete leftover forum topics 2118–2121. See
+[INTEGRATIONS.md](INTEGRATIONS.md#cutover--cleanup-hp-130e) and
 [`deploy/systemd/README.md`](../deploy/systemd/README.md).
 
 ## Kubernetes

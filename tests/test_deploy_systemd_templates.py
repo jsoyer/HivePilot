@@ -268,3 +268,5 @@ def test_readme_documents_telegram_multi_token_vs_legacy():
     assert "hivepilot-telegram-inbox" in content
     assert "noxysdevbot" in content
     assert "Jerome" in content or "BotFather" in content
+    assert "topics cutover" in content
+    assert "HP-130e" in content

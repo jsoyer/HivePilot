@@ -130,7 +130,8 @@ Three ways to supply real values:
        HIVEPILOT_TELEGRAM_BOT_TOKEN: "<bot father token>"
        # Optional HP-130d door tokens (same Secret = every pod). Leave
        # unset to keep the single-bot / STREAM_TOPICS path. Live cutover
-       # needs four BotFather tokens (not included); no automatic cutover.
+       # needs four BotFather tokens + CoS GO (not included); no automatic
+       # cutover. After that: topics cutover --yes, then prune 2118-2121.
        # HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX: "<inbox-bot-token>"
        # HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS: "<approvals-bot-token>"
        # HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS: "<runs-bot-token>"
@@ -218,7 +219,8 @@ rotation without a chart upgrade.
   `HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` in
   `secrets.data` start N Applications in that process (HP-130b). Put those
   keys in the shared Secret so the API/scheduler pods match. No automatic
-  cutover; leftover forum topics 2118–2121 stay until HP-130e.
+  cutover. After CoS GO: `hivepilot topics cutover --yes`, then prune or
+  delete leftover forum topics 2118–2121.
 
 ## Ingress & TLS
 

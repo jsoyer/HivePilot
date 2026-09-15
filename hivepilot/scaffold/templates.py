@@ -171,7 +171,7 @@ HIVEPILOT_TELEGRAM_BOT_TOKEN=
 # Distinct tokens: one polling Application each (HP-130b); no forum
 # thread_id for the four doors (HP-130c). Single shared token keeps topics.
 # Deploy: one telegram unit; put these in shared env (HP-130d). No automatic
-# cutover; leftover forum topics 2118-2121 stay until HP-130e.
+# cutover. After CoS GO: topics cutover --yes, then prune/delete 2118-2121.
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS=

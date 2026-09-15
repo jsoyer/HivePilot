@@ -9,7 +9,7 @@ optional extra or credentials and are off until configured.
 Requires `pip install "hivepilot[notifications]"` plus:
 
 - `HIVEPILOT_TELEGRAM_BOT_TOKEN` — bot token from `@BotFather`
-- `HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS` — optional per-door tokens (HP-130a). Unset doors fall back to the shared token so a single-bot deploy is unchanged. When 2+ distinct tokens are set, `hivepilot telegram start` (polling) runs one Application per unique token, each bound to the door(s) that use it (HP-130b). Send/receive for Inbox/Approvals/Runs/Alerts then uses the door bot and does **not** set forum `message_thread_id` (HP-130c). One shared token keeps the current one-bot process and the `HIVEPILOT_TELEGRAM_STREAM_TOPICS` / `message_thread_id` path. Webhook mode stays single-token.
+- `HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS` — optional per-door tokens (HP-130a). Unset doors fall back to the shared token so a single-bot deploy is unchanged. When 2+ distinct tokens are set, `hivepilot telegram start` (polling) runs one Application per unique token, each bound to the door(s) that use it (HP-130b). Send/receive for Inbox/Approvals/Runs/Alerts then uses the door bot and does **not** set forum `message_thread_id` (HP-130c). One shared token keeps the current one-bot process and the `HIVEPILOT_TELEGRAM_STREAM_TOPICS` / `message_thread_id` path. After CoS GO, `hivepilot topics cutover --yes` forgets leftover forum ids (HP-130e); it never runs on deploy. Webhook mode stays single-token.
 - `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` — comma-separated or JSON array of allowed chat IDs, e.g. `123456,789012` or `[123456,789012]`; empty means open
 
 Start the bot:
@@ -58,19 +58,22 @@ General topic — HivePilot does not use it as a catch-all.
 
 Startup (`ensure_pollen_doors`) is a no-op when any door is already registered,
 and is skipped entirely in multi-token mode (doors are bots, not topics).
-Mint an empty set once with:
+On the **legacy single-token** path only, mint an empty set once with:
 
 ```bash
 hivepilot topics bootstrap --yes
 ```
 
-After an operator wipe of the forum, clear leftover ids (JSON + SQLite
-mirror) so they cannot resurrect, then mint again:
+After an operator wipe of the forum **while still on one shared token**,
+clear leftover ids (JSON + SQLite mirror) so they cannot resurrect, then
+mint again:
 
 ```bash
 hivepilot topics wipe-sync --yes
 hivepilot topics bootstrap --yes
 ```
+
+Do **not** bootstrap after a multi-token cutover — see HP-130e below.
 
 A missing or stale door falls back to Inbox, then the operator DM — it is
 never reminted automatically. Each dead id is dropped from both stores.
@@ -94,8 +97,58 @@ and [`deploy/openrc/README.md`](../deploy/openrc/README.md).
 
 There is **no automatic cutover**. These templates do not switch
 production `noxysdevbot`, do not wipe the topic registry, and do not
-delete leftover forum topics **2118–2121** (HP-130e). Live cutover needs
-Jerome's four BotFather tokens — they are not included.
+delete leftover forum topics **2118–2121**. Live cutover needs Jerome's
+four BotFather tokens plus CoS GO — they are not included.
+
+### Cutover / cleanup (HP-130e)
+
+**DRAFT / DO NOT LIVE CUTOVER** until Jerome provides four BotFather
+tokens and Gaspard CoS GO. Shipping this code does not change
+`noxysdevbot`. Restarting api / scheduler / telegram never wipes the
+registry and never calls `deleteForumTopic`.
+
+The switch is env-driven: `telegram_multi_token_mode()` becomes true
+only when a process sees **2+ distinct** door tokens. One shared
+`HIVEPILOT_TELEGRAM_BOT_TOKEN` keeps `HIVEPILOT_TELEGRAM_STREAM_TOPICS`
+and forum `message_thread_id` until those four tokens are set.
+
+Operator sequence after CoS GO (local wipe only; Telegram deletes stay
+manual):
+
+1. Put four distinct tokens in **shared.env** (api, scheduler, and
+   telegram must agree). Never commit tokens.
+2. Restart **api + scheduler + telegram** together.
+3. Confirm multi-token: `hivepilot telegram start` logs
+   `applications=4` (or `hivepilot doctor` is quiet on
+   `stale_forum_registry_multi_token` after the wipe).
+4. Forget leftover ids so they cannot resurrect from SQLite:
+
+   ```bash
+   hivepilot topics cutover          # plan only
+   hivepilot topics cutover --yes    # JSON + SQLite; no Telegram API
+   ```
+
+   `topics cutover --yes` **refuses** on the legacy single-token path so
+   a live `STREAM_TOPICS` registry cannot be wiped by accident.
+   `topics wipe-sync --yes` still exists (P0) and clears both stores
+   without that guard.
+
+5. Delete orphan forum topics **2118–2121** (Inbox / Approvals / Runs /
+   Alerts) by hand. Telegram cannot list topics — the id is the last
+   segment of the topic link. Prefer the Telegram client. Or, after
+   step 4 so the registry no longer protects them:
+
+   ```bash
+   hivepilot topics list
+   hivepilot topics prune 2118 2119 2120 2121 --yes
+   ```
+
+   `topics prune` uses the shared `HIVEPILOT_TELEGRAM_BOT_TOKEN` (the
+   bot that minted those doors). If that bot has left the group, delete
+   in the Telegram client instead. Do **not** run `topics bootstrap`.
+
+P0 stop-bleed stays intact: no `createForumTopic` for `run:{id}`;
+startup never remints doors; cutover never runs on boot.
 
 ### Role avatars on hand-offs (HP-16)
 
