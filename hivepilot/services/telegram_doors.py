@@ -14,9 +14,12 @@ role-charte glyphs; system / concierge uses 🐝.
 from __future__ import annotations
 
 import html
+import os
 import re
+from collections.abc import Mapping
 from typing import Any
 
+from hivepilot.config import Settings, settings as default_settings
 from hivepilot.services.telegram_avatars import (
     CANONICAL_ROLE_EMOJI,
     fallback_emoji,
@@ -30,6 +33,15 @@ RUNS = "runs"
 ALERTS = "alerts"
 
 PERSISTENT_DOORS: tuple[str, ...] = (INBOX, APPROVALS, RUNS, ALERTS)
+
+# Settings field names for HP-130a door → bot token. Keep in lockstep with
+# `Settings.telegram_bot_token_*` (env: HIVEPILOT_TELEGRAM_BOT_TOKEN_{DOOR}).
+DOOR_TOKEN_SETTING_NAMES: dict[str, str] = {
+    INBOX: "telegram_bot_token_inbox",
+    APPROVALS: "telegram_bot_token_approvals",
+    RUNS: "telegram_bot_token_runs",
+    ALERTS: "telegram_bot_token_alerts",
+}
 
 DOOR_TITLES: dict[str, str] = {
     INBOX: "Inbox",
@@ -72,6 +84,50 @@ def door_title(key: str) -> str | None:
 
 def is_persistent_door(key: str) -> bool:
     return key in DOOR_TITLES
+
+
+def _nonempty_token(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def telegram_bot_token_for_door(
+    door: str,
+    cfg: Settings | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Resolve the BotFather token for a Pollen door.
+
+    A door-specific ``HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}``
+    wins when set. Otherwise fall back to ``telegram_bot_token`` /
+    ``HIVEPILOT_TELEGRAM_BOT_TOKEN``, then the unprefixed ``TELEGRAM_BOT_TOKEN``
+    env var used by the existing single-bot path. Unknown keys and blank
+    overrides use that shared fallback so a current deploy is unchanged.
+    """
+    resolved = default_settings if cfg is None else cfg
+    env = os.environ if environ is None else environ
+    attr = DOOR_TOKEN_SETTING_NAMES.get(door)
+    if attr:
+        specific = _nonempty_token(getattr(resolved, attr, None))
+        if specific is not None:
+            return specific
+    return _nonempty_token(resolved.telegram_bot_token) or _nonempty_token(
+        env.get("TELEGRAM_BOT_TOKEN")
+    )
+
+
+def telegram_door_bot_tokens(
+    cfg: Settings | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str | None]:
+    """``PERSISTENT_DOORS`` → resolved token after fallback."""
+    return {
+        door: telegram_bot_token_for_door(door, cfg, environ=environ) for door in PERSISTENT_DOORS
+    }
 
 
 def approval_actions_allowed(door: str) -> bool:

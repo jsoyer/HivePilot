@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
+from hivepilot.config import Settings
 from hivepilot.services.telegram_doors import (
     ALERTS,
     APPROVALS,
     CANONICAL_ROLE_EMOJI,
     DOOR_TITLES,
+    DOOR_TOKEN_SETTING_NAMES,
     INBOX,
     PERSISTENT_DOORS,
     RUNS,
@@ -29,6 +33,8 @@ from hivepilot.services.telegram_doors import (
     soft_card_from_report,
     speaker_html,
     speaker_plain,
+    telegram_bot_token_for_door,
+    telegram_door_bot_tokens,
 )
 
 
@@ -190,3 +196,109 @@ def test_door_title_helpers() -> None:
     assert door_title("developer") is None
     assert is_persistent_door("alerts")
     assert not is_persistent_door("developer")
+
+
+# ---------------------------------------------------------------------------
+# HP-130a — door → bot token map
+# ---------------------------------------------------------------------------
+
+_TELEGRAM_TOKEN_ENV = (
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS",
+    "TELEGRAM_BOT_TOKEN",
+)
+
+
+def _clear_telegram_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in _TELEGRAM_TOKEN_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_door_token_setting_names_cover_persistent_doors() -> None:
+    assert tuple(DOOR_TOKEN_SETTING_NAMES) == PERSISTENT_DOORS
+    for attr in DOOR_TOKEN_SETTING_NAMES.values():
+        assert attr in Settings.model_fields
+
+
+def test_door_token_falls_back_to_shared_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(_env_file=None, telegram_bot_token="shared-token")  # type: ignore[call-arg]
+    for door in PERSISTENT_DOORS:
+        assert telegram_bot_token_for_door(door, cfg) == "shared-token"
+    assert telegram_door_bot_tokens(cfg) == {door: "shared-token" for door in PERSISTENT_DOORS}
+
+
+def test_door_token_falls_back_to_unprefixed_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(_env_file=None, telegram_bot_token=None)  # type: ignore[call-arg]
+    env = {"TELEGRAM_BOT_TOKEN": "legacy-token"}
+    assert telegram_bot_token_for_door(INBOX, cfg, environ=env) == "legacy-token"
+    assert telegram_bot_token_for_door("not-a-door", cfg, environ=env) == "legacy-token"
+
+
+def test_per_door_token_overrides_shared_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+        telegram_bot_token_alerts="alerts-token",
+    )
+    env = {"TELEGRAM_BOT_TOKEN": "legacy-token"}
+    assert telegram_bot_token_for_door(INBOX, cfg, environ=env) == "inbox-token"
+    assert telegram_bot_token_for_door(ALERTS, cfg, environ=env) == "alerts-token"
+    assert telegram_bot_token_for_door(APPROVALS, cfg, environ=env) == "shared-token"
+    assert telegram_bot_token_for_door(RUNS, cfg, environ=env) == "shared-token"
+    assert telegram_door_bot_tokens(cfg, environ=env) == {
+        INBOX: "inbox-token",
+        APPROVALS: "shared-token",
+        RUNS: "shared-token",
+        ALERTS: "alerts-token",
+    }
+
+
+def test_blank_door_token_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="   ",
+        telegram_bot_token_approvals="",
+    )
+    assert telegram_bot_token_for_door(INBOX, cfg) == "shared-token"
+    assert telegram_bot_token_for_door(APPROVALS, cfg) == "shared-token"
+
+
+def test_unknown_door_uses_shared_token_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    cfg = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        telegram_bot_token="shared-token",
+        telegram_bot_token_inbox="inbox-token",
+    )
+    assert telegram_bot_token_for_door("run:9", cfg) == "shared-token"
+    assert telegram_bot_token_for_door("", cfg) == "shared-token"
+
+
+def test_door_token_env_vars_map_onto_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_telegram_token_env(monkeypatch)
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_BOT_TOKEN", "shared-from-env")
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX", "inbox-from-env")
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS", "approvals-from-env")
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS", "runs-from-env")
+    monkeypatch.setenv("HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS", "alerts-from-env")
+    cfg = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert cfg.telegram_bot_token == "shared-from-env"
+    assert cfg.telegram_bot_token_inbox == "inbox-from-env"
+    assert cfg.telegram_bot_token_approvals == "approvals-from-env"
+    assert cfg.telegram_bot_token_runs == "runs-from-env"
+    assert cfg.telegram_bot_token_alerts == "alerts-from-env"
+    assert telegram_door_bot_tokens(cfg) == {
+        INBOX: "inbox-from-env",
+        APPROVALS: "approvals-from-env",
+        RUNS: "runs-from-env",
+        ALERTS: "alerts-from-env",
+    }

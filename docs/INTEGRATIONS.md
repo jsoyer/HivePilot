@@ -9,6 +9,7 @@ optional extra or credentials and are off until configured.
 Requires `pip install "hivepilot[notifications]"` plus:
 
 - `HIVEPILOT_TELEGRAM_BOT_TOKEN` — bot token from `@BotFather`
+- `HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS` — optional per-door tokens (HP-130a). Unset doors fall back to the shared token so a single-bot deploy is unchanged. Multi-bot polling is not wired yet.
 - `HIVEPILOT_TELEGRAM_ALLOWED_CHAT_IDS` — comma-separated or JSON array of allowed chat IDs, e.g. `123456,789012` or `[123456,789012]`; empty means open
 
 Start the bot:
