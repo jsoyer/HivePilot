@@ -26,5 +26,6 @@ Forum doors remain until 130e. Live registry still has `inbox=2118` … `alerts=
 
 ## Testing
 
-- [x] `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py` — fallback, per-door override, env mapping, secret mask
-- [ ] `hivepilot lint` — run after commit
+- [x] `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py tests/test_cli_config_get.py::TestConfigGet tests/test_telegram_bot.py tests/test_telegram_channel.py tests/test_stream_topics.py` — 231 passed (fallback, per-door override, env mapping, secret mask, no Telegram regression)
+- [x] `ruff check` on touched Python
+- [x] `hivepilot lint` — only pre-existing missing example project paths in this environment (`/home/ubuntu/dev/example-api`, …); no new lint findings from 130a

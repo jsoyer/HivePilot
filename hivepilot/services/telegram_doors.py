@@ -19,7 +19,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from hivepilot.config import Settings, settings as default_settings
+from hivepilot.config import Settings
+from hivepilot.config import settings as default_settings
 from hivepilot.services.telegram_avatars import (
     CANONICAL_ROLE_EMOJI,
     fallback_emoji,
