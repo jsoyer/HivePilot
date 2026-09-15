@@ -28,5 +28,6 @@ Replay: `hivepilot run example-api docs --dry-run`
 
 ## Testing
 
-- [ ] `pytest tests/test_deploy_systemd_templates.py tests/test_deploy_openrc_templates.py tests/test_setup_openrc.py`
-- [ ] `hivepilot lint` (if the env is ready)
+- [x] `pytest tests/test_deploy_systemd_templates.py tests/test_deploy_openrc_templates.py tests/test_setup_openrc.py` — 58 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python; `sh -n scripts/setup-openrc.sh`
+- [ ] `hivepilot lint` — pre-existing missing project paths in this env (`/home/ubuntu/dev/example-api` …), not caused by this slice

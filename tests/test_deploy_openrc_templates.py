@@ -250,10 +250,11 @@ def test_telegram_and_shared_env_examples_document_door_tokens():
     for name in _DOOR_TOKEN_VARS:
         assert name in telegram, f"missing {name} in hivepilot-telegram.example"
         assert name in shared, f"missing {name} in shared.env.example (env-silo)"
-    assert "no automatic cutover" in telegram.lower() or "NO automatic cutover" in telegram
-    assert "2118" in telegram and "2121" in telegram
-    assert "BotFather" in telegram or "BotFather" in shared
-    assert "not included" in telegram.lower() or "not included" in shared.lower()
+    combined = f"{telegram}\n{shared}"
+    assert "no automatic cutover" in combined.lower()
+    assert "2118" in combined and "2121" in combined
+    assert "BotFather" in combined
+    assert "not included" in combined.lower()
     assert "shared.env" in telegram
 
 

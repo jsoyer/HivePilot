@@ -32,7 +32,10 @@ per service never trips `telegram_multi_token_mode()` and stays on the
 legacy forum-topic path.
 
 **Legacy (current noxysdevbot — default, do nothing):** leave
-`HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` unset. The
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX`,
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS`,
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS`, and
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS` unset. The
 shared `HIVEPILOT_TELEGRAM_BOT_TOKEN` in `/etc/conf.d/hivepilot-telegram`
 keeps single-Application polling and `HIVEPILOT_TELEGRAM_STREAM_TOPICS` /
 `message_thread_id`.
