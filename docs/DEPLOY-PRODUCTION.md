@@ -267,7 +267,14 @@ reachable, and a `run`-role API token bootstrapped first — see
 script refuses to proceed without it (the scheduler is fail-closed).
 `ANTHROPIC_API_KEY` and the Telegram bot token/chat IDs are optional — the
 `hivepilot-telegram` service is skipped entirely (not written, not enabled)
-if no bot token is provided.
+if no bot token is provided. Optional door tokens
+(`TELEGRAM_BOT_TOKEN_INBOX` / `_APPROVALS` / `_RUNS` / `_ALERTS`, or the
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_*` names) are **not** prompted and are
+**not** a cutover: if already set in the environment, `setup-openrc.sh`
+writes them into every generated `conf.d` so api / scheduler / telegram
+agree. Leave them unset to keep the live single-bot / forum-topic path.
+Leftover topics 2118–2121 stay until HP-130e. See
+[`deploy/openrc/README.md`](../deploy/openrc/README.md#telegram-one-service-four-optional-door-tokens-hp-130d).
 
 **What it installs**: the same 3 services + `conf.d` env files described
 manually above, run as `root`/`HOME=/root` (not the non-root

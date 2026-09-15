@@ -43,6 +43,14 @@
 #   TELEGRAM_CHAT_IDS       optional, comma-separated Telegram chat IDs (only
 #                           used/prompted if TELEGRAM_BOT_TOKEN is set); the
 #                           first ID becomes the proactive-notification chat
+#   TELEGRAM_BOT_TOKEN_INBOX / _APPROVALS / _RUNS / _ALERTS
+#   HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}
+#                           optional door tokens (HP-130d). Never prompted.
+#                           When already set, written into EVERY generated
+#                           conf.d (api/scheduler/telegram) so multi-token
+#                           mode agrees across processes. Leave unset to
+#                           keep the live single-bot / STREAM_TOPICS path.
+#                           Not a cutover: does not wipe topics 2118-2121.
 #
 # The last two env overrides (HIVEPILOT_INITD_DIR/HIVEPILOT_CONFD_DIR) exist
 # primarily so this script's file-generation logic is exercisable by an
@@ -204,6 +212,25 @@ emit_common_env() {
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     emit_export "$1" ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
   fi
+  # Optional HP-130d door tokens. Never prompted (not a live cutover).
+  # Accept either TELEGRAM_BOT_TOKEN_* or the Settings HIVEPILOT_* names.
+  _inbox="${HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX:-${TELEGRAM_BOT_TOKEN_INBOX:-}}"
+  _approvals="${HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS:-${TELEGRAM_BOT_TOKEN_APPROVALS:-}}"
+  _runs="${HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS:-${TELEGRAM_BOT_TOKEN_RUNS:-}}"
+  _alerts="${HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS:-${TELEGRAM_BOT_TOKEN_ALERTS:-}}"
+  if [ -n "$_inbox" ]; then
+    emit_export "$1" HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX "$_inbox"
+  fi
+  if [ -n "$_approvals" ]; then
+    emit_export "$1" HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS "$_approvals"
+  fi
+  if [ -n "$_runs" ]; then
+    emit_export "$1" HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS "$_runs"
+  fi
+  if [ -n "$_alerts" ]; then
+    emit_export "$1" HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS "$_alerts"
+  fi
+  unset _inbox _approvals _runs _alerts
 }
 
 write_initd() {

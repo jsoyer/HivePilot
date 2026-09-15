@@ -1,6 +1,13 @@
 # Telegram chat-ops bot -- OPTIONAL, not wired into base/kustomization.yaml's
 # `resources:` by default (mirrors the Helm chart's `bots.telegram.enabled:
 # false` default). Needs HIVEPILOT_TELEGRAM_BOT_TOKEN in hivepilot-secret.
+# HP-130d: keep this ONE Deployment. Optional door tokens
+# (HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}) go in the
+# same Secret so the API/scheduler pods see them too -- multi-token mode
+# is per-process. Do not clone this file into four door Deployments
+# (getUpdates conflict, or silent legacy topic routing). No automatic
+# cutover; leftover forum topics 2118-2121 stay until HP-130e. Live
+# tokens are Jerome's four BotFather bots and are not included.
 # Add this file to an overlay's `resources:` list to enable it. Blocking,
 # long-lived process (polling mode), so a 1-replica Deployment same as the
 # scheduler. The Helm chart's equivalent (deployment-bots.yaml) also renders

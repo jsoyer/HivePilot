@@ -170,6 +170,8 @@ HIVEPILOT_TELEGRAM_BOT_TOKEN=
 # Optional per-door tokens; unset doors fall back to the shared token.
 # Distinct tokens: one polling Application each (HP-130b); no forum
 # thread_id for the four doors (HP-130c). Single shared token keeps topics.
+# Deploy: one telegram unit; put these in shared env (HP-130d). No automatic
+# cutover; leftover forum topics 2118-2121 stay until HP-130e.
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS=
 # HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS=

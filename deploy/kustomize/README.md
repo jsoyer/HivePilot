@@ -93,6 +93,13 @@ See the Helm chart README's "Bootstrap the first admin token" section for
 the exact `api_tokens.yaml` bootstrap flow — it's identical regardless of
 whether the Secret is rendered by Helm or Kustomize.
 
+Optional Telegram door tokens (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` /
+`_APPROVALS` / `_RUNS` / `_ALERTS`) belong in that same Secret so every
+pod (API, scheduler, the single telegram Deployment) agrees. Keep one
+telegram Deployment — HP-130b polls N Applications in one process. There
+is no automatic cutover; leftover forum topics 2118–2121 stay until
+HP-130e. Live tokens are not included.
+
 ## RBAC
 
 `overlays/prod` opts into a namespaced Role/RoleBinding (read-only

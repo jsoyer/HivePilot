@@ -75,6 +75,28 @@ hivepilot topics bootstrap --yes
 A missing or stale door falls back to Inbox, then the operator DM — it is
 never reminted automatically. Each dead id is dropped from both stores.
 
+### Deploy packaging (HP-130d)
+
+Bare-metal units stay **one** `hivepilot-telegram` process (systemd or
+OpenRC). HP-130b already polls one Application per distinct door token
+inside that process. Four units would either fight on `getUpdates` or
+silently keep the forum-topic path.
+
+| Mode | Env | Behaviour |
+| --- | --- | --- |
+| Legacy (default) | Only `HIVEPILOT_TELEGRAM_BOT_TOKEN` | Single Application; `HIVEPILOT_TELEGRAM_STREAM_TOPICS` / `message_thread_id` unchanged |
+| Multi-token | Four distinct `HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` in **shared** env | One process, N Applications; doors are bots, not topics |
+
+Put door tokens in `shared.env` (or the K8s Secret mounted on every pod)
+so api / scheduler / telegram agree — `telegram_multi_token_mode()` is
+per-process. See [`deploy/systemd/README.md`](../deploy/systemd/README.md)
+and [`deploy/openrc/README.md`](../deploy/openrc/README.md).
+
+There is **no automatic cutover**. These templates do not switch
+production `noxysdevbot`, do not wipe the topic registry, and do not
+delete leftover forum topics **2118–2121** (HP-130e). Live cutover needs
+Jerome's four BotFather tokens — they are not included.
+
 ### Role avatars on hand-offs (HP-16)
 
 Each streamed hand-off prefixes the actor with a per-role emoji (the same eight

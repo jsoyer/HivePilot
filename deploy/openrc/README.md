@@ -17,9 +17,41 @@ templates below by hand for those two), see `scripts/setup-openrc.sh` and
 | ---------------------- | ---------------------------------- | --------------------------------- | ------------------------------- |
 | `hivepilot-api`        | `api serve --host ... --port ...`  | HTTP                              | Only if exposed beyond loopback |
 | `hivepilot-scheduler`  | `schedule daemon --interval 30`    | —                                 | No                               |
-| `hivepilot-telegram`   | `telegram start --mode polling`    | Long-poll (outbound)              | No                               |
+| `hivepilot-telegram`   | `telegram start --mode polling`    | Long-poll (outbound); one service, optional 4 door tokens | No                               |
 | `hivepilot-slack`      | `slack start --mode socket`        | Slack **Socket Mode** (outbound)  | **No**                           |
 | `hivepilot-discord`    | `discord start --mode gateway`     | Discord **gateway** WebSocket (outbound) | **No**                    |
+
+### Telegram: one service, four optional door tokens (HP-130d)
+
+Keep **one** `hivepilot-telegram` OpenRC service. HP-130b already starts N
+python-telegram-bot Applications inside a single `telegram start --mode
+polling` process when 2+ distinct door tokens are set. Four init scripts
+(`hivepilot-telegram-inbox` …) are the wrong fit: the same token polled
+twice raises `Conflict: terminated by other getUpdates request`; one token
+per service never trips `telegram_multi_token_mode()` and stays on the
+legacy forum-topic path.
+
+**Legacy (current noxysdevbot — default, do nothing):** leave
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX`,
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS`,
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS`, and
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS` unset. The
+shared `HIVEPILOT_TELEGRAM_BOT_TOKEN` in `/etc/conf.d/hivepilot-telegram`
+keeps single-Application polling and `HIVEPILOT_TELEGRAM_STREAM_TOPICS` /
+`message_thread_id`.
+
+**Enable multi-token (operator-driven, not automatic):** put four distinct
+BotFather tokens in `/etc/hivepilot/shared.env` (see
+[`conf.d/shared.env.example`](conf.d/shared.env.example)), then restart
+**api + scheduler + telegram** so every process agrees. Door tokens only
+in `hivepilot-telegram` split routing. Placeholders only — live cutover
+needs Jerome's four BotFather tokens (not in this repo).
+
+There is **no automatic cutover**. Copying these templates does not switch
+the live bot, does not wipe the topic registry, and does not delete
+leftover forum topics **2118–2121**. Those orphans stay until HP-130e.
+Do not change production `noxysdevbot` env or restart services from this
+slice.
 
 ## Why Socket Mode / gateway mode (outbound-only)
 

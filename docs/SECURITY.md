@@ -268,7 +268,10 @@ vars (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` …) over a JSON map so systemd
 `HIVEPILOT_TELEGRAM_BOT_TOKEN`. Polling may start one Application per
 distinct token (HP-130b). Multi-token send/receive picks the door bot
 via `telegram_bot_token_for_door` and does not use forum thread ids for
-the four doors (HP-130c); never log the token values.
+the four doors (HP-130c). Deploy packaging (HP-130d) keeps one telegram
+unit and documents the four env vars in shared.env; never log the token
+values. No automatic cutover — leftover forum topics 2118–2121 stay
+until HP-130e.
 
 Secrets backends ship as plugins: Infisical, 1Password (Connect **and** direct
 service-account), Bitwarden, Vaultwarden (via the `bw` CLI, masked), and **KMS**

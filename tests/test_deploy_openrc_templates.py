@@ -220,3 +220,50 @@ def test_conf_d_examples_contain_no_real_looking_secrets():
         content = path.read_text()
         for pattern in _SUSPICIOUS_SECRET_PATTERNS:
             assert not pattern.search(content), f"{path} looks like it contains a real secret"
+
+
+# ---------------------------------------------------------------------------
+# HP-130d — one telegram service + four optional door-token env vars
+# ---------------------------------------------------------------------------
+
+_DOOR_TOKEN_VARS = (
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS",
+    "HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS",
+)
+
+
+def test_telegram_stays_one_service_no_per_door_init_scripts():
+    assert (INITD_DIR / "hivepilot-telegram").is_file()
+    for door in ("inbox", "approvals", "runs", "alerts"):
+        path = INITD_DIR / f"hivepilot-telegram-{door}"
+        assert not path.exists(), (
+            f"{path} must not exist — HP-130b polls N Applications in one "
+            "hivepilot-telegram process"
+        )
+
+
+def test_telegram_and_shared_env_examples_document_door_tokens():
+    telegram = (CONFD_DIR / "hivepilot-telegram.example").read_text()
+    shared = (CONFD_DIR / "shared.env.example").read_text()
+    for name in _DOOR_TOKEN_VARS:
+        assert name in telegram, f"missing {name} in hivepilot-telegram.example"
+        assert name in shared, f"missing {name} in shared.env.example (env-silo)"
+    combined = f"{telegram}\n{shared}"
+    assert "no automatic cutover" in combined.lower()
+    assert "2118" in combined and "2121" in combined
+    assert "BotFather" in combined
+    assert "not included" in combined.lower()
+    assert "shared.env" in telegram
+
+
+def test_readme_documents_telegram_multi_token_vs_legacy():
+    content = (OPENRC_DIR / "README.md").read_text()
+    assert "HP-130d" in content
+    assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX" in content
+    assert "no automatic cutover" in content.lower()
+    assert "2118" in content and "2121" in content
+    assert "hivepilot-telegram-inbox" in content
+    assert "noxysdevbot" in content
+    assert "Jerome" in content or "BotFather" in content
