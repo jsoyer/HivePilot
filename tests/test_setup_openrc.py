@@ -79,6 +79,17 @@ def _run_script(
     else:
         env.pop("TELEGRAM_BOT_TOKEN", None)
         env.pop("TELEGRAM_CHAT_IDS", None)
+    for door_var in (
+        "TELEGRAM_BOT_TOKEN_INBOX",
+        "TELEGRAM_BOT_TOKEN_APPROVALS",
+        "TELEGRAM_BOT_TOKEN_RUNS",
+        "TELEGRAM_BOT_TOKEN_ALERTS",
+        "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX",
+        "HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS",
+        "HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS",
+        "HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS",
+    ):
+        env.pop(door_var, None)
     env.update(extra_env)
 
     proc = subprocess.run(
@@ -235,6 +246,45 @@ def test_all_conf_d_files_export_anthropic_key_when_provided(tmp_path):
 # ---------------------------------------------------------------------------
 # Behavior: telegram optional
 # ---------------------------------------------------------------------------
+
+
+def test_door_tokens_omitted_by_default_not_a_cutover(tmp_path):
+    """HP-130d: setup-openrc never prompts for / writes door tokens unless
+    they are already in the environment. Default generated confs stay on
+    the single-bot path."""
+    proc, _initd, confd_dir, _venv = _run_script(tmp_path, {}, telegram_token=True)
+    assert proc.returncode == 0, proc.stderr
+    for svc in ("hivepilot-api", "hivepilot-scheduler", "hivepilot-telegram"):
+        conf = (confd_dir / svc).read_text()
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX" not in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS" not in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS" not in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS" not in conf
+
+
+def test_door_tokens_written_to_every_conf_d_when_provided(tmp_path):
+    """Door tokens must land on api/scheduler/telegram (env silo)."""
+    proc, _initd, confd_dir, _venv = _run_script(
+        tmp_path,
+        {
+            "TELEGRAM_BOT_TOKEN_INBOX": "inbox-test-token",
+            "TELEGRAM_BOT_TOKEN_APPROVALS": "approvals-test-token",
+            "TELEGRAM_BOT_TOKEN_RUNS": "runs-test-token",
+            "TELEGRAM_BOT_TOKEN_ALERTS": "alerts-test-token",
+        },
+        telegram_token=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    for svc in ("hivepilot-api", "hivepilot-scheduler", "hivepilot-telegram"):
+        conf = (confd_dir / svc).read_text()
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX" in conf
+        assert "inbox-test-token" in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS" in conf
+        assert "approvals-test-token" in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS" in conf
+        assert "runs-test-token" in conf
+        assert "HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS" in conf
+        assert "alerts-test-token" in conf
 
 
 def test_telegram_service_skipped_entirely_when_no_bot_token(tmp_path):

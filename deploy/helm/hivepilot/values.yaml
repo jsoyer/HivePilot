@@ -125,6 +125,10 @@ scheduler:
 # default. Each needs its own token/credentials in `secrets.data` (e.g.
 # HIVEPILOT_TELEGRAM_BOT_TOKEN) — see README. Bots are blocking, long-lived
 # processes (polling/gateway mode), so each is a 1-replica Deployment.
+# HP-130d: keep one telegram Deployment. Optional
+# HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS} go in
+# secrets.data (seen by every pod via envFrom). Do not add four telegram
+# Deployments. No automatic cutover; tokens not included.
 # -----------------------------------------------------------------------------
 bots:
   telegram:
@@ -259,8 +263,10 @@ config:
 secrets:
   existingSecret: ""
   # Arbitrary env vars injected into every enabled Deployment via envFrom
-  # (HIVEPILOT_API_TOKEN, HIVEPILOT_TELEGRAM_BOT_TOKEN, HIVEPILOT_CHATOPS_TOKEN,
-  # ANTHROPIC_API_KEY, provider keys for whichever runner CLIs you use, ...).
+  # (HIVEPILOT_API_TOKEN, HIVEPILOT_TELEGRAM_BOT_TOKEN, optional
+  # HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS},
+  # HIVEPILOT_CHATOPS_TOKEN, ANTHROPIC_API_KEY, provider keys for
+  # whichever runner CLIs you use, ...).
   data: {}
   # Content of api_tokens.yaml (hashed tokens — never plaintext). Empty by
   # default: the API still starts and auto-creates an empty `tokens: []` file

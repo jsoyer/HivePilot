@@ -128,6 +128,13 @@ Three ways to supply real values:
      data:
        HIVEPILOT_API_TOKEN: "<plaintext token matching the hash above>"
        HIVEPILOT_TELEGRAM_BOT_TOKEN: "<bot father token>"
+       # Optional HP-130d door tokens (same Secret = every pod). Leave
+       # unset to keep the single-bot / STREAM_TOPICS path. Live cutover
+       # needs four BotFather tokens (not included); no automatic cutover.
+       # HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX: "<inbox-bot-token>"
+       # HIVEPILOT_TELEGRAM_BOT_TOKEN_APPROVALS: "<approvals-bot-token>"
+       # HIVEPILOT_TELEGRAM_BOT_TOKEN_RUNS: "<runs-bot-token>"
+       # HIVEPILOT_TELEGRAM_BOT_TOKEN_ALERTS: "<alerts-bot-token>"
        ANTHROPIC_API_KEY: "<if your runner CLIs need it in-cluster>"
    ```
 
@@ -206,7 +213,12 @@ rotation without a chart upgrade.
   `hivepilot <name> start --mode <mode>` (blocking, long-lived). Set the
   matching credentials in `secrets.data` (e.g.
   `HIVEPILOT_TELEGRAM_BOT_TOKEN`) — the bot process fails at startup without
-  them (`RuntimeError`, surfaced in `kubectl logs`/pod restarts).
+  them (`RuntimeError`, surfaced in `kubectl logs`/pod restarts). Telegram
+  stays **one** Deployment: optional
+  `HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` in
+  `secrets.data` start N Applications in that process (HP-130b). Put those
+  keys in the shared Secret so the API/scheduler pods match. No automatic
+  cutover; leftover forum topics 2118–2121 stay until HP-130e.
 
 ## Ingress & TLS
 

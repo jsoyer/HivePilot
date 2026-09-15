@@ -76,6 +76,17 @@ hivepilot caddy teardown   # remove the Caddy configuration
 
 See [INTEGRATIONS.md](INTEGRATIONS.md) for other integration points.
 
+## Telegram bot (one unit, optional door tokens)
+
+Bare-metal templates keep a single `hivepilot-telegram` unit (systemd or
+OpenRC) running `telegram start --mode polling`. Optional
+`HIVEPILOT_TELEGRAM_BOT_TOKEN_{INBOX,APPROVALS,RUNS,ALERTS}` belong in
+shared env so every service agrees. Leave them unset to keep the live
+single-bot / forum-topic path. There is no automatic cutover; leftover
+forum topics 2118–2121 stay until HP-130e. See
+[INTEGRATIONS.md](INTEGRATIONS.md#deploy-packaging-hp-130d) and
+[`deploy/systemd/README.md`](../deploy/systemd/README.md).
+
 ## Kubernetes
 
 A Helm chart ships at `deploy/helm/hivepilot`. CI lints and renders it on

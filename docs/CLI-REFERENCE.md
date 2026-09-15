@@ -269,9 +269,11 @@ tokens are configured, `telegram start` in polling mode runs one
 python-telegram-bot Application per unique token, each bound to the
 door(s) that use it (HP-130b). Those door bots send and receive without
 forum `message_thread_id` (HP-130c). One shared token keeps the current
-single-bot topics path. Webhook mode remains single-token. See
-[INTEGRATIONS.md](./INTEGRATIONS.md) and
-`deploy/systemd/env/hivepilot-telegram.env.example`.
+single-bot topics path. Webhook mode remains single-token. Deploy
+packaging (HP-130d) keeps one `hivepilot-telegram` unit; put door tokens
+in shared env. No automatic cutover; leftover topics 2118–2121 stay until
+HP-130e. See [INTEGRATIONS.md](./INTEGRATIONS.md) and
+`deploy/systemd/README.md`.
 
 | Command | Purpose | Mutating? |
 | --- | --- | --- |
