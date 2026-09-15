@@ -122,6 +122,10 @@ _SECRET_SETTING_FIELDS = frozenset(
         "chatops_token",
         "config_token",
         "telegram_bot_token",
+        "telegram_bot_token_inbox",
+        "telegram_bot_token_approvals",
+        "telegram_bot_token_runs",
+        "telegram_bot_token_alerts",
         "telegram_webhook_secret",
         # A capability URL: n8n/Slack-style webhook endpoints embed an
         # unguessable path segment, so possession of the URL IS the
@@ -576,6 +580,16 @@ class Settings(BaseSettings):
     config_repo_load_plugins: bool = True
     domain: str | None = None  # public domain used by caddy + webhook auto-registration
     telegram_bot_token: str | None = None
+    # HP-130a: optional per-door BotFather tokens for PERSISTENT_DOORS
+    # (Inbox / Approvals / Runs / Alerts). Unset or blank doors fall back to
+    # telegram_bot_token so a single-bot deploy is unchanged. Four explicit
+    # env vars (not a JSON map) so systemd EnvironmentFile stays KEY=value.
+    # env: HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX / _APPROVALS / _RUNS / _ALERTS.
+    # Multi-bot polling is HP-130b — these fields are config-only here.
+    telegram_bot_token_inbox: str | None = None
+    telegram_bot_token_approvals: str | None = None
+    telegram_bot_token_runs: str | None = None
+    telegram_bot_token_alerts: str | None = None
     telegram_allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     telegram_notification_chat_id: int | None = (
         None  # proactive notifications (approvals, run results)

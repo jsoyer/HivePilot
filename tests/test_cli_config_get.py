@@ -106,7 +106,13 @@ class TestConfigGet:
 
     @pytest.mark.parametrize(
         "key",
-        ["chatops_token", "telegram_bot_token", "linear_api_key", "database_url"],
+        [
+            "chatops_token",
+            "telegram_bot_token",
+            "telegram_bot_token_inbox",
+            "linear_api_key",
+            "database_url",
+        ],
     )
     def test_get_secret_field_redacted(self, key: str, monkeypatch: pytest.MonkeyPatch) -> None:
         _mutate_settings(monkeypatch, **{key: "super-secret-raw-value"})

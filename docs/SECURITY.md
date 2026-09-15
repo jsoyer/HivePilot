@@ -260,6 +260,13 @@ every sink — logs, notifications, the state DB, orchestrator error details, Ob
 notes, distilled lessons, and artifacts. Cache hits (see the TTL cache below) register
 the value for masking too, so a cached value can never leak.
 
+**Telegram door tokens (HP-130a)**: `telegram_bot_token` and the optional
+`telegram_bot_token_{inbox,approvals,runs,alerts}` fields are secret-typed
+(masked in `Settings` repr and `hivepilot config get`). Prefer the four env
+vars (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` …) over a JSON map so systemd
+`EnvironmentFile` stays `KEY=value`. Unset door tokens fall back to
+`HIVEPILOT_TELEGRAM_BOT_TOKEN`.
+
 Secrets backends ship as plugins: Infisical, 1Password (Connect **and** direct
 service-account), Bitwarden, Vaultwarden (via the `bw` CLI, masked), and **KMS**
 (cloud-KMS envelope/direct decryption).

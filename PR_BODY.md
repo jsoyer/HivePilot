@@ -1,26 +1,31 @@
 ## Summary
 
-HP-118: local task-trace export. A project run projects to metadata / tools / skills / redaction and writes a ZIP on demand. Critical findings block the export (no archive). There is no cloud reporter or upload path.
+HP-130a — config-only door → bot token map for Inbox / Approvals / Runs / Alerts. Optional per-door env vars fall back to the existing shared `HIVEPILOT_TELEGRAM_BOT_TOKEN` so a single-bot deploy is unchanged. No multi-bot polling, topic routing, systemd split, or STREAM_TOPICS cutover.
 
-Owning issue: [HP-118](https://linear.app/js-workspace/issue/HP-118/u-24-task-traces-export-local-no-upload)
+Owning issue: [HP-130](https://linear.app/js-workspace/issue/HP-130/4-door-bots-telegram-inboxapprovalsrunsalerts) (slice 130a)
 
-ADR: [HP-94](https://linear.app/js-workspace/issue/HP-94/u-00-adr-patterns-coworkeropenspace-only-hitl-obligatoire-4-doors) / plan `coworker-openspace`. Builds on HP-99 evidence/redaction and HP-104 skill-cycle events. Patterns only from OpenSpace local traces.
-
-Replay: `hivepilot traces export <run_id> --output traces.zip`
+Replay: `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py -q`
 
 ## What changed
 
-1. **`hivepilot/trace_export.py`** — `project_run` / `export_zip`. Local ZIP only; remote URLs refused.
-2. **`hivepilot traces export`** — CLI on-demand write. Exit 1 on critical findings or missing run.
-3. **Docs** — SECURITY / SKILLS / ARCHITECTURE / CLI-REFERENCE record the local-only gate.
+1. **`Settings`** — `telegram_bot_token_{inbox,approvals,runs,alerts}` (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` …). Secret-typed (repr / `config get` masked). Four env vars, not a JSON map, so systemd `EnvironmentFile` stays `KEY=value`.
+2. **`telegram_doors`** — `telegram_bot_token_for_door` / `telegram_door_bot_tokens` resolve door-specific token → `telegram_bot_token` → `TELEGRAM_BOT_TOKEN`. Blank overrides and unknown keys use the shared fallback.
+3. **Docs** — `.env.example`, systemd/OpenRC telegram env examples, INTEGRATIONS / SECURITY / CLI-REFERENCE.
 
-## Out of scope
+## Out of scope (later slices)
 
-- Cloud reporters, upload APIs, OpenSpace sync
-- WhatsApp, HP-67, autonomous evolve
-- Dashboard download button
+- 130b multi-Application polling
+- 130c route without `message_thread_id`
+- 130d systemd multi-unit deploy
+- 130e cutover / disable `STREAM_TOPICS`
+- Creating `run:{id}` forum topics — P0 stop-bleed stays intact
+
+## Live registry (noxysdevbot) — 130a does not wipe
+
+Forum doors remain until 130e. Live registry still has `inbox=2118` … `alerts=2121` (and `_inbox_welcome=2123`) under `/var/lib/hivepilot/data/hivepilot/stream_topics.json`. `hivepilot topics list` can falsely show empty without `HIVEPILOT_BASE_DIR=/var/lib/hivepilot/data`. Orphan forum topics stay until cutover.
 
 ## Testing
 
-- [x] `pytest tests/test_trace_export.py` — redaction, critical-block, local-only, CLI
-- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `pytest tests/test_telegram_doors.py tests/test_settings_secret_repr.py tests/test_cli_config_get.py::TestConfigGet tests/test_telegram_bot.py tests/test_telegram_channel.py tests/test_stream_topics.py` — 231 passed (fallback, per-door override, env mapping, secret mask, no Telegram regression)
+- [x] `ruff check` on touched Python
+- [x] `hivepilot lint` — only pre-existing missing example project paths in this environment (`/home/ubuntu/dev/example-api`, …); no new lint findings from 130a

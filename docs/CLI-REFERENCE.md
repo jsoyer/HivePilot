@@ -262,6 +262,12 @@ or a nudge.
 
 ## `telegram`
 
+Optional per-door bot tokens (`HIVEPILOT_TELEGRAM_BOT_TOKEN_INBOX` /
+`_APPROVALS` / `_RUNS` / `_ALERTS`) fall back to
+`HIVEPILOT_TELEGRAM_BOT_TOKEN` when unset. See
+[INTEGRATIONS.md](./INTEGRATIONS.md) and
+`deploy/systemd/env/hivepilot-telegram.env.example`.
+
 | Command | Purpose | Mutating? |
 | --- | --- | --- |
 | `start` | Run the Telegram bot process. Long-running. | No |
