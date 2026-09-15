@@ -271,9 +271,10 @@ door(s) that use it (HP-130b). Those door bots send and receive without
 forum `message_thread_id` (HP-130c). One shared token keeps the current
 single-bot topics path. Webhook mode remains single-token. Deploy
 packaging (HP-130d) keeps one `hivepilot-telegram` unit; put door tokens
-in shared env. No automatic cutover; leftover topics 2118–2121 stay until
-HP-130e. See [INTEGRATIONS.md](./INTEGRATIONS.md) and
-`deploy/systemd/README.md`.
+in shared env. No automatic cutover. After CoS GO, `hivepilot topics
+cutover --yes` forgets leftover forum ids; prune or delete 2118–2121 by
+hand. See [INTEGRATIONS.md](./INTEGRATIONS.md#cutover--cleanup-hp-130e)
+and `deploy/systemd/README.md`.
 
 | Command | Purpose | Mutating? |
 | --- | --- | --- |
@@ -283,6 +284,21 @@ HP-130e. See [INTEGRATIONS.md](./INTEGRATIONS.md) and
 | `set-webhook` | Configure the Telegram webhook. | **Yes** (external) |
 | `delete-webhook` | Remove the Telegram webhook. | **DESTRUCTIVE** (external) |
 | `info` | Show bot/webhook info. | No |
+
+## `topics`
+
+Forum-topic registry for the legacy single-token `STREAM_TOPICS` path.
+Multi-token door bots do not use `message_thread_id`. `cutover` wipes
+**local** JSON + SQLite only and refuses unless 2+ distinct door tokens
+are set. It never deletes Telegram topics and never runs on deploy.
+
+| Command | Purpose | Mutating? |
+| --- | --- | --- |
+| `list` | Show cached `agent_key → message_thread_id`. | No |
+| `prune` | Delete explicit forum topic ids. Registry-backed ids are refused. | **DESTRUCTIVE** (with `--yes`) |
+| `wipe-sync` | Clear JSON + SQLite after an operator forum wipe. | **Yes** (local, with `--yes`) |
+| `cutover` | HP-130e: plan or wipe leftover ids after door-bot cutover. | **Yes** (local, with `--yes`) |
+| `bootstrap` | Mint Inbox/Approvals/Runs/Alerts when none exist (legacy only). | **Yes** (with `--yes`) |
 
 ## `caddy` — reverse proxy
 

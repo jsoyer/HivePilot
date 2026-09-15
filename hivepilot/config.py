@@ -589,7 +589,8 @@ class Settings(BaseSettings):
     # a single shared token keeps the current one-bot path.
     # HP-130c: 2+ distinct tokens send/receive the four doors by bot
     # identity (no forum message_thread_id). Single shared token keeps
-    # telegram_stream_topics / message_thread_id until 130e cutover.
+    # telegram_stream_topics / message_thread_id until operators set four
+    # door tokens and run the HP-130e cutover (never automatic).
     telegram_bot_token_inbox: str | None = None
     telegram_bot_token_approvals: str | None = None
     telegram_bot_token_runs: str | None = None

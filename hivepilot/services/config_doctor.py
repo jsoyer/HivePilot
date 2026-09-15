@@ -2532,6 +2532,12 @@ def run_doctor(config_dir: Path | None = None) -> list[DoctorFinding]:
             )
         )
         findings.extend(_run_check("orphan_topic_keys", doctor_liveness.check_orphan_topic_keys))
+        findings.extend(
+            _run_check(
+                "stale_forum_registry_multi_token",
+                doctor_liveness.check_stale_forum_registry_multi_token,
+            )
+        )
         findings.extend(_run_check("agent_privilege", doctor_liveness.check_agent_privilege))
 
         # Which agent CLI is installed, and at what version. Offline: the

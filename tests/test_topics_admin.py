@@ -116,3 +116,20 @@ class TestWipeSync:
 
         assert result.dry_run is True
         assert topics_admin.list_topics() == {"developer": 330, "ciso": 331, "qa": 332}
+
+
+class TestCutoverHints:
+    def test_followup_hint_skips_bootstrap_in_multi_token(self):
+        from hivepilot.services import topics_admin
+
+        hint = topics_admin.wipe_followup_hint(multi_token=True)
+
+        assert "Do not run `topics bootstrap`" in hint
+        assert "2118" in hint and "2121" in hint
+
+    def test_followup_hint_keeps_bootstrap_on_legacy(self):
+        from hivepilot.services import topics_admin
+
+        hint = topics_admin.wipe_followup_hint(multi_token=False)
+
+        assert "topics bootstrap --yes" in hint

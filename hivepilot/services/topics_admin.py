@@ -26,7 +26,20 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from hivepilot.services.telegram_doors import telegram_multi_token_mode
+
 logger = structlog.get_logger(__name__)
+
+# Historical noxysdevbot forum doors (Inbox / Approvals / Runs / Alerts).
+# Documented so operators can prune them after a multi-token cutover wipe.
+# Never auto-deleted on deploy or restart — the Bot API cannot list topics.
+LEGACY_FORUM_DOOR_THREAD_IDS: tuple[int, ...] = (2118, 2119, 2120, 2121)
+
+CUTOVER_REFUSED_LEGACY = (
+    "legacy single-token / STREAM_TOPICS path is still active; the forum "
+    "registry is still live. Set four distinct door tokens, restart "
+    "api+scheduler+telegram together, then re-run."
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +76,7 @@ class BootstrapResult:
     minted: dict[str, int] = field(default_factory=dict)
     existing: dict[str, int] = field(default_factory=dict)
     skipped: bool = False
+    skipped_multi_token: bool = False
     dry_run: bool = False
 
 
@@ -72,6 +86,111 @@ class WipeSyncResult:
 
     cleared: dict[str, int] = field(default_factory=dict)
     dry_run: bool = False
+    multi_token: bool = False
+
+
+@dataclass(frozen=True)
+class CutoverPlan:
+    """What a multi-token cutover wipe would do. Never calls Telegram."""
+
+    multi_token: bool
+    registry: dict[str, int]
+    next_steps: tuple[str, ...]
+    blocked_reason: str | None = None
+
+
+@dataclass
+class CutoverWipeResult:
+    """Local registry wipe after door-bot cutover. Never calls Telegram."""
+
+    multi_token: bool
+    wiped: dict[str, int] = field(default_factory=dict)
+    dry_run: bool = False
+    refused: bool = False
+    reason: str | None = None
+
+
+def wipe_followup_hint(*, multi_token: bool) -> str:
+    """Operator hint after a local registry wipe."""
+    if multi_token:
+        ids = " ".join(str(i) for i in LEGACY_FORUM_DOOR_THREAD_IDS)
+        return (
+            "Doors are bots, not forum topics. Do not run `topics bootstrap`. "
+            "After CoS GO, delete leftover topics in the Telegram client or "
+            f"`hivepilot topics prune {ids} --yes`."
+        )
+    return "Mint doors with `topics bootstrap --yes`."
+
+
+def cutover_next_steps(*, multi_token: bool) -> tuple[str, ...]:
+    """Documented operator steps. No Bot API side effects."""
+    if not multi_token:
+        return (
+            "Do not wipe yet — leftover ids still protect live forum doors.",
+            "After Jerome's four BotFather tokens + CoS GO: set them in "
+            "shared.env, restart api+scheduler+telegram together, then "
+            "`hivepilot topics cutover --yes`.",
+        )
+    ids = " ".join(str(i) for i in LEGACY_FORUM_DOOR_THREAD_IDS)
+    return (
+        "`hivepilot topics cutover --yes` — JSON + SQLite only; no Telegram API.",
+        "Read leftover topic ids from the Telegram topic link (last URL "
+        f"segment). Historical noxysdevbot doors were {ids}.",
+        "Delete in the Telegram client, or "
+        f"`hivepilot topics prune {ids} --yes` (uses shared "
+        "HIVEPILOT_TELEGRAM_BOT_TOKEN — the bot that minted them).",
+        "Do not run `topics bootstrap` — doors are bots now.",
+    )
+
+
+def cutover_plan() -> CutoverPlan:
+    """Describe HP-130e local cutover. Does not wipe or call Telegram."""
+    multi_token = telegram_multi_token_mode()
+    registry = list_topics()
+    if not multi_token:
+        return CutoverPlan(
+            multi_token=False,
+            registry=registry,
+            next_steps=cutover_next_steps(multi_token=False),
+            blocked_reason=CUTOVER_REFUSED_LEGACY,
+        )
+    return CutoverPlan(
+        multi_token=True,
+        registry=registry,
+        next_steps=cutover_next_steps(multi_token=True),
+    )
+
+
+def cutover_wipe(*, confirm: bool = False) -> CutoverWipeResult:
+    """Forget leftover forum topic ids after multi-token door-bot cutover.
+
+    Safety rails (HP-130e):
+
+    * Refuses unless ``telegram_multi_token_mode()`` is true — the legacy
+      ``STREAM_TOPICS`` path still owns the registry.
+    * Never calls Telegram (no ``deleteForumTopic``, no ``createForumTopic``).
+    * Never bootstraps / remints doors.
+    * Never runs on process start — the operator must invoke the CLI.
+    """
+    from hivepilot.services import notification_service
+
+    plan = cutover_plan()
+    if not plan.multi_token:
+        return CutoverWipeResult(
+            multi_token=False,
+            wiped=dict(plan.registry),
+            dry_run=not confirm,
+            refused=True,
+            reason=plan.blocked_reason,
+        )
+    if not confirm:
+        return CutoverWipeResult(
+            multi_token=True,
+            wiped=dict(plan.registry),
+            dry_run=True,
+        )
+    previous = notification_service.wipe_topic_registry()
+    return CutoverWipeResult(multi_token=True, wiped=previous, dry_run=False)
 
 
 def wipe_sync(*, confirm: bool = False) -> WipeSyncResult:
@@ -83,19 +202,27 @@ def wipe_sync(*, confirm: bool = False) -> WipeSyncResult:
     from hivepilot.services import notification_service
 
     current = list_topics()
+    multi_token = telegram_multi_token_mode()
     if not confirm:
-        return WipeSyncResult(cleared=current, dry_run=True)
+        return WipeSyncResult(cleared=current, dry_run=True, multi_token=multi_token)
     notification_service.wipe_topic_registry()
-    return WipeSyncResult(cleared=current, dry_run=False)
+    return WipeSyncResult(cleared=current, dry_run=False, multi_token=multi_token)
 
 
 def bootstrap(*, confirm: bool = False) -> BootstrapResult:
     """Mint Inbox/Approvals/Runs/Alerts only when none of them exist.
 
-    Dry-run unless *confirm*. A partial registry is a no-op.
+    Dry-run unless *confirm*. A partial registry is a no-op. Multi-token
+    mode never mints — doors are bots, not forum topics (HP-130e).
     """
     from hivepilot.services import notification_service
 
+    if telegram_multi_token_mode():
+        return BootstrapResult(
+            skipped=True,
+            skipped_multi_token=True,
+            dry_run=not confirm,
+        )
     existing = notification_service._existing_pollen_doors()
     if existing:
         return BootstrapResult(existing=existing, skipped=True, dry_run=not confirm)

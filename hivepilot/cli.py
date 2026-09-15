@@ -215,7 +215,9 @@ def events_classify(
 
 config_app = typer.Typer(help="Config repo sync")
 corrections_app = typer.Typer(help="Standing corrections injected into a role's prompts")
-topics_app = typer.Typer(help="Telegram forum topics: list, prune, wipe-sync, bootstrap doors")
+topics_app = typer.Typer(
+    help="Telegram forum topics: list, prune, wipe-sync, cutover, bootstrap doors"
+)
 app.add_typer(config_app, name="config")
 app.add_typer(corrections_app, name="corrections")
 app.add_typer(topics_app, name="topics")
@@ -1554,7 +1556,10 @@ def topics_wipe_sync(
     Telegram cannot list topics, so a wiped forum still looks populated
     in the local registry — and the SQLite mirror would resurrect those
     stale ids. This clears both. It does not delete anything in Telegram.
-    Re-mint doors afterwards with `topics bootstrap --yes`.
+
+    After a multi-token door-bot cutover prefer `topics cutover` — that
+    command refuses unless 2+ distinct door tokens are set, so it cannot
+    wipe a live STREAM_TOPICS registry by accident.
     """
     from hivepilot.services import topics_admin
 
@@ -1569,7 +1574,67 @@ def topics_wipe_sync(
         typer.echo(f"\nDry run. {len(result.cleared)} id(s) would be forgotten. Re-run with --yes.")
         return
     typer.echo(
-        f"\n{len(result.cleared)} id(s) forgotten. Mint doors with `topics bootstrap --yes`."
+        f"\n{len(result.cleared)} id(s) forgotten. "
+        f"{topics_admin.wipe_followup_hint(multi_token=result.multi_token)}"
+    )
+
+
+@topics_app.command("cutover")
+def topics_cutover(
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        help="Wipe local JSON + SQLite registry in multi-token mode (default: plan only)",
+    ),
+) -> None:
+    """Wipe leftover forum topic ids after door-bot cutover (HP-130e).
+
+    Safe by default: prints the plan and does nothing. `--yes` clears the
+    local JSON registry and SQLite mirror so leftover forum topics
+    (historical 2118–2121) are unused. It does **not** call Telegram —
+    delete orphan topics in the client or with `topics prune <ids> --yes`.
+
+    Refuses unless 2+ distinct door tokens are set, so a live
+    STREAM_TOPICS deploy cannot lose its registry. Never runs on
+    deploy/restart. Do not live-cutover without Jerome's four BotFather
+    tokens + CoS GO.
+    """
+    from hivepilot.services import topics_admin
+
+    plan = topics_admin.cutover_plan()
+    typer.echo("multi-token: yes" if plan.multi_token else "multi-token: no (legacy STREAM_TOPICS)")
+    if plan.registry:
+        typer.echo(f"registry: {len(plan.registry)} leftover id(s)")
+        for key, thread_id in sorted(plan.registry.items()):
+            typer.echo(f"  {thread_id:<8} {key}")
+    else:
+        typer.echo("registry: empty")
+    typer.echo("\nNext steps:")
+    for step in plan.next_steps:
+        typer.echo(f"  - {step}")
+    if not yes:
+        if plan.blocked_reason:
+            typer.echo(f"\nWipe blocked: {plan.blocked_reason}")
+        else:
+            typer.echo(
+                f"\nDry run. {len(plan.registry)} id(s) would be forgotten locally. "
+                "Re-run with --yes after CoS GO. Telegram topics are not deleted."
+            )
+        return
+
+    result = topics_admin.cutover_wipe(confirm=True)
+    if result.refused:
+        typer.echo(f"\nREFUSED — {result.reason}", err=True)
+        raise typer.Exit(1)
+    if not result.wiped:
+        typer.echo("\nRegistry already empty. Telegram topics unchanged.")
+        return
+    for key, thread_id in sorted(result.wiped.items()):
+        typer.echo(f"  cleared      {thread_id:<8} {key}")
+    typer.echo(
+        f"\n{len(result.wiped)} id(s) forgotten locally (JSON + SQLite). "
+        "Telegram topics unchanged. "
+        f"{topics_admin.wipe_followup_hint(multi_token=True)}"
     )
 
 
@@ -1584,10 +1649,16 @@ def topics_bootstrap(
     Startup never remints doors. Use this once on an empty forum. If any
     door already exists this is a no-op — the Bot API cannot list or
     dedupe topic names, so a partial remint would duplicate.
+
+    Multi-token door-bot mode never mints (HP-130e).
     """
     from hivepilot.services import topics_admin
 
     result = topics_admin.bootstrap(confirm=yes)
+    if result.skipped_multi_token:
+        typer.echo("Multi-token mode — doors are bots, not forum topics. Refusing to mint.")
+        typer.echo("No createForumTopic calls. Use `topics cutover` to forget leftover ids.")
+        return
     if result.skipped:
         typer.echo("Doors already registered — refusing to remint:")
         for key, thread_id in sorted(result.existing.items()):
