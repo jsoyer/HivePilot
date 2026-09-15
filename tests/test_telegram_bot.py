@@ -636,7 +636,7 @@ class TestMultiApplicationPolling:
 
     def test_build_application_source_parameterizes_shared_handlers(self) -> None:
         src = inspect.getsource(telegram_bot._build_application)
-        assert "_shared_handler" in src or "H(" in src
+        assert "_shared_handler" in src
         assert "_bind_application_doors" in src
         assert "doors" in src
 

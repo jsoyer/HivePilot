@@ -23,6 +23,7 @@ Replay: `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/te
 
 ## Testing
 
-- [ ] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_ask.py` — grouping, single-token path unchanged, multi-token builds N apps / correct door binding
-- [ ] `ruff check` on touched Python
-- [ ] `hivepilot lint` if the env has the CLI
+- [x] `pytest tests/test_telegram_doors.py tests/test_telegram_bot.py tests/test_telegram_ask.py tests/test_telegram_channel.py tests/test_telegram_stop_bleed.py` — 213 passed (grouping, single-token path unchanged, multi-token builds N apps / correct door binding)
+- [x] Wider Telegram + config-get/secret-repr suite — 383 passed
+- [x] `ruff check` on touched Python
+- [x] `hivepilot lint` — only pre-existing missing example project paths (`/home/ubuntu/dev/example-api`, …); no new lint findings from 130b

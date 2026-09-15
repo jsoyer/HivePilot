@@ -2318,61 +2318,61 @@ def _build_application(token: str, doors: tuple[str, ...] | None = None):
     if doors:
         _bind_application_doors(app, doors)
 
-    def H(handler: Any) -> Any:
+    def bind(handler: Any) -> Any:
         return _shared_handler(handler, doors)
 
     try:
         ensure_pollen_doors()
     except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.doors.bootstrap_failed", error=str(exc))
-    app.add_handler(CommandHandler("start", H(_cmd_help)))
-    app.add_handler(CommandHandler("help", H(_cmd_help)))
-    app.add_handler(CommandHandler("run", H(_cmd_run)))
-    app.add_handler(CommandHandler("diff", H(_cmd_diff)))
-    app.add_handler(CommandHandler("rollback", H(_cmd_rollback)))
-    app.add_handler(CommandHandler("approvals", H(_cmd_approvals)))
-    app.add_handler(CommandHandler("approve", H(_cmd_approve)))
-    app.add_handler(CommandHandler("deny", H(_cmd_deny)))
-    app.add_handler(CommandHandler("status", H(_cmd_status)))
-    app.add_handler(CommandHandler("interactions", H(_cmd_interactions)))
-    app.add_handler(CommandHandler("pipelines", H(_cmd_pipelines)))
-    app.add_handler(CommandHandler("projects", H(_cmd_projects)))
-    app.add_handler(CommandHandler("tasks", H(_cmd_tasks)))
-    app.add_handler(CommandHandler("runpipeline", H(_cmd_run_pipeline)))
-    app.add_handler(CommandHandler("debate", H(_cmd_debate)))
-    app.add_handler(CommandHandler("steps", H(_cmd_steps)))
-    app.add_handler(CommandHandler("ask", H(_cmd_ask)))
-    app.add_handler(CommandHandler("ceo", H(_ALIAS_HANDLERS["ceo"])))
-    app.add_handler(CommandHandler("alienor", H(_ALIAS_HANDLERS["alienor"])))
-    app.add_handler(CommandHandler("cos", H(_ALIAS_HANDLERS["cos"])))
-    app.add_handler(CommandHandler("jules", H(_ALIAS_HANDLERS["jules"])))
-    app.add_handler(CommandHandler("cto", H(_ALIAS_HANDLERS["cto"])))
-    app.add_handler(CommandHandler("blaise", H(_ALIAS_HANDLERS["blaise"])))
-    app.add_handler(CommandHandler("dev", H(_ALIAS_HANDLERS["dev"])))
-    app.add_handler(CommandHandler("developer", H(_ALIAS_HANDLERS["developer"])))
-    app.add_handler(CommandHandler("gustave", H(_ALIAS_HANDLERS["gustave"])))
-    app.add_handler(CommandHandler("review", H(_ALIAS_HANDLERS["review"])))
-    app.add_handler(CommandHandler("reviewer", H(_ALIAS_HANDLERS["reviewer"])))
-    app.add_handler(CommandHandler("victor", H(_ALIAS_HANDLERS["victor"])))
-    app.add_handler(CommandHandler("ciso", H(_ALIAS_HANDLERS["ciso"])))
-    app.add_handler(CommandHandler("hugo", H(_ALIAS_HANDLERS["hugo"])))
-    app.add_handler(CommandHandler("qa", H(_ALIAS_HANDLERS["qa"])))
-    app.add_handler(CommandHandler("marie", H(_ALIAS_HANDLERS["marie"])))
-    app.add_handler(CommandHandler("docs", H(_ALIAS_HANDLERS["docs"])))
-    app.add_handler(CommandHandler("documentation", H(_ALIAS_HANDLERS["documentation"])))
-    app.add_handler(CommandHandler("theo", H(_ALIAS_HANDLERS["theo"])))
-    app.add_handler(CommandHandler("audit", H(_ALIAS_HANDLERS["audit"])))
-    app.add_handler(CommandHandler("henri", H(_ALIAS_HANDLERS["henri"])))
+    app.add_handler(CommandHandler("start", bind(_cmd_help)))
+    app.add_handler(CommandHandler("help", bind(_cmd_help)))
+    app.add_handler(CommandHandler("run", bind(_cmd_run)))
+    app.add_handler(CommandHandler("diff", bind(_cmd_diff)))
+    app.add_handler(CommandHandler("rollback", bind(_cmd_rollback)))
+    app.add_handler(CommandHandler("approvals", bind(_cmd_approvals)))
+    app.add_handler(CommandHandler("approve", bind(_cmd_approve)))
+    app.add_handler(CommandHandler("deny", bind(_cmd_deny)))
+    app.add_handler(CommandHandler("status", bind(_cmd_status)))
+    app.add_handler(CommandHandler("interactions", bind(_cmd_interactions)))
+    app.add_handler(CommandHandler("pipelines", bind(_cmd_pipelines)))
+    app.add_handler(CommandHandler("projects", bind(_cmd_projects)))
+    app.add_handler(CommandHandler("tasks", bind(_cmd_tasks)))
+    app.add_handler(CommandHandler("runpipeline", bind(_cmd_run_pipeline)))
+    app.add_handler(CommandHandler("debate", bind(_cmd_debate)))
+    app.add_handler(CommandHandler("steps", bind(_cmd_steps)))
+    app.add_handler(CommandHandler("ask", bind(_cmd_ask)))
+    app.add_handler(CommandHandler("ceo", bind(_ALIAS_HANDLERS["ceo"])))
+    app.add_handler(CommandHandler("alienor", bind(_ALIAS_HANDLERS["alienor"])))
+    app.add_handler(CommandHandler("cos", bind(_ALIAS_HANDLERS["cos"])))
+    app.add_handler(CommandHandler("jules", bind(_ALIAS_HANDLERS["jules"])))
+    app.add_handler(CommandHandler("cto", bind(_ALIAS_HANDLERS["cto"])))
+    app.add_handler(CommandHandler("blaise", bind(_ALIAS_HANDLERS["blaise"])))
+    app.add_handler(CommandHandler("dev", bind(_ALIAS_HANDLERS["dev"])))
+    app.add_handler(CommandHandler("developer", bind(_ALIAS_HANDLERS["developer"])))
+    app.add_handler(CommandHandler("gustave", bind(_ALIAS_HANDLERS["gustave"])))
+    app.add_handler(CommandHandler("review", bind(_ALIAS_HANDLERS["review"])))
+    app.add_handler(CommandHandler("reviewer", bind(_ALIAS_HANDLERS["reviewer"])))
+    app.add_handler(CommandHandler("victor", bind(_ALIAS_HANDLERS["victor"])))
+    app.add_handler(CommandHandler("ciso", bind(_ALIAS_HANDLERS["ciso"])))
+    app.add_handler(CommandHandler("hugo", bind(_ALIAS_HANDLERS["hugo"])))
+    app.add_handler(CommandHandler("qa", bind(_ALIAS_HANDLERS["qa"])))
+    app.add_handler(CommandHandler("marie", bind(_ALIAS_HANDLERS["marie"])))
+    app.add_handler(CommandHandler("docs", bind(_ALIAS_HANDLERS["docs"])))
+    app.add_handler(CommandHandler("documentation", bind(_ALIAS_HANDLERS["documentation"])))
+    app.add_handler(CommandHandler("theo", bind(_ALIAS_HANDLERS["theo"])))
+    app.add_handler(CommandHandler("audit", bind(_ALIAS_HANDLERS["audit"])))
+    app.add_handler(CommandHandler("henri", bind(_ALIAS_HANDLERS["henri"])))
     from telegram.ext import MessageHandler, filters
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, H(_cmd_mention)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bind(_cmd_mention)))
     app.add_handler(
-        CallbackQueryHandler(H(_callback_approval), pattern=r"^(approve|deny|challenge):\d+$")
+        CallbackQueryHandler(bind(_callback_approval), pattern=r"^(approve|deny|challenge):\d+$")
     )
     app.add_handler(
-        CallbackQueryHandler(H(_callback_pass_approval), pattern=r"^pass:(approve|deny|edit):")
+        CallbackQueryHandler(bind(_callback_pass_approval), pattern=r"^pass:(approve|deny|edit):")
     )
-    app.add_handler(CallbackQueryHandler(H(_concierge_callback), pattern=r"^concierge:(yes|no):"))
+    app.add_handler(CallbackQueryHandler(bind(_concierge_callback), pattern=r"^concierge:(yes|no):"))
     # Graceful error handler: a Telegram polling Conflict (another instance
     # polling the same token) or a transient network error logs ONE concise
     # warning line instead of a repeating 40-line traceback; genuinely
@@ -2447,11 +2447,17 @@ def _run_polling_many(apps: list[Any]) -> None:
             for app in reversed(polling):
                 updater = app.updater
                 if updater is not None and getattr(updater, "running", False):
-                    await updater.stop()
+                    try:
+                        await updater.stop()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("telegram.polling.stop_failed", error=str(exc))
             for app in reversed(initialized):
-                if getattr(app, "running", False):
-                    await app.stop()
-                await app.shutdown()
+                try:
+                    if getattr(app, "running", False):
+                        await app.stop()
+                    await app.shutdown()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("telegram.polling.shutdown_failed", error=str(exc))
 
     asyncio.get_event_loop().run_until_complete(_serve())
 
