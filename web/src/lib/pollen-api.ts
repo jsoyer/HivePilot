@@ -811,6 +811,11 @@ export interface AgentAdminEntry {
   docs_url: string
   installable: boolean
   updatable: boolean
+  /** True only when the registry declares `read_remote_version`. Listing
+   * stays offline; Pollen fetches the value via GET .../remote-version. */
+  has_remote_version: boolean
+  /** Always null on GET /v1/agents/admin — listing never hits the network. */
+  remote_version: string | null
   /** THIS process's shutil.which — the service's own view, the one that
    * decides whether a runner registers. Installed-but-false is the grok trap. */
   on_service_path: boolean
@@ -838,6 +843,20 @@ export interface AgentActionResult {
 
 export function fetchAgentsAdmin(): Promise<AgentsAdminResponse> {
   return apiFetch<AgentsAdminResponse>('/v1/agents/admin')
+}
+
+export interface AgentRemoteVersionResult {
+  kind: string
+  binary: string
+  remote_version: string | null
+}
+
+/** Opt-in read of a registry-declared remote version. No consent body —
+ * this never installs or updates. Refused server-side when the field is None. */
+export function fetchAgentRemoteVersion(kind: string): Promise<AgentRemoteVersionResult> {
+  return apiFetch<AgentRemoteVersionResult>(
+    `/v1/agents/${encodeURIComponent(kind)}/remote-version`,
+  )
 }
 
 export interface AgentLoginResult {

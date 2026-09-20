@@ -5,8 +5,9 @@
 stdout are TTYs." A Pollen button is non-interactive by definition, so this
 module REPLACES that guarantee rather than bypassing it — the API route that
 calls in here requires the admin role and an explicit consent field, and every
-action lands in the audit log with the actor and the version before and after:
-the `pr_gate_outcomes` shape, a human decision paired with a machine state.
+action lands in the audit log with the actor, the binary, and the version
+before and after: the `pr_gate_outcomes` shape, a human decision paired with
+a machine state.
 
 Red lines:
 
@@ -18,10 +19,12 @@ Red lines:
     one-liner the answer is the link, never an improvised command.
   * nothing here is ever called by a run. Installing is an operator action.
 
-`UPDATE_COMMANDS` holds VERIFIED constants, read from each binary's --help on
-2026-08-22 — never guessed. `None` means "no verified non-interactive updater":
-vibe's `--check-upgrade` PROMPTS, and gemini shows none. None means no button,
-not a greyed-out one that lies.
+`InstallSpec.update_command` (and the derived `UPDATE_COMMANDS` view) holds
+VERIFIED argv, read from each binary's --help on 2026-08-22 — never guessed.
+`None` means "no verified non-interactive updater": vibe's `--check-upgrade`
+PROMPTS, and gemini shows none. None means no button, not a greyed-out one
+that lies. `read_remote_version` is the same shape for a read-only latest
+probe; undeclared until verified.
 
 The box trap this reports rather than repeats: these installers are per-user.
 grok's landed in `$HOME/.grok/bin`, the systemd units set no PATH, and
@@ -37,34 +40,33 @@ import shutil
 import subprocess  # nosec B404 - only registry constants are ever executed; see module docstring
 from typing import Any, Callable
 
-from hivepilot.services import agent_auth
-from hivepilot.services.agent_install import AGENT_INSTALL_SPECS
+from hivepilot.services import agent_auth, state_service
+from hivepilot.services.agent_install import AGENT_INSTALL_SPECS, probe_remote_version
+from hivepilot.services.agent_versions import probe_agent_cli
 from hivepilot.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-__all__ = ["AgentAdminError", "UPDATE_COMMANDS", "list_agents_admin", "perform_agent_action"]
+__all__ = [
+    "AgentAdminError",
+    "UPDATE_COMMANDS",
+    "list_agents_admin",
+    "perform_agent_action",
+    "read_remote_version",
+]
 
 
 class AgentAdminError(RuntimeError):
     """A refused agent-admin action. The message is operator-facing."""
 
 
-#: kind -> the exact update argv, VERIFIED against the installed binary's
-#: --help (2026-08-22), or None when no non-interactive updater exists.
+#: Derived from `InstallSpec.update_command` — the registry is the SSOT.
 #: argv lists, never shell strings: updates run WITHOUT a shell, so nothing
 #: can be smuggled through word-splitting. Install is the one vetted shell
 #: pipeline (the spec's official `curl | bash` one-liner), and the only one.
 UPDATE_COMMANDS: dict[str, list[str] | None] = {
-    "grok": ["grok", "update"],  # `grok update --help`: "Check for updates or install"
-    "claude": ["claude", "update"],  # `claude update|upgrade`: "Check for updates and install"
-    "codex": ["codex", "update"],  # `codex --help`: "Update Codex to the latest version"
-    "cursor": ["cursor-agent", "update"],  # "Update Cursor Agent to the latest version"
-    # vibe's `--check-upgrade` PROMPTS ("prompt to install it") — interactive,
-    # unusable headless. gemini/opencode/ollama/antigravity/qwen-code/kimi-cli
-    # showed no update surface. None -> no button.
-    "vibe": None,
-    "gemini": None,
+    kind: list(spec.update_command) if spec.update_command is not None else None
+    for kind, spec in AGENT_INSTALL_SPECS.items()
 }
 
 _ACTION_TIMEOUT_SECONDS = 600.0
@@ -73,21 +75,17 @@ _ACTION_TIMEOUT_SECONDS = 600.0
 def _probe_version(kind: str) -> str | None:
     """The installed version, via the existing probe — None when absent or
     unreadable. Never invented."""
-    from hivepilot.services.agent_versions import probe_agent_cli
-
     try:
         probe = probe_agent_cli(kind)
     except Exception:  # noqa: BLE001 - a probe must never fail the action
         return None
-    return getattr(probe, "installed", None)
+    return probe.version
 
 
 def _record_audit(**kw: Any) -> None:
     """One audit row per action. Failure to record is a WARNING, never a
     reason the action's outcome is hidden from the caller — but it is also
     never silent."""
-    from hivepilot.services import state_service
-
     try:
         state_service.record_audit(
             token_hash=kw.get("token_hash", ""),
@@ -95,7 +93,8 @@ def _record_audit(**kw: Any) -> None:
             endpoint=f"/v1/agents/{kw['kind']}/{kw['action']}",
             method="POST",
             result=(
-                f"{kw['result']} version_before={kw['version_before']} "
+                f"{kw['result']} binary={kw['binary']} "
+                f"version_before={kw['version_before']} "
                 f"version_after={kw['version_after']}"
             ),
         )
@@ -120,7 +119,11 @@ def list_agents_admin() -> list[dict[str, Any]]:
                 "binary": spec.binary,
                 "docs_url": spec.docs_url,
                 "installable": spec.command is not None,
-                "updatable": UPDATE_COMMANDS.get(kind) is not None,
+                "updatable": spec.update_command is not None,
+                # Listing stays offline: the capability flag is declared
+                # here; the probe runs only on GET .../remote-version.
+                "has_remote_version": spec.read_remote_version is not None,
+                "remote_version": None,
                 "on_service_path": shutil.which(spec.binary) is not None,
                 "installed_version": _probe_version(kind),
                 # Tri-state on purpose (#33): "present"/"absent" where a store
@@ -172,14 +175,13 @@ def perform_agent_action(
         # pipeline, verbatim from the registry constant.
         argv: list[str] = ["bash", "-lc", spec.command]
     else:
-        update_argv = UPDATE_COMMANDS.get(kind)
-        if update_argv is None:
+        if spec.update_command is None:
             raise AgentAdminError(
                 f"{kind!r} has no verified update command — vibe's is "
                 f"interactive and some CLIs have none. None means no button, "
                 f"not a guessed command."
             )
-        argv = list(update_argv)
+        argv = list(spec.update_command)
 
     version_before = _probe_version(kind)
     logger.info("agent_admin.action_start", kind=kind, action=action, actor=actor)
@@ -198,6 +200,7 @@ def perform_agent_action(
             action=action,
             actor=actor,
             token_hash=token_hash,
+            binary=spec.binary,
             result=f"failed: {type(exc).__name__}",
             version_before=version_before,
             version_after=version_before,
@@ -211,6 +214,7 @@ def perform_agent_action(
         action=action,
         actor=actor,
         token_hash=token_hash,
+        binary=spec.binary,
         result="ok" if ok else f"failed: exit {completed.returncode}",
         version_before=version_before,
         version_after=version_after,
@@ -225,7 +229,32 @@ def perform_agent_action(
         # The service's own view — the only one that decides whether a runner
         # registers. False here after a "successful" install is the grok trap.
         "on_service_path": shutil.which(spec.binary) is not None,
+        "binary": spec.binary,
         "detail": (completed.stdout or "")[-2000:]
         if ok
         else (completed.stderr or completed.stdout or "")[-2000:],
+    }
+
+
+def read_remote_version(kind: str) -> dict[str, Any]:
+    """Read *kind*'s declared remote version. Never updates, never installs.
+
+    Refuses when the registry field is None — no button, no probe, no
+    improvised `npm view`. Listing stays offline; this is the opt-in GET.
+    """
+    spec = AGENT_INSTALL_SPECS.get(kind)
+    if spec is None:
+        raise AgentAdminError(
+            f"unknown agent kind {kind!r} — only the curated registry can be "
+            f"acted on. Available: {', '.join(sorted(AGENT_INSTALL_SPECS))}"
+        )
+    if spec.read_remote_version is None:
+        raise AgentAdminError(
+            f"{kind!r} has no declared read-remote-version command — "
+            "no button, no probe."
+        )
+    return {
+        "kind": kind,
+        "binary": spec.binary,
+        "remote_version": probe_remote_version(spec),
     }

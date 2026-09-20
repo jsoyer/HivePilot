@@ -24,6 +24,7 @@ from hivepilot.services.agent_install import (
     get_install_spec,
     is_on_path,
     missing_agents,
+    probe_remote_version,
     propose_install,
 )
 
@@ -364,10 +365,75 @@ def test_no_secret_or_sensitive_data_in_any_spec() -> None:
     banned_substrings = ("api_key", "apikey", "token=", "password", "secret")
     for spec in AGENT_INSTALL_SPECS.values():
         haystack = " ".join(
-            [spec.name, spec.binary, spec.vendor, spec.docs_url, spec.command or ""]
+            [
+                spec.name,
+                spec.binary,
+                spec.vendor,
+                spec.docs_url,
+                spec.command or "",
+                " ".join(spec.update_command or ()),
+                " ".join(spec.read_remote_version or ()),
+            ]
         ).lower()
         for banned in banned_substrings:
             assert banned not in haystack
+
+
+def test_registry_update_and_remote_fields_are_argv_tuples_or_none() -> None:
+    """HP-120: both capabilities are nullable registry fields. When set they
+    are argv tuples — never a shell string the UI could influence."""
+    for spec in AGENT_INSTALL_SPECS.values():
+        for field in (spec.update_command, spec.read_remote_version):
+            if field is None:
+                continue
+            assert isinstance(field, tuple)
+            assert field
+            assert all(isinstance(part, str) and part for part in field)
+            assert not any("|" in part or ";" in part or "&&" in part for part in field)
+
+
+def test_verified_update_commands_live_on_the_registry() -> None:
+    """The 2026-08-22 --help probe, now on InstallSpec — not a parallel dict."""
+    assert AGENT_INSTALL_SPECS["grok"].update_command == ("grok", "update")
+    assert AGENT_INSTALL_SPECS["claude"].update_command == ("claude", "update")
+    assert AGENT_INSTALL_SPECS["codex"].update_command == ("codex", "update")
+    assert AGENT_INSTALL_SPECS["cursor"].update_command == ("cursor-agent", "update")
+    assert AGENT_INSTALL_SPECS["vibe"].update_command is None
+    assert AGENT_INSTALL_SPECS["gemini"].update_command is None
+
+
+def test_read_remote_version_is_undeclared_until_verified() -> None:
+    """No guessed `npm view`. None means no button and no probe."""
+    assert all(spec.read_remote_version is None for spec in AGENT_INSTALL_SPECS.values())
+
+
+def test_probe_remote_version_undeclared_does_not_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: ran.append(a))
+    spec = InstallSpec(
+        name="Example CLI",
+        binary="example",
+        vendor="Example Inc",
+        docs_url="https://example.com/docs/install",
+    )
+    assert probe_remote_version(spec) is None
+    assert ran == []
+
+
+def test_probe_remote_version_parses_declared_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **k: subprocess.CompletedProcess(argv, 0, stdout="v2.1.0\n", stderr=""),
+    )
+    spec = InstallSpec(
+        name="Example CLI",
+        binary="example",
+        vendor="Example Inc",
+        docs_url="https://example.com/docs/install",
+        read_remote_version=("example", "version", "--latest"),
+    )
+    assert probe_remote_version(spec) == "2.1.0"
 
 
 def test_module_docstring_warns_maintainer_must_vet() -> None:

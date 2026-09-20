@@ -964,6 +964,8 @@ describe('HealthView redesign', () => {
           docs_url: 'https://docs.x.ai',
           installable: true,
           updatable: true,
+          has_remote_version: false,
+          remote_version: null,
           on_service_path: true,
           installed_version: '1.0.5',
           auth: 'present',

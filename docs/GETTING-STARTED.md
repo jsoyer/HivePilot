@@ -111,6 +111,12 @@ hivepilot agents install <name>
 
 `agents install` modifies your host (installs a binary). Treat it as an action requiring your explicit consent — review what it does before running it, especially on a shared or production machine.
 
+Admins can do the same from Pollen → Health → Agent CLI binaries. Install and
+update buttons appear only when the registry declares a vetted command; each
+action asks for an explicit confirm (`consent: true` on the wire) and writes
+an audit row (who, binary, version before/after). There is no remote or
+cloud install path.
+
 ## Initialize a workspace
 
 Scaffold the config files HivePilot needs:

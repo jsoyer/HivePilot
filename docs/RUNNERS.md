@@ -158,7 +158,7 @@ part of that run's evidence. `config doctor` reports the same probe under
 
 ```bash
 hivepilot agents versions                  # offline, active kinds only
-hivepilot agents versions --check-latest   # compare against the npm registry
+hivepilot agents versions --check-latest   # registry read-remote-version, else npm
 hivepilot agents versions --update claude  # explicit, confirmed
 ```
 
@@ -167,12 +167,18 @@ listing the rest would print "not installed" lines that are not problems.
 
 `--check-latest` is the only thing that touches the network — deliberately
 opt-in, so `config doctor` keeps working on a host with no outbound access.
-It reports three distinct outcomes, never collapsing them: `current`,
-`OUTDATED`, and `n/a · not npm-installed` for a CLI that manages its own
-updates (Claude Code's native installer lives under
-`~/.local/share/claude/versions/`, where there is no registry to compare
-against). A lookup that genuinely failed says `lookup failed` — different
-from "cannot be checked".
+When `InstallSpec.read_remote_version` is declared, that argv is used;
+otherwise the npm registry path is unchanged. It reports three distinct
+outcomes, never collapsing them: `current`, `OUTDATED`, and
+`n/a · not npm-installed` for a CLI that manages its own updates (Claude
+Code's native installer lives under `~/.local/share/claude/versions/`,
+where there is no registry to compare against). A lookup that genuinely
+failed says `lookup failed` — different from "cannot be checked".
+
+Pollen Health (admin) can install or update a kind only when the registry
+declares `command` / `update_command`. The button posts `{"consent": true}`
+— recorded outward consent, not a silent bypass of the TTY guard. A URL
+never comes from the UI. Runs never trigger this path.
 
 **Updating is never automatic.** Nothing in the engine calls `--update`; an
 operator does. An agent CLI that updated itself underneath a running fleet
