@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { useT } from '@/lib/i18n'
 import type { ConversationMessage } from '@/lib/pollen-api'
@@ -15,6 +16,7 @@ export function ConversationMessageRow({
   defaultOpen?: boolean
 }) {
   const t = useT()
+  const [open, setOpen] = useState(defaultOpen)
   const preview = firstLine(message.body)
   const arrowLabel = message.target
     ? t('conversations.handedTo', { actor: message.actor, target: message.target })
@@ -24,7 +26,8 @@ export function ConversationMessageRow({
     <details
       className="flex flex-col gap-1 rounded-md border border-border/60 p-2"
       data-testid={`message-${message.interaction_id}`}
-      defaultOpen={defaultOpen}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary
         className="flex cursor-pointer list-none flex-col gap-1 [&::-webkit-details-marker]:hidden"

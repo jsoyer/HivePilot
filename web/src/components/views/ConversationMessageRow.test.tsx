@@ -31,7 +31,7 @@ describe('ConversationFil', () => {
       )
     })
 
-    const turns = container.querySelectorAll('[data-testid^="message-"]')
+    const turns = container.querySelectorAll('[data-testid="conversation-fil"] > details')
     expect(Array.from(turns).map((el) => el.getAttribute('data-testid'))).toEqual([
       'message-101',
       'message-102',
