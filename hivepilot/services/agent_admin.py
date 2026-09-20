@@ -250,8 +250,7 @@ def read_remote_version(kind: str) -> dict[str, Any]:
         )
     if spec.read_remote_version is None:
         raise AgentAdminError(
-            f"{kind!r} has no declared read-remote-version command — "
-            "no button, no probe."
+            f"{kind!r} has no declared read-remote-version command — no button, no probe."
         )
     return {
         "kind": kind,

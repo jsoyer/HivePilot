@@ -35,6 +35,8 @@ Replay: `hivepilot agents list` / Pollen → Health → Agent CLI binaries (admi
 
 ## Testing
 
-- [ ] `pytest tests/test_agent_install.py tests/test_agent_admin.py tests/test_api_service.py tests/test_cli_agents.py tests/test_agent_auth.py -q`
-- [ ] `cd web && npm test -- src/components/views/AgentBinariesCard.test.tsx src/components/views/HealthView.test.tsx`
-- [ ] `ruff check` on touched Python
+- [x] `pytest tests/test_agent_install.py tests/test_agent_admin.py tests/test_cli_agents.py tests/test_agent_auth.py -q` — 102 passed
+- [x] `pytest tests/test_api_service.py::TestAgentAdminEndpoints tests/test_api_service.py::TestAgentLoginEndpoint -q` — 10 passed
+- [x] `cd web && npm test -- src/components/views/AgentBinariesCard.test.tsx src/components/views/HealthView.test.tsx` — 48 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `npm run build` — Pollen static bundle rebuilt into `hivepilot/webui/static/`
