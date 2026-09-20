@@ -1,0 +1,30 @@
+# HivePilot vault routing table (HP-121).
+#
+# Copy to your config directory as `vault_routes.yaml` (same search chain as
+# every other file: $XDG_CONFIG_HOME/hivepilot/ → config_repo/ → base_dir/).
+# NOT auto-loaded from this examples/ copy.
+#
+# When this file has ANY by_project / by_tenant route, routing is fail-closed:
+# unmapped and ambiguous lookups raise. The global HIVEPILOT_OBSIDIAN_VAULT is
+# NOT used as a silent fallback. A missing file (or empty route maps) keeps
+# the pre-HP-121 resolver (per-project override, then global).
+#
+# Canonical vault identities — paths are operator-local, never a Mac home dir:
+#   jsoyer  https://github.com/jsoyer/obsidian-vault
+#           path: this file or HIVEPILOT_VAULT_JSOYER
+#   noxys   no published in-repo filesystem path (comments mention
+#           `noxys-obsidian-vault` as a measured directory name only).
+#           path: this file or HIVEPILOT_VAULT_NOXYS — do not invent a default.
+
+vaults:
+  jsoyer:
+    repo: https://github.com/jsoyer/obsidian-vault
+    # path: ~/vaults/jsoyer
+  noxys: {}  # path: ~/vaults/noxys or HIVEPILOT_VAULT_NOXYS — no in-repo default
+
+by_project:
+  hivepilot: jsoyer
+
+by_tenant:
+  jsoyer: jsoyer
+  noxys: noxys

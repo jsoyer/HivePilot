@@ -243,6 +243,9 @@ class Settings(BaseSettings):
     # than a key in roles.yaml because its consumers (ObsidianService, `obsidian
     # audit`) are role-agnostic and its lifecycle follows the vault, not the roster.
     vault_file: Path = Path("vault.yaml")
+    # HP-121: project_id / tenant → named Obsidian vault. Missing file is
+    # inactive (pre-HP-121 resolver behaviour). An active table is fail-closed.
+    vault_routes_file: Path = Path("vault_routes.yaml")
     prompts_dir: Path = Path("prompts")
     runs_dir: Path = Path("runs")
     logs_dir: Path = Path("runs/logs")
@@ -1415,6 +1418,12 @@ class Settings(BaseSettings):
     notion_token: str | None = None
     notion_runs_database_id: str | None = None  # database where run logs are written
     obsidian_vault: Path = Path("obsidian-vault")
+    # Canonical named-vault paths for vault_routes.yaml (HP-121). No default
+    # filesystem location — especially not a Mac home path. `jsoyer` identity
+    # is https://github.com/jsoyer/obsidian-vault; `noxys` has no published
+    # in-repo path (do not invent one).
+    vault_jsoyer: Path | None = None
+    vault_noxys: Path | None = None
 
     # Mirador Graph View PRD, Sprint 2: local host filesystem root the
     # built-in `skills` graph source (`hivepilot/graph_sources/

@@ -435,9 +435,13 @@ Every writer in the table below, plus the plugin's `recall` read path and the
 `{OBSIDIAN_VAULT}` prompt variable, resolves through the same function
 (`hivepilot/services/obsidian_vault_resolver.py`), so reads and writes can never target
 different vaults. A project with no `obsidian_vault:` key keeps using the global setting
-unchanged. The override must be absolute and must already exist — HivePilot never creates
-a vault directory. Full rules (including why an empty or relative value refuses to load):
-[CONFIGURATION.md → Per-project Obsidian vault](CONFIGURATION.md#per-project-obsidian-vault--obsidian_vault).
+unchanged **unless** `vault_routes.yaml` is active. An active mapping table
+(`project_id` / `tenant` → named vault) is fail-closed: unmapped and ambiguous
+lookups refuse rather than inheriting `HIVEPILOT_OBSIDIAN_VAULT` (HP-121).
+The override must be absolute and must already exist — HivePilot never creates
+a vault directory. Full rules:
+[CONFIGURATION.md → Per-project Obsidian vault](CONFIGURATION.md#per-project-obsidian-vault--obsidian_vault)
+and [CONFIGURATION.md → Vault routing table](CONFIGURATION.md#vault-routing-table--vault_routesyaml-hp-121).
 
 ### Vault layout (where HivePilot writes)
 

@@ -104,6 +104,7 @@ from hivepilot.services.config_provenance import all_keys, is_secret_field
 from hivepilot.services.config_validation import validate_config
 from hivepilot.services.plugin_installer import KNOWN_EXAMPLE_PLUGINS
 from hivepilot.services.secret_refs import find_secret_refs, has_secret_ref
+from hivepilot.services.vault_routes import VaultRouteError, load_vault_routes
 
 # ---------------------------------------------------------------------------
 # Findings
@@ -1768,6 +1769,14 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
         # limitation no longer applies to this deployment. Stay quiet.
         return findings
 
+    try:
+        if load_vault_routes().is_active():
+            # HP-121 mapping table is the routing SSOT; global fallback is off.
+            return findings
+    except (VaultRouteError, ValueError, OSError, yaml.YAMLError):
+        # A broken table is reported by lint / load-time validation, not here.
+        pass
+
     project_count = len(projects_section)
     if project_count < 2:
         return findings
@@ -1783,11 +1792,11 @@ def check_shared_obsidian_vault(config_dir: Path | None) -> list[DoctorFinding]:
             "host (e.g. your own HivePilot work vs. a product pipeline) normally want "
             "different vaults; sharing one is fine if that is what you intended, but it "
             "is a default rather than a decision",
-            "set `obsidian_vault: /absolute/path/to/vault` on the projects that need "
-            "their own destination in projects.yaml (must be absolute, must already "
-            "exist -- HivePilot never creates it). Projects without the key keep using "
-            "HIVEPILOT_OBSIDIAN_VAULT. This finding stops appearing once any project "
-            "declares an override",
+            "prefer vault_routes.yaml (project_id / tenant → named vault; HP-121, "
+            "fail-closed when the table is active) or set `obsidian_vault: "
+            "/absolute/path/to/vault` on the projects that need their own destination "
+            "(must be absolute, must already exist -- HivePilot never creates it). "
+            "This finding stops appearing once any project declares an override",
         )
     )
     return findings

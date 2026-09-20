@@ -132,6 +132,40 @@ every project in the run the same `obsidian_vault:`, or run them as separate pip
 `hivepilot config doctor` reports projects that share the global vault and, once any
 project declares an override, stops reporting it.
 
+### Vault routing table — `vault_routes.yaml` (HP-121)
+
+A dedicated **mapping table** (`project_id` / `tenant` → named vault) is the CoS
+routing decision when several tenants share one host. It is engine config, not
+an Obsidian plugin. ADR:
+[docs/adr/2026-09-20-vault-routing-per-project.md](adr/2026-09-20-vault-routing-per-project.md).
+Annotated example: `examples/vault_routes.yaml`.
+
+```yaml
+vaults:
+  jsoyer:
+    repo: https://github.com/jsoyer/obsidian-vault
+    path: ~/vaults/jsoyer          # or HIVEPILOT_VAULT_JSOYER
+  noxys:
+    path: ~/vaults/noxys           # or HIVEPILOT_VAULT_NOXYS; no in-repo default
+by_project:
+  hivepilot: jsoyer
+by_tenant:
+  jsoyer: jsoyer
+  noxys: noxys
+```
+
+| Table state | Behaviour |
+| --- | --- |
+| file missing, or both route maps empty | pre-HP-121 resolver (per-project override, then global) |
+| any `by_project` / `by_tenant` route | **fail-closed**: unmapped or ambiguous → run refuses; global is not consulted |
+| project key and tenant key name different vaults | **ambiguous** — refused |
+| `obsidian_vault:` on the project disagrees with the table | **ambiguous** — refused |
+| named vault path missing / relative / not a directory | refused (HivePilot never creates a vault) |
+
+Canonical ids: `jsoyer` ([github.com/jsoyer/obsidian-vault](https://github.com/jsoyer/obsidian-vault));
+`noxys` (no published in-repo filesystem path — set `path` or `HIVEPILOT_VAULT_NOXYS`).
+Do not hardcode a Mac home directory.
+
 ### Monorepo modules — `modules:` / `ui_surfaces:` and `project/module` targeting
 
 A project can declare `modules`: a map of module name → subpath (relative to `path`) inside

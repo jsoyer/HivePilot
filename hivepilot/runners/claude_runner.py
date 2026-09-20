@@ -1733,7 +1733,12 @@ class ClaudeRunner(BaseRunner):
         # is the REQUEST. Putting the request last is the conventional shape
         # -- it was the caching accident that had it in the middle.
         target_repo = str(payload.project.path) if payload.project and payload.project.path else "."
-        obsidian_vault = resolve_prompt_vault(self.settings, payload.project)
+        obsidian_vault = resolve_prompt_vault(
+            self.settings,
+            payload.project,
+            project_id=payload.project_name,
+            tenant=(payload.metadata or {}).get("tenant"),
+        )
         instructions = render_prompt_vars(
             instructions,
             target_repo=target_repo,

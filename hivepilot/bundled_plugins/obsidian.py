@@ -133,8 +133,16 @@ def _resolve_vault(payload: Any = None, vault_path: Any = None) -> Path | None:
         return candidate.resolve() if candidate.exists() else None
 
     project = getattr(payload, "project", None) if payload is not None else None
+    project_id = getattr(payload, "project_name", None) if payload is not None else None
+    metadata = getattr(payload, "metadata", None) if payload is not None else None
+    tenant = None
+    if isinstance(metadata, dict):
+        raw_tenant = metadata.get("tenant")
+        tenant = str(raw_tenant) if raw_tenant else None
     try:
-        return resolve_vault_path(project, _global_vault())
+        return resolve_vault_path(
+            project, _global_vault(), project_id=project_id, tenant=tenant
+        )
     except VaultResolutionError as exc:
         logger.warning("plugin.obsidian.vault_unresolvable", error=str(exc))
         return None
