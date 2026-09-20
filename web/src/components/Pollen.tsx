@@ -20,7 +20,6 @@ import {
   Workflow,
   Zap,
   Gauge,
-  MessagesSquare,
   Boxes,
   Waypoints,
   ServerCog,
@@ -42,7 +41,6 @@ import { buildNavGroups, pickNavItems, PLUS_NAV, PRIMARY_NAV, type NavItem } fro
 import { IssuesChip } from './nav/IssuesChip'
 import { OverflowMenu } from './nav/OverflowMenu'
 import { SidebarNav } from './nav/SidebarNav'
-import { ConversationsView } from './views/ConversationsView'
 import { EspacesView } from './views/EspacesView'
 import { AgentStudioView } from './views/AgentStudioView'
 import { AgentsView } from './views/AgentsView'
@@ -83,7 +81,6 @@ const BUILTIN_TABS = [
   { value: 'cache', labelKey: 'nav.cache', Panel: CacheView, Icon: Gauge },
   { value: 'agents', labelKey: 'nav.agents', Panel: AgentsView, Icon: Users },
   { value: 'studio', labelKey: 'nav.studio', Panel: AgentStudioView, Icon: UserRoundCog },
-  { value: 'conversations', labelKey: 'nav.conversations', Panel: ConversationsView, Icon: MessagesSquare },
   { value: 'inbox', labelKey: 'nav.inbox', Panel: InboxView, Icon: Inbox },
   { value: 'memory', labelKey: 'nav.memory', Panel: MemoryView, Icon: Database },
   { value: 'approvals', labelKey: 'nav.approvals', Panel: ApprovalsView, Icon: CheckSquare },

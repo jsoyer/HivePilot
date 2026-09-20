@@ -29,6 +29,7 @@ import { useAsyncData } from '@/lib/use-async-data'
 import { useEventStream } from '@/lib/use-event-stream'
 import { usePersistedState } from '@/lib/use-persisted-state'
 import { cn } from '@/lib/utils'
+import { ConversationsView } from './ConversationsView'
 import { NewRunDrawer } from './NewRunDrawer'
 import { RunDetailPanel } from './RunDetailPanel'
 
@@ -46,7 +47,9 @@ export { type RunColumn, runColumn }
 export const BOARD_COLUMNS = ['queued', 'running', 'waitingApproval', 'failed'] as const
 export type BoardColumn = (typeof BOARD_COLUMNS)[number]
 
-export type RunsSurface = 'board' | 'history'
+export type RunsSurface = 'board' | 'history' | 'conversations'
+
+const RUN_SURFACES: readonly RunsSurface[] = ['board', 'history', 'conversations']
 
 /**
  * Where a run belongs after the Board / History split.
@@ -531,7 +534,7 @@ function SurfaceTabs({ surface, onSurface }: SurfaceTabsProps) {
       aria-label={t('board.tabsLabel')}
       className="flex overflow-hidden rounded-full border border-border"
     >
-      {(['board', 'history'] as const).map((option) => (
+      {RUN_SURFACES.map((option) => (
         <button
           key={option}
           type="button"
@@ -546,7 +549,11 @@ function SurfaceTabs({ surface, onSurface }: SurfaceTabsProps) {
               : 'bg-transparent text-muted-foreground hover:text-foreground',
           )}
         >
-          {option === 'board' ? t('board.tabBoard') : t('board.tabHistory')}
+          {option === 'board'
+            ? t('board.tabBoard')
+            : option === 'history'
+              ? t('board.tabHistory')
+              : t('board.tabConversations')}
         </button>
       ))}
     </div>
@@ -603,7 +610,7 @@ export function RunBoardView() {
   const runs = state.status === 'success' ? state.data : NO_RUNS
   const boardRuns = useMemo(() => runs.filter((run) => !isHistoryRun(run.status)), [runs])
   const historyRuns = useMemo(() => runs.filter((run) => isHistoryRun(run.status)), [runs])
-  const surfaceRuns = surface === 'board' ? boardRuns : historyRuns
+  const surfaceRuns = surface === 'history' ? historyRuns : boardRuns
 
   const projects = useMemo(
     () => [...new Set(surfaceRuns.map((r) => r.project))].sort((a, b) => a.localeCompare(b)),
@@ -650,7 +657,11 @@ export function RunBoardView() {
         <div className="flex flex-col gap-1">
           <h2 className="text-3xl font-semibold tracking-tight">{t('nav.runs')}</h2>
           <p className="text-sm text-muted-foreground">
-            {canRun ? t('board.subtitle') : t('board.subtitleReadOnly')}
+            {surface === 'conversations'
+              ? t('conversations.surfaceCaption')
+              : canRun
+                ? t('board.subtitle')
+                : t('board.subtitleReadOnly')}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -680,13 +691,15 @@ export function RunBoardView() {
         </div>
       )}
 
-      {!isForbidden && state.status === 'loading' && (
+      {!isForbidden && surface === 'conversations' && <ConversationsView />}
+
+      {!isForbidden && surface !== 'conversations' && state.status === 'loading' && (
         <div role="status" className="animate-pulse text-sm text-muted-foreground">
           {t('common.loading')}
         </div>
       )}
 
-      {!isForbidden && state.status === 'error' && (
+      {!isForbidden && surface !== 'conversations' && state.status === 'error' && (
         <div
           role="alert"
           className="rounded-[10px] border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
@@ -695,7 +708,7 @@ export function RunBoardView() {
         </div>
       )}
 
-      {!isForbidden && state.status === 'success' && runs.length === 0 && (
+      {!isForbidden && surface !== 'conversations' && state.status === 'success' && runs.length === 0 && (
         <EmptyState
           data-testid="run-board-empty"
           title={t('board.noRunsTitle')}
@@ -712,7 +725,7 @@ export function RunBoardView() {
         />
       )}
 
-      {!isForbidden && state.status === 'success' && runs.length > 0 && (
+      {!isForbidden && surface !== 'conversations' && state.status === 'success' && runs.length > 0 && (
         <div className="flex flex-col gap-4">
           {surface === 'board' && historyRuns.length > 0 && (
             <button

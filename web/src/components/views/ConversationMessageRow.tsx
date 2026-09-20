@@ -1,68 +1,85 @@
 import { useState } from 'react'
-import { Badge } from '@/components/ui/badge'
+import { formatClock } from '@/lib/format-time'
 import { useT } from '@/lib/i18n'
 import type { ConversationMessage } from '@/lib/pollen-api'
+import { RoleBadge, displayActorName } from './RoleBadge'
 
-function firstLine(body: string): string {
-  const line = body.split('\n').find((part) => part.trim()) ?? ''
-  return line.length > 80 ? `${line.slice(0, 80)}…` : line
+export function inferTargetRole(
+  messages: ConversationMessage[],
+  index: number,
+): string | null {
+  const target = messages[index]?.target
+  if (!target) return null
+  const next = messages[index + 1]
+  if (next?.actor === target && next.role) return next.role
+  return messages.find((message) => message.actor === target)?.role ?? null
 }
 
 export function ConversationMessageRow({
   message,
-  defaultOpen = false,
+  targetRole = null,
 }: {
   message: ConversationMessage
-  defaultOpen?: boolean
+  targetRole?: string | null
 }) {
   const t = useT()
-  const [open, setOpen] = useState(defaultOpen)
-  const preview = firstLine(message.body)
+  const [open, setOpen] = useState(false)
   const arrowLabel = message.target
     ? t('conversations.handedTo', { actor: message.actor, target: message.target })
     : message.actor
 
   return (
-    <details
-      className="flex flex-col gap-1 rounded-md border border-border/60 p-2"
+    <div
+      className="overflow-hidden rounded-[10px] border border-border bg-background"
       data-testid={`message-${message.interaction_id}`}
-      open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary
-        className="flex cursor-pointer list-none flex-col gap-1 [&::-webkit-details-marker]:hidden"
+      <button
+        type="button"
+        className="flex w-full flex-wrap items-center gap-2 px-3 py-2.5 text-left"
         data-testid={`message-summary-${message.interaction_id}`}
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
       >
-        <div className="flex flex-wrap items-baseline gap-2">
-          <span className="text-sm font-semibold">{message.actor}</span>
-          {message.target && (
-            <>
-              <span aria-hidden="true" className="text-muted-foreground">
-                →
-              </span>
+        {message.role ? (
+          <RoleBadge role={message.role} label={displayActorName(message.actor)} />
+        ) : (
+          <span className="text-sm font-semibold">{displayActorName(message.actor)}</span>
+        )}
+        {message.target && (
+          <>
+            <span aria-hidden="true" className="text-xs text-muted-foreground">
+              →
+            </span>
+            {targetRole ? (
+              <RoleBadge role={targetRole} label={displayActorName(message.target)} />
+            ) : (
               <span className="text-sm" aria-label={arrowLabel}>
-                {message.target}
+                {displayActorName(message.target)}
               </span>
-            </>
-          )}
-          {message.role && (
-            <Badge variant="outline" className="text-xs">
-              {message.role}
-            </Badge>
-          )}
-          {message.at && (
-            <span className="text-xs tabular-nums text-muted-foreground">{message.at}</span>
-          )}
-        </div>
-        {preview && <span className="text-xs text-muted-foreground">{preview}</span>}
-      </summary>
-      <pre
-        data-testid={`message-output-${message.interaction_id}`}
-        className="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 text-sm"
-      >
-        {message.body}
-      </pre>
-    </details>
+            )}
+          </>
+        )}
+        {message.action && (
+          <span className="text-[11px] text-muted-foreground">{message.action}</span>
+        )}
+        {message.at && (
+          <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+            {formatClock(message.at)}
+          </span>
+        )}
+        <span className="text-[11px] text-muted-foreground">
+          {open ? t('conversations.collapse') : t('conversations.expand')}
+        </span>
+      </button>
+      {open && (
+        <pre
+          data-testid={`message-output-${message.interaction_id}`}
+          className="px-3 pb-3 text-[13px] leading-relaxed whitespace-pre-wrap break-words text-foreground"
+        >
+          {message.body}
+        </pre>
+      )}
+    </div>
   )
 }
 
@@ -72,12 +89,12 @@ export function ConversationFil({ messages }: { messages: ConversationMessage[] 
     return <p className="text-sm text-muted-foreground">{t('conversations.emptyThread')}</p>
   }
   return (
-    <div className="flex flex-col gap-3" data-testid="conversation-fil">
+    <div className="flex flex-col gap-2" data-testid="conversation-fil">
       {messages.map((message, index) => (
         <ConversationMessageRow
           key={message.interaction_id}
           message={message}
-          defaultOpen={index === 0}
+          targetRole={inferTargetRole(messages, index)}
         />
       ))}
     </div>

@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -6,15 +5,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ApiForbiddenError } from '@/lib/api'
 import { describeApiError } from '@/lib/format-error'
 import { useT } from '@/lib/i18n'
-import {
-  fetchConversationThread,
-  fetchRun,
-  type ConversationThread,
-  type RunDetail,
-} from '@/lib/pollen-api'
-import { cn } from '@/lib/utils'
+import { fetchRun, type RunDetail } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
-import { ConversationFil } from './ConversationMessageRow'
 
 /** `started_at`/`finished_at`/step `timestamp` are SQL `TIMESTAMP` strings
  * (or `null`/absent) — render in the viewer's locale, falling back to the
@@ -33,71 +25,6 @@ function statusVariant(status: string): 'default' | 'secondary' | 'destructive' 
   return normalised === 'failed' || normalised === 'denied' ? 'destructive' : 'secondary'
 }
 
-type DetailSurface = 'steps' | 'conversations'
-
-function DetailTabs({
-  surface,
-  onSurface,
-}: {
-  surface: DetailSurface
-  onSurface: (value: DetailSurface) => void
-}) {
-  const t = useT()
-  return (
-    <div
-      data-testid="run-detail-surface-tabs"
-      role="tablist"
-      aria-label={t('runDetail.surfacesLabel')}
-      className="flex overflow-hidden rounded-full border border-border"
-    >
-      {(['steps', 'conversations'] as const).map((option) => (
-        <button
-          key={option}
-          type="button"
-          role="tab"
-          data-testid={`run-detail-surface-${option}`}
-          aria-selected={surface === option}
-          onClick={() => onSurface(option)}
-          className={cn(
-            'px-3 py-1 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
-            surface === option
-              ? 'bg-muted text-foreground'
-              : 'bg-transparent text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {option === 'steps' ? t('runDetail.tabSteps') : t('runDetail.tabConversations')}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function RunConversations({ runId }: { runId: number }) {
-  const t = useT()
-  const state = useAsyncData<ConversationThread>(() => fetchConversationThread(runId), [runId])
-
-  if (state.status === 'loading') {
-    return (
-      <div role="status" className="animate-pulse text-sm text-muted-foreground">
-        {t('common.loading')}
-      </div>
-    )
-  }
-
-  if (state.status === 'error') {
-    return (
-      <div
-        role="alert"
-        className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-      >
-        {describeApiError(state.error)}
-      </div>
-    )
-  }
-
-  return <ConversationFil messages={state.data.messages} />
-}
-
 export interface RunDetailPanelProps {
   /** The run to show detail for, or `null` when the panel is closed — this
    * component renders nothing at all when `null` (no backdrop, no drawer),
@@ -108,13 +35,7 @@ export interface RunDetailPanelProps {
 
 /**
  * Run detail drill-down — a right-side drawer over `GET /v1/runs/{run_id}`
- * (Mirador Operate section PRD). Opened by clicking a `RunBoardView` card
- * or History row.
- *
- * Conversations is a second surface inside this drawer (HP-119), not a
- * fifth sidebar door. It reads `GET /v1/conversations/{run_id}` — the
- * actor→target fil already stored as `interactions` rows, with role
- * attribution from `metadata.role`.
+ * (Mirador Operate section PRD). Opened by clicking a `RunBoardView` card.
  *
  * `GET /v1/runs/{run_id}` requires a `run`-rank token, same gate as
  * `GET /v1/runs` (the board itself, which a caller must already have `run`
@@ -138,15 +59,10 @@ export interface RunDetailPanelProps {
  */
 export function RunDetailPanel({ runId, onClose }: RunDetailPanelProps) {
   const t = useT()
-  const [surface, setSurface] = useState<DetailSurface>('steps')
   const state = useAsyncData<RunDetail | null>(
     () => (runId === null ? Promise.resolve(null) : fetchRun(runId)),
     [runId],
   )
-
-  useEffect(() => {
-    setSurface('steps')
-  }, [runId])
 
   if (runId === null) return null
 
@@ -225,65 +141,59 @@ export function RunDetailPanel({ runId, onClose }: RunDetailPanelProps) {
               )}
             </dl>
 
-            <DetailTabs surface={surface} onSurface={setSurface} />
-
-            {surface === 'steps' && (
-              <div>
-                <h3 className="mb-2 text-sm font-semibold">{t('runDetail.stepsTitle')}</h3>
-                {state.data.steps.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t('runDetail.noSteps')}</p>
-                ) : (
-                  <Table className="block sm:table">
-                    <TableHeader className="hidden sm:table-header-group">
-                      <TableRow>
-                        <TableHead>{t('analytics.step')}</TableHead>
-                        <TableHead>{t('common.status')}</TableHead>
-                        <TableHead>{t('runDetail.provider')}</TableHead>
-                        <TableHead>{t('runDetail.model')}</TableHead>
-                        <TableHead>{t('runDetail.tokens')}</TableHead>
-                        <TableHead>{t('runDetail.cost')}</TableHead>
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">{t('runDetail.stepsTitle')}</h3>
+              {state.data.steps.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t('runDetail.noSteps')}</p>
+              ) : (
+                <Table className="block sm:table">
+                  <TableHeader className="hidden sm:table-header-group">
+                    <TableRow>
+                      <TableHead>{t('analytics.step')}</TableHead>
+                      <TableHead>{t('common.status')}</TableHead>
+                      <TableHead>{t('runDetail.provider')}</TableHead>
+                      <TableHead>{t('runDetail.model')}</TableHead>
+                      <TableHead>{t('runDetail.tokens')}</TableHead>
+                      <TableHead>{t('runDetail.cost')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="block sm:table-row-group">
+                    {state.data.steps.map((step, index) => (
+                      <TableRow
+                        // eslint-disable-next-line react/no-array-index-key -- step rows have no stable id of their own
+                        key={`${step.step}-${index}`}
+                        className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
+                      >
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('analytics.step')}:</span>
+                          {step.step}
+                        </TableCell>
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('common.status')}:</span>
+                          <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
+                        </TableCell>
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('runDetail.provider')}:</span>
+                          {step.provider ?? '—'}
+                        </TableCell>
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('runDetail.model')}:</span>
+                          {step.model ?? '—'}
+                        </TableCell>
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('runDetail.tokens')}:</span>
+                          {step.input_tokens ?? '—'}/{step.output_tokens ?? '—'}
+                        </TableCell>
+                        <TableCell className="block sm:table-cell">
+                          <span className="mr-1 font-medium sm:hidden">{t('runDetail.cost')}:</span>
+                          {step.cost_usd != null ? `$${step.cost_usd.toFixed(4)}` : '—'}
+                        </TableCell>
                       </TableRow>
-                    </TableHeader>
-                    <TableBody className="block sm:table-row-group">
-                      {state.data.steps.map((step, index) => (
-                        <TableRow
-                          // eslint-disable-next-line react/no-array-index-key -- step rows have no stable id of their own
-                          key={`${step.step}-${index}`}
-                          className="mb-3 block rounded-lg border border-border p-3 sm:mb-0 sm:table-row sm:rounded-none sm:border-x-0 sm:border-t-0 sm:p-0"
-                        >
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('analytics.step')}:</span>
-                            {step.step}
-                          </TableCell>
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('common.status')}:</span>
-                            <Badge variant={statusVariant(step.status)}>{step.status}</Badge>
-                          </TableCell>
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('runDetail.provider')}:</span>
-                            {step.provider ?? '—'}
-                          </TableCell>
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('runDetail.model')}:</span>
-                            {step.model ?? '—'}
-                          </TableCell>
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('runDetail.tokens')}:</span>
-                            {step.input_tokens ?? '—'}/{step.output_tokens ?? '—'}
-                          </TableCell>
-                          <TableCell className="block sm:table-cell">
-                            <span className="mr-1 font-medium sm:hidden">{t('runDetail.cost')}:</span>
-                            {step.cost_usd != null ? `$${step.cost_usd.toFixed(4)}` : '—'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </div>
-            )}
-
-            {surface === 'conversations' && <RunConversations runId={runId} />}
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
           </div>
         )}
       </div>

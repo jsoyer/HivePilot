@@ -1,4 +1,4 @@
-import type { ConversationMessage, ConversationThread } from '@/lib/pollen-api'
+import type { ConversationMessage, ConversationRunsResponse, ConversationThread } from '@/lib/pollen-api'
 
 /**
  * A realistic actor→target fil for one pipeline run.
@@ -41,4 +41,23 @@ export const INTERACTION_THREAD: ConversationThread = {
   run_id: 42,
   roles: ['ceo', 'developer', 'reviewer'],
   messages: INTERACTION_MESSAGES,
+}
+
+export const INTERACTION_RUNS: ConversationRunsResponse = {
+  runs: [
+    {
+      run_id: 42,
+      project: 'noxys',
+      started_at: '2026-08-13T20:05:34',
+      message_count: 3,
+      roles: ['ceo', 'developer', 'reviewer'],
+    },
+    {
+      run_id: 38,
+      project: 'hivepilot',
+      started_at: '2026-08-12T18:10:00',
+      message_count: 6,
+      roles: ['ceo', 'qa'],
+    },
+  ],
 }

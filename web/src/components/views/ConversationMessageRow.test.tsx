@@ -2,8 +2,9 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
+import { ROLE_AVATAR_COLORS } from '@/lib/role-avatars'
 import { INTERACTION_MESSAGES } from '@/test/fixtures/interactions'
-import { ConversationFil, ConversationMessageRow } from './ConversationMessageRow'
+import { ConversationFil, ConversationMessageRow, inferTargetRole } from './ConversationMessageRow'
 
 let container: HTMLDivElement
 let root: Root
@@ -22,7 +23,7 @@ afterEach(() => {
 })
 
 describe('ConversationFil', () => {
-  it('renders the actor→target fil in order with role attribution', () => {
+  it('renders the actor→target fil in order with kit role colours', () => {
     act(() => {
       root.render(
         <LanguageProvider>
@@ -31,38 +32,45 @@ describe('ConversationFil', () => {
       )
     })
 
-    const turns = container.querySelectorAll('[data-testid="conversation-fil"] > details')
+    const turns = container.querySelectorAll('[data-testid="conversation-fil"] > [data-testid^="message-"]')
     expect(Array.from(turns).map((el) => el.getAttribute('data-testid'))).toEqual([
       'message-101',
       'message-102',
       'message-103',
     ])
-    expect(container.textContent).toContain('Aliénor (CEO)')
-    expect(container.textContent).toContain('Gustave (Developer)')
-    expect(container.textContent).toContain('Victor (Reviewer)')
-    expect(container.textContent).toContain('ceo')
-    expect(container.textContent).toContain('developer')
-    expect(container.textContent).toContain('reviewer')
-    expect(container.querySelector('[data-testid="conversation-fil"]')).not.toBeNull()
+    expect(container.textContent).toContain('Aliénor')
+    expect(container.textContent).toContain('Gustave')
+    expect(container.textContent).toContain('Victor')
+    expect(container.querySelector('[data-testid="role-badge-ceo"]')?.getAttribute('style')).toContain(
+      '168, 85, 247',
+    )
+    expect(container.querySelector('[data-testid="role-badge-developer"]')?.getAttribute('style')).toContain(
+      '34, 197, 94',
+    )
+    expect(ROLE_AVATAR_COLORS.ceo).toBe('#a855f7')
+    expect(ROLE_AVATAR_COLORS.developer).toBe('#22c55e')
   })
 
-  it('collapses later outputs and keeps the first turn open', () => {
+  it('keeps every output collapsed until expanded', () => {
     act(() => {
-      root.render(<ConversationFil messages={INTERACTION_MESSAGES} />)
+      root.render(
+        <LanguageProvider>
+          <ConversationFil messages={INTERACTION_MESSAGES} />
+        </LanguageProvider>,
+      )
     })
 
-    const first = container.querySelector('[data-testid="message-101"]') as HTMLDetailsElement
-    const second = container.querySelector('[data-testid="message-102"]') as HTMLDetailsElement
-    expect(first.open).toBe(true)
-    expect(second.open).toBe(false)
+    expect(container.querySelector('[data-testid="message-output-101"]')).toBeNull()
+    expect(container.querySelector('[data-testid="message-output-102"]')).toBeNull()
+
+    act(() => {
+      container.querySelector('[data-testid="message-summary-102"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
     expect(container.querySelector('[data-testid="message-output-102"]')?.textContent).toContain(
       'Implemented mdstat',
     )
-
-    act(() => {
-      second.querySelector('summary')?.click()
-    })
-    expect(second.open).toBe(true)
   })
 
   it('says honestly when the run recorded no agent output', () => {
@@ -89,8 +97,8 @@ describe('ConversationMessageRow', () => {
       )
     })
 
-    expect(container.textContent).toContain('Hugo (CISO)')
-    expect(container.textContent).toContain('ciso')
+    expect(container.textContent).toContain('Hugo')
+    expect(container.querySelector('[data-testid="role-badge-ciso"]')?.textContent).toContain('Hugo')
     expect(container.textContent).not.toContain('CEO')
   })
 
@@ -98,14 +106,24 @@ describe('ConversationMessageRow', () => {
     const malicious = '<img src=x onerror=alert(1)>'
     act(() => {
       root.render(
-        <ConversationMessageRow
-          defaultOpen
-          message={{ ...INTERACTION_MESSAGES[1], body: malicious }}
-        />,
+        <ConversationMessageRow message={{ ...INTERACTION_MESSAGES[1], body: malicious }} />,
+      )
+    })
+    act(() => {
+      container.querySelector('[data-testid="message-summary-102"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
       )
     })
 
     expect(container.textContent).toContain(malicious)
     expect(container.querySelector('img')).toBeNull()
+  })
+})
+
+describe('inferTargetRole', () => {
+  it('takes the next turn\'s role when that speaker is this target', () => {
+    expect(inferTargetRole(INTERACTION_MESSAGES, 0)).toBe('developer')
+    expect(inferTargetRole(INTERACTION_MESSAGES, 1)).toBe('reviewer')
+    expect(inferTargetRole(INTERACTION_MESSAGES, 2)).toBeNull()
   })
 })

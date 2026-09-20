@@ -4,16 +4,23 @@ Replay: `cd web && npm test -- src/components/views/RunDetailPanel.test.tsx src/
 
 ## Summary
 
-HP-119 — per-run Conversations inside the existing Runs shell. Open a run from Board or History; the detail drawer now has **Steps | Conversations**. Conversations is not a fifth top-level door.
+HP-119 — Conversations is the third **Runs** segment: `Board | History | Conversations`. Not a fifth sidebar door, not under Plus, not a run-detail tab.
 
-The fil is `GET /v1/conversations/{run_id}`: oldest-first actor→target turns, role from `interactions.metadata.role`, outputs in collapsible `<details>`. The API now also returns `target`.
+Matches the Aphrodite mock: left list of runs that have speech, right actor→target fil, kit role colours (`ROLE_AVATAR_COLORS`), outputs collapsed until expanded, reply framed as a correction for the role’s next run.
+
+## How to reach it
+
+Pollen → **Runs** → **Conversations**.
 
 ## What changed
 
-1. **Run detail** — Steps / Conversations pills (same surface-tab pattern as Board / History). Thread loads only when Conversations is opened.
-2. **Shared fil UI** — `ConversationFil` / `ConversationMessageRow` reused by the run drawer and the existing ⌘K Conversations lab view.
-3. **API** — `Message.target` from `interactions.target`.
-4. **Tests + fixture** — `web/src/test/fixtures/interactions.ts` seeds a three-turn actor→target chain; UI tests cover the drawer, History entry, collapse, and role attribution.
+1. **Runs surface** — third pill on the existing Board/History control.
+2. **Layout** — runs-with-speech list + thread for the selected run id.
+3. **Fil** — `actor → target` + action + clock; role badges use HP-20 kit colours, not sky chrome.
+4. **Outputs** — collapsed by default; Expand/Collapse on the turn.
+5. **API** — `Message.target` from `interactions.target`.
+6. **Nav** — Conversations removed from ⌘K / System lab so it cannot come back as a fifth destination.
+7. **Tests + fixture** — `web/src/test/fixtures/interactions.ts`.
 
 ## Out of scope
 
@@ -23,7 +30,5 @@ The fil is `GET /v1/conversations/{run_id}`: oldest-first actor→target turns, 
 
 ## Testing
 
-- [x] `cd web && npm test -- src/components/views/RunDetailPanel.test.tsx src/components/views/ConversationMessageRow.test.tsx src/components/views/RunBoardView.test.tsx src/components/views/ConversationsView.test.tsx` — 60 passed
-- [x] `pytest tests/test_conversations_service.py -q` — 13 passed
-- [x] `cd web && npm test -- src/components/Pollen.test.tsx src/lib/i18n/en.test.ts src/lib/i18n/fr.test.ts` — 25 passed
-- [x] Browser: Runs → History → run #2 → Conversations shows actor→target fil with role badges and collapsible outputs. Sidebar stays Inbox · Approvals · Runs · Alerts.
+- [ ] UI tests (replay above)
+- [ ] `pytest tests/test_conversations_service.py -q`

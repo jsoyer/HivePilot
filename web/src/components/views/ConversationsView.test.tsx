@@ -99,13 +99,21 @@ describe('ConversationsView', () => {
     // a conversation.
     await mount()
 
-    expect(container.textContent).toContain('Gustave (Developer)')
-    expect(container.textContent).toContain('Victor (Reviewer)')
+    expect(container.textContent).toContain('Gustave')
+    expect(container.textContent).toContain('Victor')
+    expect(container.querySelector('[data-testid="role-badge-developer"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="role-badge-reviewer"]')).not.toBeNull()
   })
 
-  it('shows what was actually said, not just that a stage completed', async () => {
+  it('shows what was actually said only after expand — outputs start collapsed', async () => {
     await mount()
 
+    expect(container.querySelector('[data-testid="message-output-103"]')).toBeNull()
+    await act(async () => {
+      container.querySelector('[data-testid="message-summary-103"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
     expect(container.textContent).toContain('never checks isAdmin')
   })
 
