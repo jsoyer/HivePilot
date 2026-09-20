@@ -60,6 +60,12 @@ type a natural-language spec in **Describe your agent**; `POST /v1/roles/draft`
 pre-fills the create form. The draft is a proposal only — Save still calls
 `POST /v1/roles`.
 
+**Agent CLI binaries** (Health, admin) install or update a kind only when
+`InstallSpec` declares `command` / `update_command`. Confirm posts
+`{"consent": true}`; the audit row records who, the binary, and version
+before/after. Check-remote appears only when `read_remote_version` is set.
+No URL comes from the UI, and a run never triggers this path.
+
 ## Breaking change: synchronous `POST /run` removed (Phase 14b)
 
 The deprecated synchronous run-trigger endpoint (`POST /run` / `POST /v1/run`,

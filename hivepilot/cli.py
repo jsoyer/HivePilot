@@ -5337,6 +5337,7 @@ def agents_versions(
 
     from hivepilot.registry import active_agent_runner_kinds
     from hivepilot.services.agent_checks import API_ONLY_AGENT_KINDS
+    from hivepilot.services.agent_install import get_install_spec, probe_remote_version
     from hivepilot.services.agent_versions import (
         _is_outdated,
         fetch_latest_npm_version,
@@ -5374,20 +5375,27 @@ def agents_versions(
         if check_latest:
             if api_only:
                 row += ["—", "n/a · no CLI by design"]
-            elif not probe.npm_package:
-                # NOT the same as a failed lookup. Claude Code's native
-                # installer puts it under `~/.local/share/claude/versions/`,
-                # and that CLI manages its own updates -- there is no registry
-                # to compare against, so saying "unknown" would imply we tried
-                # and could not tell.
-                row += ["—", "n/a · not npm-installed"]
             else:
-                latest = fetch_latest_npm_version(probe.npm_package)
-                outdated = _is_outdated(probe.version, latest)
-                # Three outcomes, not two: `None` means undecidable and must
-                # not render as "up to date", a claim with no basis.
-                status = {True: "OUTDATED", False: "current"}.get(outdated, "lookup failed")
-                row += [latest or "—", status]
+                spec = get_install_spec(kind)
+                if spec is not None and spec.read_remote_version is not None:
+                    latest = probe_remote_version(spec)
+                    outdated = _is_outdated(probe.version, latest)
+                    status = {True: "OUTDATED", False: "current"}.get(outdated, "lookup failed")
+                    row += [latest or "—", status]
+                elif not probe.npm_package:
+                    # NOT the same as a failed lookup. Claude Code's native
+                    # installer puts it under `~/.local/share/claude/versions/`,
+                    # and that CLI manages its own updates -- there is no registry
+                    # to compare against, so saying "unknown" would imply we tried
+                    # and could not tell.
+                    row += ["—", "n/a · not npm-installed"]
+                else:
+                    latest = fetch_latest_npm_version(probe.npm_package)
+                    outdated = _is_outdated(probe.version, latest)
+                    # Three outcomes, not two: `None` means undecidable and must
+                    # not render as "up to date", a claim with no basis.
+                    status = {True: "OUTDATED", False: "current"}.get(outdated, "lookup failed")
+                    row += [latest or "—", status]
         table.add_row(*row)
 
     console.print(table)

@@ -9,6 +9,7 @@ import { useT } from '@/lib/i18n'
 import {
   agentAction,
   agentLogin,
+  fetchAgentRemoteVersion,
   fetchAgentsAdmin,
   type AgentActionResult,
   type AgentAdminEntry,
@@ -46,6 +47,12 @@ type LoginState =
   | { kind: 'url'; url: string | null; log: string }
   | { kind: 'error'; message: string }
 
+type RemoteState =
+  | { kind: 'idle' }
+  | { kind: 'working' }
+  | { kind: 'done'; version: string | null }
+  | { kind: 'error'; message: string }
+
 type RowState =
   | { kind: 'idle' }
   | { kind: 'confirming'; action: 'install' | 'update' }
@@ -65,6 +72,17 @@ function AgentRow({
   const t = useT()
   const [state, setState] = useState<RowState>({ kind: 'idle' })
   const [login, setLogin] = useState<LoginState>({ kind: 'idle' })
+  const [remote, setRemote] = useState<RemoteState>({ kind: 'idle' })
+
+  const runRemote = async () => {
+    setRemote({ kind: 'working' })
+    try {
+      const result = await fetchAgentRemoteVersion(agent.kind)
+      setRemote({ kind: 'done', version: result.remote_version })
+    } catch (err) {
+      setRemote({ kind: 'error', message: describeApiError(err) })
+    }
+  }
 
   const runLogin = async () => {
     setLogin({ kind: 'working' })
@@ -119,7 +137,36 @@ function AgentRow({
         <div className="font-medium">{agent.name}</div>
         <div className="text-xs text-muted-foreground">{agent.vendor}</div>
       </TableCell>
-      <TableCell className="font-mono text-sm">{agent.installed_version ?? EM_DASH}</TableCell>
+      <TableCell className="font-mono text-sm">
+        <div>{agent.installed_version ?? EM_DASH}</div>
+        {agent.has_remote_version && (
+          <div className="mt-1 text-xs font-sans" data-testid={`remote-${agent.kind}`}>
+            {remote.kind === 'idle' && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!canAdmin}
+                onClick={() => void runRemote()}
+              >
+                {t('agents.binaries.checkRemote')}
+              </Button>
+            )}
+            {remote.kind === 'working' && (
+              <span className="text-muted-foreground">{t('agents.binaries.working')}</span>
+            )}
+            {remote.kind === 'done' && (
+              <span>
+                {t('agents.binaries.remoteLabel')}: {remote.version ?? EM_DASH}
+              </span>
+            )}
+            {remote.kind === 'error' && (
+              <span className="text-destructive">
+                {remote.message || t('agents.binaries.remoteUnknown')}
+              </span>
+            )}
+          </div>
+        )}
+      </TableCell>
       <TableCell>
         {agent.auth === 'present' && <Badge variant="outline">{t('agents.auth.present')}</Badge>}
         {agent.auth === 'absent' && (

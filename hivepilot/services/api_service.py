@@ -4547,11 +4547,37 @@ def list_agents_admin_endpoint(
     return {"agents": agent_admin.list_agents_admin()}
 
 
+@v1.get("/agents/{kind}/remote-version")
+@app.get("/agents/{kind}/remote-version")
+def agent_remote_version_endpoint(
+    kind: str,
+    _caller: token_service.TokenEntry = Depends(require_role("admin")),
+) -> dict:
+    """Read-only remote-version probe for ONE curated kind.
+
+    Runs only when `InstallSpec.read_remote_version` is declared. Never
+    installs, never updates, never accepts a URL from the client. Listing
+    stays offline; this GET is the opt-in network hop.
+    """
+    from hivepilot.services import agent_admin
+
+    try:
+        return agent_admin.read_remote_version(kind)
+    except agent_admin.AgentAdminError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class AgentActionRequest(BaseModel):
     """`consent` is the button's signature on the decision — the
     non-interactive replacement for `agent_install.py`'s TTY "yes". It must be
     EXPLICITLY true; absent-means-no is the only safe default for a field that
-    authorises running a vendor's install pipeline."""
+    authorises running a vendor's install pipeline.
+
+    Extra fields are forbidden: a URL or command in the body must never
+    reach the service. Only registry constants execute.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     consent: bool = False
 

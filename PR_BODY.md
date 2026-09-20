@@ -1,34 +1,42 @@
-Owning issue: [HP-119](https://linear.app/js-workspace/issue/HP-119/r1-pollen-onglet-conversations-interactions-actortarget)
-
-Replay: `cd web && npm test -- src/components/views/RunDetailPanel.test.tsx src/components/views/ConversationMessageRow.test.tsx src/components/views/RunBoardView.test.tsx src/components/views/ConversationsView.test.tsx`
-
 ## Summary
 
-HP-119 — Conversations is the third **Runs** segment: `Board | History | Conversations`. Not a fifth sidebar door, not under Plus, not a run-detail tab.
+HP-120 — Pollen install/update of agent binaries, box only, HITL. The CLI
+(`agents list/versions/install`) and the Pollen Health card already existed.
+This slice puts **update** and **read-remote-version** on the registry as
+nullable fields, records **who / binary / version before+after**, and keeps
+the interactive TTY guard intact: Pollen replaces it with recorded outward
+consent (`{"consent": true}`), never a silent bypass.
 
-Matches the Aphrodite mock: left list of runs that have speech, right actor→target fil, kit role colours (`ROLE_AVATAR_COLORS`), outputs collapsed until expanded, reply framed as a correction for the role’s next run.
+Owning issue: [HP-120](https://linear.app/js-workspace/issue/HP-120/r2-pollen-installupdate-agent-binaries-box-only-hitl)
 
-## How to reach it
+Replay: `hivepilot agents list` / Pollen → Health → Agent CLI binaries (admin)
 
-Pollen → **Runs** → **Conversations**.
+## Acceptance
+
+1. **Registry** — `InstallSpec.update_command` and `InstallSpec.read_remote_version` are nullable argv tuples. Update argv for grok/claude/codex/cursor is the 2026-08-22 --help probe. `read_remote_version` is undeclared until a command is verified (no guessed `npm view`).
+2. **Pollen** — Install/update buttons only when the capability is declared. Check-remote only when `has_remote_version`. Body is `{consent: true}` only; `extra="forbid"` rejects a URL/command from the UI. No run/orchestrator path calls `perform_agent_action`.
+3. **Audit** — who, binary, version before and after. Installed version now reads `AgentCliProbe.version` (the old `installed` getattr was always None).
+4. **Box only** — local subprocess of registry constants. No remote/cloud install path.
 
 ## What changed
 
-1. **Runs surface** — third pill on the existing Board/History control.
-2. **Layout** — runs-with-speech list + thread for the selected run id.
-3. **Fil** — `actor → target` + action + clock; role badges use HP-20 kit colours, not sky chrome.
-4. **Outputs** — collapsed by default; Expand/Collapse on the turn.
-5. **API** — `Message.target` from `interactions.target`.
-6. **Nav** — Conversations removed from ⌘K / System lab so it cannot come back as a fifth destination.
-7. **Tests + fixture** — `web/src/test/fixtures/interactions.ts`.
+1. **`InstallSpec`** — `update_command` / `read_remote_version` + `probe_remote_version`.
+2. **`agent_admin`** — update argv from the spec; audit includes `binary`; GET remote-version is opt-in and refused when undeclared. Listing stays offline.
+3. **API** — `GET /v1/agents/{kind}/remote-version` (admin). `AgentActionRequest` forbids extra fields.
+4. **Pollen Health card** — Check remote only if declared.
+5. **CLI** — `agents versions --check-latest` prefers a declared registry probe, else npm.
 
 ## Out of scope
 
-- Conversations as a primary nav door
-- HP-120 binaries
-- Telegram 4-door ops cutover
+- HP-126–128 ops
+- Telegram 4-door cutover
+- Triggering install/update from a run pipeline
+- Inventing unverified remote-version argv
 
 ## Testing
 
-- [ ] UI tests (replay above)
-- [ ] `pytest tests/test_conversations_service.py -q`
+- [x] `pytest tests/test_agent_install.py tests/test_agent_admin.py tests/test_cli_agents.py tests/test_agent_auth.py -q` — 102 passed
+- [x] `pytest tests/test_api_service.py::TestAgentAdminEndpoints tests/test_api_service.py::TestAgentLoginEndpoint -q` — 10 passed
+- [x] `cd web && npm test -- src/components/views/AgentBinariesCard.test.tsx src/components/views/HealthView.test.tsx` — 48 passed
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `npm run build` — Pollen static bundle rebuilt into `hivepilot/webui/static/`

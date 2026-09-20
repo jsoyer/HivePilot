@@ -4,15 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
 import type { AgentsAdminResponse } from '@/lib/pollen-api'
 
-const { fetchAgentsAdmin, agentAction, agentLogin } = vi.hoisted(() => ({
+const { fetchAgentsAdmin, agentAction, agentLogin, fetchAgentRemoteVersion } = vi.hoisted(() => ({
   fetchAgentsAdmin: vi.fn(),
   agentAction: vi.fn(),
   agentLogin: vi.fn(),
+  fetchAgentRemoteVersion: vi.fn(),
 }))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchAgentsAdmin, agentAction, agentLogin }
+  return { ...actual, fetchAgentsAdmin, agentAction, agentLogin, fetchAgentRemoteVersion }
 })
 
 import { AgentBinariesCard } from './AgentBinariesCard'
@@ -26,6 +27,7 @@ beforeEach(() => {
   root = createRoot(container)
   fetchAgentsAdmin.mockReset()
   agentAction.mockReset()
+  fetchAgentRemoteVersion.mockReset()
 })
 
 afterEach(() => {
@@ -57,6 +59,8 @@ const GROK = {
   docs_url: 'https://docs.x.ai/build/overview',
   installable: true,
   updatable: true,
+  has_remote_version: false,
+  remote_version: null,
   on_service_path: true,
   installed_version: '1.0.5',
   auth: 'present',
@@ -145,6 +149,39 @@ describe('AgentBinariesCard', () => {
     expect(agentAction).toHaveBeenCalledWith('grok', 'update')
     expect(container.textContent).toContain('1.0.5')
     expect(container.textContent).toContain('1.0.6')
+  })
+
+  it('Check remote appears only when the registry declares the capability', async () => {
+    fetchAgentsAdmin.mockResolvedValue(
+      roster([
+        { ...GROK, has_remote_version: false },
+        {
+          ...GROK,
+          kind: 'codex',
+          name: 'Codex',
+          has_remote_version: true,
+        },
+      ]),
+    )
+    render()
+    await flush()
+
+    expect(container.querySelector('[data-testid="remote-grok"]')).toBeFalsy()
+    const check = Array.from(container.querySelectorAll('button')).find((b) =>
+      /check remote|vérifier le distant/i.test(b.textContent ?? ''),
+    )
+    expect(check).toBeTruthy()
+    fetchAgentRemoteVersion.mockResolvedValue({
+      kind: 'codex',
+      binary: 'codex',
+      remote_version: '0.99.0',
+    })
+    act(() => check!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    await flush()
+
+    expect(fetchAgentRemoteVersion).toHaveBeenCalledWith('codex')
+    expect(agentAction).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('0.99.0')
   })
 
   it('a docs-only kind gets a LINK, never a button that lies', async () => {
