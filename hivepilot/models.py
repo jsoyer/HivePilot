@@ -1366,7 +1366,6 @@ class VaultRoutesFile(BaseModel):
             unknown = sorted({vault_id for vault_id in mapping.values() if vault_id not in known})
             if unknown:
                 raise ValueError(
-                    f"{source} names unknown vault(s) {unknown}; declared vaults: "
-                    f"{sorted(known)}"
+                    f"{source} names unknown vault(s) {unknown}; declared vaults: {sorted(known)}"
                 )
         return self

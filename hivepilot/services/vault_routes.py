@@ -117,11 +117,7 @@ def resolve_route(
     project_vault_id = table.by_project.get(project_key) if project_key else None
     tenant_vault_id = table.by_tenant.get(tenant_key) if tenant_key else None
 
-    if (
-        project_vault_id
-        and tenant_vault_id
-        and project_vault_id != tenant_vault_id
-    ):
+    if project_vault_id and tenant_vault_id and project_vault_id != tenant_vault_id:
         raise VaultRouteError(
             f"Ambiguous vault route: project_id {project_key!r} maps to "
             f"{project_vault_id!r} but tenant {tenant_key!r} maps to "
@@ -135,14 +131,10 @@ def resolve_route(
     candidates: dict[str, list[str]] = {}
     if table_path is not None:
         source = (
-            f"by_project[{project_key!r}]"
-            if project_vault_id
-            else f"by_tenant[{tenant_key!r}]"
+            f"by_project[{project_key!r}]" if project_vault_id else f"by_tenant[{tenant_key!r}]"
         )
         if project_vault_id and tenant_vault_id:
-            source = (
-                f"by_project[{project_key!r}]+by_tenant[{tenant_key!r}]"
-            )
+            source = f"by_project[{project_key!r}]+by_tenant[{tenant_key!r}]"
         candidates.setdefault(str(table_path), []).append(source)
     if override is not None:
         override_path = Path(override).expanduser().resolve()
@@ -158,8 +150,7 @@ def resolve_route(
         )
     if len(candidates) > 1:
         detail = "; ".join(
-            f"{path} <- {', '.join(sources)}"
-            for path, sources in sorted(candidates.items())
+            f"{path} <- {', '.join(sources)}" for path, sources in sorted(candidates.items())
         )
         raise VaultRouteError(
             "Ambiguous vault route: mapping table and project override "

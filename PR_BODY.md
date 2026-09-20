@@ -32,6 +32,7 @@ Replay: `hivepilot lint` (loads `vault_routes.yaml` when present)
 
 ## Testing
 
-- [ ] `pytest tests/test_vault_routes.py tests/test_obsidian_vault_resolver.py tests/test_per_project_vault.py -q`
-- [ ] `hivepilot lint` (or the lint-service subset that loads vault routes)
-- [ ] `ruff check` on touched Python
+- [x] `pytest tests/test_vault_routes.py tests/test_obsidian_vault_resolver.py tests/test_per_project_vault.py tests/test_config_doctor.py::TestSharedObsidianVaultLimitation -q` — 69 passed
+- [x] `_lint_vault_routes()` — clean (no in-repo table file; example parses in tests)
+- [x] `ruff check` + `ruff format --check` clean on touched Python
+- [x] `hivepilot lint` — no vault_routes errors (example project paths missing, pre-existing)

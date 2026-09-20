@@ -42,9 +42,7 @@ def _project(tmp_path: Path, name: str = "proj", **kwargs) -> ProjectConfig:
 def _table(jsoyer: Path, noxys: Path) -> VaultRoutesFile:
     return VaultRoutesFile(
         vaults={
-            "jsoyer": NamedVault(
-                repo="https://github.com/jsoyer/obsidian-vault", path=jsoyer
-            ),
+            "jsoyer": NamedVault(repo="https://github.com/jsoyer/obsidian-vault", path=jsoyer),
             "noxys": NamedVault(path=noxys),
         },
         by_project={"hivepilot": "jsoyer", "noxys": "noxys"},
@@ -62,9 +60,7 @@ class TestVaultRoutesFile:
         assert VaultRoutesFile().is_active() is False
 
     def test_shipped_example_parses_and_names_canonical_vaults(self) -> None:
-        raw = yaml.safe_load(
-            Path("examples/vault_routes.yaml").read_text(encoding="utf-8")
-        )
+        raw = yaml.safe_load(Path("examples/vault_routes.yaml").read_text(encoding="utf-8"))
         table = VaultRoutesFile.model_validate(raw)
         assert table.is_active()
         assert table.vaults["jsoyer"].repo == "https://github.com/jsoyer/obsidian-vault"
@@ -100,18 +96,7 @@ class TestVaultRoutesFile:
         with pytest.raises(ValidationError, match="empty"):
             NamedVault(path="   ")
 
-    def test_missing_file_loads_as_inactive(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        import hivepilot.config as config_mod
-
-        monkeypatch.setattr(
-            config_mod.settings, "vault_routes_file", tmp_path / "absent.yaml"
-        )
-        monkeypatch.setattr(config_mod.settings, "base_dir", tmp_path)
-        monkeypatch.setattr(
-            config_mod.settings, "xdg_config_home", tmp_path / "xdg"
-        )
+    def test_missing_file_loads_as_inactive(self, tmp_path: Path) -> None:
         assert load_vault_routes(tmp_path / "absent.yaml").is_active() is False
 
 
@@ -121,16 +106,10 @@ class TestVaultRoutesFile:
 
 
 class TestResolveRouteFailClosed:
-    def test_inactive_table_returns_none_so_legacy_fallback_may_run(
-        self, tmp_path: Path
-    ) -> None:
-        assert (
-            resolve_route(project_id="hivepilot", routes=VaultRoutesFile()) is None
-        )
+    def test_inactive_table_returns_none_so_legacy_fallback_may_run(self, tmp_path: Path) -> None:
+        assert resolve_route(project_id="hivepilot", routes=VaultRoutesFile()) is None
 
-    def test_unmapped_project_fails_and_does_not_use_global(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unmapped_project_fails_and_does_not_use_global(self, tmp_path: Path) -> None:
         jsoyer = _vault(tmp_path, "jsoyer")
         noxys = _vault(tmp_path, "noxys")
         table = _table(jsoyer, noxys)
@@ -186,9 +165,7 @@ class TestMultiTenantIsolation:
         table = _table(jsoyer, noxys)
         project = _project(tmp_path, "hivepilot")
         assert (
-            resolve_vault_path(
-                project, tmp_path / "global", project_id="hivepilot", routes=table
-            )
+            resolve_vault_path(project, tmp_path / "global", project_id="hivepilot", routes=table)
             == jsoyer
         )
 
@@ -218,9 +195,7 @@ class TestMultiTenantIsolation:
             == jsoyer
         )
 
-    def test_unmapped_does_not_fall_back_to_global_via_resolver(
-        self, tmp_path: Path
-    ) -> None:
+    def test_unmapped_does_not_fall_back_to_global_via_resolver(self, tmp_path: Path) -> None:
         global_vault = _vault(tmp_path, "global")
         table = _table(_vault(tmp_path, "jsoyer"), _vault(tmp_path, "noxys"))
         with pytest.raises(VaultResolutionError, match="Unmapped"):
@@ -264,9 +239,7 @@ class TestMultiTenantIsolation:
         import hivepilot.config as config_mod
 
         global_vault = _vault(tmp_path, "global")
-        monkeypatch.setattr(
-            config_mod.settings, "obsidian_vault", global_vault, raising=False
-        )
+        monkeypatch.setattr(config_mod.settings, "obsidian_vault", global_vault, raising=False)
         assert (
             resolve_vault_path(
                 _project(tmp_path, "example-api"),
