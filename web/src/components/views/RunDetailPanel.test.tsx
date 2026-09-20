@@ -3,12 +3,16 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { RunDetail } from '@/lib/pollen-api'
+import { INTERACTION_THREAD } from '@/test/fixtures/interactions'
 
-const { fetchRun } = vi.hoisted(() => ({ fetchRun: vi.fn() }))
+const { fetchRun, fetchConversationThread } = vi.hoisted(() => ({
+  fetchRun: vi.fn(),
+  fetchConversationThread: vi.fn(),
+}))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchRun }
+  return { ...actual, fetchRun, fetchConversationThread }
 })
 
 import { RunDetailPanel } from './RunDetailPanel'
@@ -56,8 +60,18 @@ function mount(runId: number | null, onClose: () => void = vi.fn()) {
   })
 }
 
+async function openConversations() {
+  const tab = container.querySelector('[data-testid="run-detail-surface-conversations"]') as HTMLButtonElement
+  await act(async () => {
+    tab.click()
+    await Promise.resolve()
+  })
+}
+
 beforeEach(() => {
   fetchRun.mockReset()
+  fetchConversationThread.mockReset()
+  fetchConversationThread.mockResolvedValue(INTERACTION_THREAD)
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -202,5 +216,66 @@ describe('RunDetailPanel', () => {
     })
 
     expect(container.textContent).toContain('Étapes')
+  })
+
+  it('does not fetch the conversation until the Conversations tab is opened', async () => {
+    fetchRun.mockResolvedValue(SAMPLE_DETAIL)
+
+    await act(async () => {
+      mount(42)
+      await Promise.resolve()
+    })
+
+    expect(fetchConversationThread).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-testid="run-detail-surface-tabs"]')).not.toBeNull()
+    expect(container.textContent).toContain('plan')
+  })
+
+  it('shows the ordered actor→target fil with role attribution from the interactions fixture', async () => {
+    fetchRun.mockResolvedValue(SAMPLE_DETAIL)
+
+    await act(async () => {
+      mount(42)
+      await Promise.resolve()
+    })
+    await openConversations()
+
+    expect(fetchConversationThread).toHaveBeenCalledWith(42)
+    expect(container.textContent).toContain('Aliénor (CEO)')
+    expect(container.textContent).toContain('Gustave (Developer)')
+    expect(container.textContent).toContain('Victor (Reviewer)')
+    expect(container.textContent).toContain('ceo')
+    expect(container.textContent).toContain('developer')
+    expect(container.textContent).toContain('reviewer')
+    expect(container.querySelector('[data-testid="conversation-fil"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="message-101"]')).not.toBeNull()
+  })
+
+  it('keeps later outputs collapsed until opened', async () => {
+    fetchRun.mockResolvedValue(SAMPLE_DETAIL)
+
+    await act(async () => {
+      mount(42)
+      await Promise.resolve()
+    })
+    await openConversations()
+
+    const first = container.querySelector('[data-testid="message-101"]') as HTMLDetailsElement
+    const later = container.querySelector('[data-testid="message-103"]') as HTMLDetailsElement
+    expect(first.open).toBe(true)
+    expect(later.open).toBe(false)
+  })
+
+  it('shows an honest empty thread when the run recorded no interactions', async () => {
+    fetchRun.mockResolvedValue(SAMPLE_DETAIL)
+    fetchConversationThread.mockResolvedValue({ run_id: 42, roles: [], messages: [] })
+
+    await act(async () => {
+      mount(42)
+      await Promise.resolve()
+    })
+    await openConversations()
+
+    expect(container.textContent).toMatch(/no agent output/i)
   })
 })

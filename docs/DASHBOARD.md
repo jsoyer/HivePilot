@@ -95,6 +95,9 @@ without side effects.
 - **Launch runs asynchronously** — `POST /v1/runs` returns immediately (202) with a
   `run_id`; poll `GET /v1/runs/{run_id}` (`run` role) for its status and
   per-step results while the UI watches progress.
+- **Read a run's conversation** — from Runs (Board or History), open a run and
+  switch to **Conversations**. The thread is the stored `interactions` fil
+  (actor → target, role from `metadata.role`). It is not a fifth sidebar door.
 - **Stop / cancel a running pipeline** — halt an in-flight run.
 - **Toggle plugins on/off** — admin-gated, `POST /v1/plugins/{name}/toggle`. The
   health view can also re-enable a previously disabled plugin.

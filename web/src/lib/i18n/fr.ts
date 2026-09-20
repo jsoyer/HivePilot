@@ -476,6 +476,7 @@ export const fr: Record<TranslationKey, string> = {
   'conversations.send': 'Envoyer',
   'conversations.sent': 'Consigné',
   'conversations.failed': 'Échec de l’enregistrement',
+  'conversations.handedTo': '{actor} → {target}',
   'cache.title': 'Cache de prompt',
   'cache.description': 'Le cache s\'est-il remboursé ? La création est facturée 1,25x l\'entrée de base, une lecture 0,1x — un préfixe lu moins d\'une fois a coûté PLUS cher que sans cache.',
   'cache.median': 'Amortissement médian',
@@ -786,6 +787,9 @@ export const fr: Record<TranslationKey, string> = {
   'runDetail.loadFailed': "Échec du chargement du détail de l'exécution.",
   'runDetail.requiresTokenLead': "Le détail d'exécution nécessite un jeton de rang",
   'runDetail.requiresTokenTail': '(ou supérieur).',
+  'runDetail.surfacesLabel': 'Sections du détail d’exécution',
+  'runDetail.tabSteps': 'Étapes',
+  'runDetail.tabConversations': 'Conversations',
 
   // ---- Memory quality view (tableau de bord de qualité de la mémoire) ---------
   'quality.kpiTitle': 'Qualité de la mémoire',

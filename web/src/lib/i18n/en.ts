@@ -481,6 +481,7 @@ export const en = {
   'conversations.send': 'Send',
   'conversations.sent': 'Filed',
   'conversations.failed': 'Could not file',
+  'conversations.handedTo': '{actor} → {target}',
   'cache.title': 'Prompt cache',
   'cache.description': 'Whether the cache paid for itself. Creation is billed at 1.25x base input, a read at 0.1x — a prefix read fewer than once cost MORE than sending it uncached.',
   'cache.median': 'Median amortisation',
@@ -781,6 +782,9 @@ export const en = {
   'runDetail.loadFailed': 'Failed to load run detail.',
   'runDetail.requiresTokenLead': 'Run detail requires a',
   'runDetail.requiresTokenTail': '(or higher) token.',
+  'runDetail.surfacesLabel': 'Run detail sections',
+  'runDetail.tabSteps': 'Steps',
+  'runDetail.tabConversations': 'Conversations',
 
   // ---- Memory quality view (memory-quality dashboard) ------------------------
   'quality.kpiTitle': 'Memory quality',

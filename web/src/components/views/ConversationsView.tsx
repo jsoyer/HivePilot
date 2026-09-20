@@ -7,12 +7,12 @@ import {
   fetchConversationRuns,
   fetchConversationThread,
   replyToRole,
-  type ConversationMessage,
   type ConversationRun,
   type ConversationThread,
 } from '@/lib/pollen-api'
 import { useAsyncData } from '@/lib/use-async-data'
 import { AsyncSection } from './AsyncSection'
+import { ConversationFil } from './ConversationMessageRow'
 
 /**
  * The agents' exchanges, read as a conversation rather than as a log.
@@ -28,27 +28,6 @@ import { AsyncSection } from './AsyncSection'
  * that silently changed nothing would be worse than none — it would look like
  * it had worked.
  */
-
-function Speaker({ message }: { message: ConversationMessage }) {
-  return (
-    <div className="flex flex-col gap-1" data-testid={`message-${message.interaction_id}`}>
-      <div className="flex flex-wrap items-baseline gap-2">
-        <span className="text-sm font-semibold">{message.actor}</span>
-        {message.role && (
-          <Badge variant="outline" className="text-xs">
-            {message.role}
-          </Badge>
-        )}
-        {message.at && (
-          <span className="text-xs tabular-nums text-muted-foreground">{message.at}</span>
-        )}
-      </div>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-md bg-muted/40 p-3 text-sm">
-        {message.body}
-      </pre>
-    </div>
-  )
-}
 
 function RunList({
   runs,
@@ -197,12 +176,7 @@ function Panel({ runs }: { runs: ConversationRun[] }) {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex max-h-[55vh] flex-col gap-4 overflow-y-auto">
-            {(thread?.messages ?? []).map((m) => (
-              <Speaker key={m.interaction_id} message={m} />
-            ))}
-            {thread && thread.messages.length === 0 && (
-              <p className="text-sm text-muted-foreground">{t('conversations.emptyThread')}</p>
-            )}
+            {thread && <ConversationFil messages={thread.messages} />}
           </div>
           {roles.length > 0 && <ReplyBox roles={roles} />}
         </CardContent>

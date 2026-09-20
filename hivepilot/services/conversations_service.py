@@ -46,6 +46,7 @@ class Message:
     action: str
     body: str
     at: str | None
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,18 @@ def _role_of(raw_metadata: Any) -> str | None:
     return role.strip().lower() if isinstance(role, str) and role.strip() else None
 
 
+def _target_of(raw: Any) -> str | None:
+    """The next-stage recipient, when the row recorded one.
+
+    Empty strings are treated as absent so a fil can render ``actor`` alone
+    on the last stage (or on audit rows that never named a target).
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
 def _body(text: str | None) -> str:
     """Redacted, bounded, and honest about the cut.
 
@@ -129,6 +142,7 @@ def thread(run_id: int) -> Thread:
             action=str(row.get("action") or ""),
             body=_body(row.get("summary")),
             at=row.get("timestamp") or row.get("created_at"),
+            target=_target_of(row.get("target")),
         )
         # `list_recent_interactions` returns newest first; a conversation reads
         # the other way round.

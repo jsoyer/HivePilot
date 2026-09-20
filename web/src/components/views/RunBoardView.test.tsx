@@ -5,12 +5,15 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { RunSummary } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchRuns, createRun, cancelRun, fetchRun, fetchProjectNames, fetchTaskNames, useRoleMock } =
+import { INTERACTION_THREAD } from '@/test/fixtures/interactions'
+
+const { fetchRuns, createRun, cancelRun, fetchRun, fetchConversationThread, fetchProjectNames, fetchTaskNames, useRoleMock } =
   vi.hoisted(() => ({
     fetchRuns: vi.fn(),
     createRun: vi.fn(),
     cancelRun: vi.fn(),
     fetchRun: vi.fn(),
+    fetchConversationThread: vi.fn(),
     fetchProjectNames: vi.fn(),
     fetchTaskNames: vi.fn(),
     useRoleMock: vi.fn(),
@@ -18,7 +21,16 @@ const { fetchRuns, createRun, cancelRun, fetchRun, fetchProjectNames, fetchTaskN
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchRuns, createRun, cancelRun, fetchRun, fetchProjectNames, fetchTaskNames }
+  return {
+    ...actual,
+    fetchRuns,
+    createRun,
+    cancelRun,
+    fetchRun,
+    fetchConversationThread,
+    fetchProjectNames,
+    fetchTaskNames,
+  }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -95,6 +107,8 @@ beforeEach(() => {
   createRun.mockReset()
   cancelRun.mockReset()
   fetchRun.mockReset()
+  fetchConversationThread.mockReset()
+  fetchConversationThread.mockResolvedValue({ ...INTERACTION_THREAD, run_id: 7 })
   fetchProjectNames.mockReset()
   fetchTaskNames.mockReset()
   fetchProjectNames.mockResolvedValue(['acme-web'])
@@ -489,6 +503,35 @@ describe('RunBoardView', () => {
 
     expect(container.querySelector('[role="dialog"]')).not.toBeNull()
     expect(fetchRun).toHaveBeenCalledWith(7)
+  })
+
+  it('opens Conversations from a History row without leaving the Runs shell', async () => {
+    fetchRuns.mockResolvedValue([
+      run({ id: 7, status: 'success', finished_at: '2026-07-18T10:00:08Z' }),
+    ])
+    mockRole('run', 1)
+    await mountResolved()
+    clickTab('history')
+
+    const row = container.querySelector('[data-testid="run-history-row-7"]') as HTMLElement
+    await act(async () => {
+      row.click()
+      await Promise.resolve()
+    })
+
+    const conversations = container.querySelector(
+      '[data-testid="run-detail-surface-conversations"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      conversations.click()
+      await Promise.resolve()
+    })
+
+    expect(fetchConversationThread).toHaveBeenCalledWith(7)
+    expect(container.textContent).toContain('Aliénor (CEO)')
+    expect(container.textContent).toContain('Gustave (Developer)')
+    expect(container.querySelector('[data-testid="runs-page"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="conversation-fil"]')).not.toBeNull()
   })
 
   it('CRITICAL: submits a new run from the drawer and refreshes the board', async () => {

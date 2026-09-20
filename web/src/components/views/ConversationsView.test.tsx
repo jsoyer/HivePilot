@@ -2,7 +2,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
-import type { ConversationRunsResponse, ConversationThread } from '@/lib/pollen-api'
+import type { ConversationRunsResponse } from '@/lib/pollen-api'
+import { INTERACTION_THREAD } from '@/test/fixtures/interactions'
 
 const { fetchConversationRuns, fetchConversationThread, replyToRole } = vi.hoisted(() => ({
   fetchConversationRuns: vi.fn(),
@@ -39,28 +40,7 @@ const RUNS: ConversationRunsResponse = {
   ],
 }
 
-const THREAD: ConversationThread = {
-  run_id: 538,
-  roles: ['developer', 'reviewer'],
-  messages: [
-    {
-      interaction_id: 1,
-      actor: 'Gustave (Developer)',
-      role: 'developer',
-      action: 'completed stage',
-      body: 'Implemented mdstat with 38 tests.',
-      at: '2026-08-13T20:06:00',
-    },
-    {
-      interaction_id: 2,
-      actor: 'Victor (Reviewer)',
-      role: 'reviewer',
-      action: 'completed stage',
-      body: 'status: REQUEST_CHANGES\nThe grant path never checks isAdmin.',
-      at: '2026-08-13T20:09:00',
-    },
-  ],
-}
+const THREAD = { ...INTERACTION_THREAD, run_id: 538 }
 
 /** Set a controlled field's value the way React will notice.
  *

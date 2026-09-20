@@ -2270,7 +2270,12 @@ export function fetchMemoryBackends(days = 30): Promise<MemoryBackendsResponse> 
   return apiFetch<MemoryBackendsResponse>(`/v1/memory/backends?days=${days}`)
 }
 
-/** One agent's turn in a run's conversation. */
+/** One agent's turn in a run's conversation.
+ *
+ * `role` is the machine key from `interactions.metadata.role` (never parsed
+ * from the display `actor`). `target` is the next-stage recipient from the
+ * `interactions.target` column — absent on the last stage and on audit rows.
+ */
 export interface ConversationMessage {
   interaction_id: number
   actor: string
@@ -2278,6 +2283,7 @@ export interface ConversationMessage {
   action: string
   body: string
   at: string | null
+  target: string | null
 }
 
 export interface ConversationThread {

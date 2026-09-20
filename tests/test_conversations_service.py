@@ -23,19 +23,20 @@ def runs(tmp_path, monkeypatch):
     from hivepilot.services import state_service
 
     first = state_service.record_run_start(project="noxys", task="noxys")
-    for actor, role, summary in (
-        ("Aliénor (CEO)", "ceo", "Objective: ship the metrics table."),
-        ("Gustave (Developer)", "developer", "Implemented mdstat with tests."),
+    for actor, role, target, summary in (
+        ("Aliénor (CEO)", "ceo", "Gustave (Developer)", "Objective: ship the metrics table."),
+        ("Gustave (Developer)", "developer", "Victor (Reviewer)", "Implemented mdstat with tests."),
         (
             "Victor (Reviewer)",
             "reviewer",
+            None,
             "status: REQUEST_CHANGES\nThe grant path never checks isAdmin.",
         ),
     ):
         state_service.record_interaction(
             actor=actor,
             action="completed stage",
-            target=None,
+            target=target,
             summary=summary,
             run_id=first,
             metadata={"pipeline": "noxys", "role": role},
@@ -71,6 +72,19 @@ class TestTheThreadReadsAsAConversation:
         assert message.actor == "Victor (Reviewer)"
         assert message.role == "reviewer"
         assert "never checks isAdmin" in message.body
+
+    def test_each_turn_names_actor_and_target(self, runs):
+        """The fil is actor→target, with role from metadata — never parsed from actor."""
+        from hivepilot.services import conversations_service
+
+        first, _ = runs
+        thread = conversations_service.thread(first)
+
+        assert [(m.actor, m.target, m.role) for m in thread.messages] == [
+            ("Aliénor (CEO)", "Gustave (Developer)", "ceo"),
+            ("Gustave (Developer)", "Victor (Reviewer)", "developer"),
+            ("Victor (Reviewer)", None, "reviewer"),
+        ]
 
     def test_an_unknown_run_is_an_empty_thread_not_an_error(self, runs):
         """A Pollen view must not 500 because a run id went stale."""
