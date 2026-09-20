@@ -23,5 +23,7 @@ The fil is `GET /v1/conversations/{run_id}`: oldest-first actor→target turns, 
 
 ## Testing
 
-- [ ] `cd web && npm test -- src/components/views/RunDetailPanel.test.tsx src/components/views/ConversationMessageRow.test.tsx src/components/views/RunBoardView.test.tsx src/components/views/ConversationsView.test.tsx`
-- [ ] `pytest tests/test_conversations_service.py -q`
+- [x] `cd web && npm test -- src/components/views/RunDetailPanel.test.tsx src/components/views/ConversationMessageRow.test.tsx src/components/views/RunBoardView.test.tsx src/components/views/ConversationsView.test.tsx` — 60 passed
+- [x] `pytest tests/test_conversations_service.py -q` — 13 passed
+- [x] `cd web && npm test -- src/components/Pollen.test.tsx src/lib/i18n/en.test.ts src/lib/i18n/fr.test.ts` — 25 passed
+- [x] Browser: Runs → History → run #2 → Conversations shows actor→target fil with role badges and collapsible outputs. Sidebar stays Inbox · Approvals · Runs · Alerts.
