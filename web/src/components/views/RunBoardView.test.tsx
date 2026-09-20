@@ -5,20 +5,43 @@ import { LANG_STORAGE_KEY, LanguageProvider } from '@/lib/i18n'
 import type { RunSummary } from '@/lib/pollen-api'
 import type { Role } from '@/lib/role-context'
 
-const { fetchRuns, createRun, cancelRun, fetchRun, fetchProjectNames, fetchTaskNames, useRoleMock } =
-  vi.hoisted(() => ({
-    fetchRuns: vi.fn(),
-    createRun: vi.fn(),
-    cancelRun: vi.fn(),
-    fetchRun: vi.fn(),
-    fetchProjectNames: vi.fn(),
-    fetchTaskNames: vi.fn(),
-    useRoleMock: vi.fn(),
-  }))
+import { INTERACTION_RUNS, INTERACTION_THREAD } from '@/test/fixtures/interactions'
+
+const {
+  fetchRuns,
+  createRun,
+  cancelRun,
+  fetchRun,
+  fetchConversationRuns,
+  fetchConversationThread,
+  fetchProjectNames,
+  fetchTaskNames,
+  useRoleMock,
+} = vi.hoisted(() => ({
+  fetchRuns: vi.fn(),
+  createRun: vi.fn(),
+  cancelRun: vi.fn(),
+  fetchRun: vi.fn(),
+  fetchConversationRuns: vi.fn(),
+  fetchConversationThread: vi.fn(),
+  fetchProjectNames: vi.fn(),
+  fetchTaskNames: vi.fn(),
+  useRoleMock: vi.fn(),
+}))
 
 vi.mock('@/lib/pollen-api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pollen-api')>()
-  return { ...actual, fetchRuns, createRun, cancelRun, fetchRun, fetchProjectNames, fetchTaskNames }
+  return {
+    ...actual,
+    fetchRuns,
+    createRun,
+    cancelRun,
+    fetchRun,
+    fetchConversationRuns,
+    fetchConversationThread,
+    fetchProjectNames,
+    fetchTaskNames,
+  }
 })
 
 vi.mock('@/lib/role-context', async (importOriginal) => {
@@ -83,7 +106,7 @@ async function mountResolved() {
   })
 }
 
-function clickTab(name: 'board' | 'history') {
+function clickTab(name: 'board' | 'history' | 'conversations') {
   act(() => {
     ;(container.querySelector(`[data-testid="runs-surface-${name}"]`) as HTMLButtonElement).click()
   })
@@ -95,6 +118,10 @@ beforeEach(() => {
   createRun.mockReset()
   cancelRun.mockReset()
   fetchRun.mockReset()
+  fetchConversationRuns.mockReset()
+  fetchConversationRuns.mockResolvedValue(INTERACTION_RUNS)
+  fetchConversationThread.mockReset()
+  fetchConversationThread.mockResolvedValue(INTERACTION_THREAD)
   fetchProjectNames.mockReset()
   fetchTaskNames.mockReset()
   fetchProjectNames.mockResolvedValue(['acme-web'])
@@ -489,6 +516,28 @@ describe('RunBoardView', () => {
 
     expect(container.querySelector('[role="dialog"]')).not.toBeNull()
     expect(fetchRun).toHaveBeenCalledWith(7)
+  })
+
+  it('opens Conversations as a Runs surface, not a fifth door or run-detail tab', async () => {
+    fetchRuns.mockResolvedValue([run({ id: 7 })])
+    mockRole('run', 1)
+    await mountResolved()
+    clickTab('conversations')
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector('[data-testid="runs-surface-conversations"]')?.getAttribute('aria-selected')).toBe(
+      'true',
+    )
+    expect(container.querySelector('[data-testid="runs-conversations"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="conversation-fil"]')).not.toBeNull()
+    expect(fetchConversationRuns).toHaveBeenCalled()
+    expect(fetchConversationThread).toHaveBeenCalledWith(42)
+    expect(container.textContent).toContain('Aliénor')
+    expect(container.textContent).toContain('Gustave')
+    expect(container.querySelector('[data-testid="run-detail-surface-conversations"]')).toBeNull()
+    expect(container.querySelector('[data-testid="runs-page"]')).not.toBeNull()
   })
 
   it('CRITICAL: submits a new run from the drawer and refreshes the board', async () => {

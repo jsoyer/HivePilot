@@ -18,7 +18,7 @@ export const NAV_GROUP_ORDER: { label: string; values: readonly string[] }[] = [
   { label: 'nav.memory', values: ['memory'] },
   {
     label: 'nav.system',
-    values: ['health', 'plugins', 'mcp', 'integrations', 'cache', 'agents', 'studio', 'conversations', 'graph'],
+    values: ['health', 'plugins', 'mcp', 'integrations', 'cache', 'agents', 'studio', 'graph'],
   },
 ]
 

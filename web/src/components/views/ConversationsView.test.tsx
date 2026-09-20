@@ -2,7 +2,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LanguageProvider } from '@/lib/i18n'
-import type { ConversationRunsResponse, ConversationThread } from '@/lib/pollen-api'
+import type { ConversationRunsResponse } from '@/lib/pollen-api'
+import { INTERACTION_THREAD } from '@/test/fixtures/interactions'
 
 const { fetchConversationRuns, fetchConversationThread, replyToRole } = vi.hoisted(() => ({
   fetchConversationRuns: vi.fn(),
@@ -39,28 +40,7 @@ const RUNS: ConversationRunsResponse = {
   ],
 }
 
-const THREAD: ConversationThread = {
-  run_id: 538,
-  roles: ['developer', 'reviewer'],
-  messages: [
-    {
-      interaction_id: 1,
-      actor: 'Gustave (Developer)',
-      role: 'developer',
-      action: 'completed stage',
-      body: 'Implemented mdstat with 38 tests.',
-      at: '2026-08-13T20:06:00',
-    },
-    {
-      interaction_id: 2,
-      actor: 'Victor (Reviewer)',
-      role: 'reviewer',
-      action: 'completed stage',
-      body: 'status: REQUEST_CHANGES\nThe grant path never checks isAdmin.',
-      at: '2026-08-13T20:09:00',
-    },
-  ],
-}
+const THREAD = { ...INTERACTION_THREAD, run_id: 538 }
 
 /** Set a controlled field's value the way React will notice.
  *
@@ -119,13 +99,21 @@ describe('ConversationsView', () => {
     // a conversation.
     await mount()
 
-    expect(container.textContent).toContain('Gustave (Developer)')
-    expect(container.textContent).toContain('Victor (Reviewer)')
+    expect(container.textContent).toContain('Gustave')
+    expect(container.textContent).toContain('Victor')
+    expect(container.querySelector('[data-testid="role-badge-developer"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="role-badge-reviewer"]')).not.toBeNull()
   })
 
-  it('shows what was actually said, not just that a stage completed', async () => {
+  it('shows what was actually said only after expand — outputs start collapsed', async () => {
     await mount()
 
+    expect(container.querySelector('[data-testid="message-output-103"]')).toBeNull()
+    await act(async () => {
+      container.querySelector('[data-testid="message-summary-103"]')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      )
+    })
     expect(container.textContent).toContain('never checks isAdmin')
   })
 

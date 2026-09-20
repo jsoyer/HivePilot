@@ -2621,6 +2621,7 @@ def conversations_thread(
                 "action": m.action,
                 "body": m.body,
                 "at": m.at,
+                "target": m.target,
             }
             for m in found.messages
         ],
