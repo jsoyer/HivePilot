@@ -1259,3 +1259,113 @@ class TasksFile(BaseModel):
 
 class PipelinesFile(BaseModel):
     pipelines: dict[str, PipelineConfig] = Field(default_factory=dict)
+
+
+class NamedVault(BaseModel):
+    """A named Obsidian vault in ``vault_routes.yaml`` (HP-121).
+
+    ``path`` is operator-local config (absolute after ``~`` expansion). The
+    engine never ships a Mac home directory. ``repo`` is identity only — it
+    is not cloned here.
+    """
+
+    repo: str | None = None
+    path: Path | None = None
+
+    @field_validator("repo", mode="before")
+    @classmethod
+    def _strip_repo(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        text = str(v).strip()
+        return text or None
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def validate_named_vault_path(cls, v: object) -> Path | None:
+        """Same fail-closed path rules as ``ProjectConfig.obsidian_vault``.
+
+        Empty / whitespace → reject (never "use the global"). Relative →
+        reject (cwd-silo). ``None`` / omitted means "path comes from
+        ``HIVEPILOT_VAULT_<ID>`` at resolve time".
+        """
+        if v is None:
+            return None
+        text = str(v).strip()
+        if not text:
+            raise ValueError(
+                "NamedVault.path must not be empty — omit the key to take the "
+                "path from HIVEPILOT_VAULT_<ID>, or set an absolute path."
+            )
+        path = Path(text).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"NamedVault.path = {text!r} must be an absolute path "
+                "(or start with '~/'). A relative vault path resolves against "
+                "the daemon's current working directory."
+            )
+        return path.resolve()
+
+
+class VaultRoutesFile(BaseModel):
+    """Mapping table: ``project_id`` / ``tenant`` → named vault (HP-121).
+
+    Active when ``by_project`` or ``by_tenant`` is non-empty. An active table
+    is fail-closed: unmapped and ambiguous lookups raise rather than falling
+    back to ``HIVEPILOT_OBSIDIAN_VAULT``. See
+    ``docs/adr/2026-09-20-vault-routing-per-project.md``.
+    """
+
+    vaults: dict[str, NamedVault] = Field(default_factory=dict)
+    by_project: dict[str, str] = Field(default_factory=dict)
+    by_tenant: dict[str, str] = Field(default_factory=dict)
+
+    def is_active(self) -> bool:
+        return bool(self.by_project or self.by_tenant)
+
+    @field_validator("vaults")
+    @classmethod
+    def _vault_ids_must_be_names(cls, value: dict[str, NamedVault]) -> dict[str, NamedVault]:
+        cleaned: dict[str, NamedVault] = {}
+        for raw_id, spec in value.items():
+            vault_id = str(raw_id).strip()
+            if not vault_id:
+                raise ValueError("vaults: keys must be non-empty vault ids")
+            cleaned[vault_id] = spec
+        return cleaned
+
+    @field_validator("by_project", "by_tenant")
+    @classmethod
+    def _route_keys_must_be_names(cls, value: dict[str, str]) -> dict[str, str]:
+        cleaned: dict[str, str] = {}
+        for raw_key, raw_vault in value.items():
+            key = str(raw_key).strip()
+            vault_id = str(raw_vault).strip()
+            if not key:
+                raise ValueError("route keys must be non-empty project_id or tenant values")
+            if not vault_id:
+                raise ValueError(
+                    f"route {key!r} maps to an empty vault id — that is unmapped, "
+                    "not a global fallback"
+                )
+            cleaned[key] = vault_id
+        return cleaned
+
+    @model_validator(mode="after")
+    def routes_must_name_declared_vaults(self) -> VaultRoutesFile:
+        known = set(self.vaults)
+        if (self.by_project or self.by_tenant) and not known:
+            raise ValueError(
+                "by_project / by_tenant require a non-empty vaults: map so each "
+                "route names a declared vault"
+            )
+        for source, mapping in (
+            ("by_project", self.by_project),
+            ("by_tenant", self.by_tenant),
+        ):
+            unknown = sorted({vault_id for vault_id in mapping.values() if vault_id not in known})
+            if unknown:
+                raise ValueError(
+                    f"{source} names unknown vault(s) {unknown}; declared vaults: {sorted(known)}"
+                )
+        return self

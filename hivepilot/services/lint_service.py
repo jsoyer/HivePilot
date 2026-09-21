@@ -3,9 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+from pydantic import ValidationError
+
 from hivepilot.models import TaskConfig
 from hivepilot.registry import RunnerRegistry
 from hivepilot.services.project_service import load_pipelines, load_projects, load_tasks
+from hivepilot.services.vault_routes import VaultRouteError, load_vault_routes
 from hivepilot.tool_catalog import lint_catalog
 from hivepilot.utils.logging import get_logger
 
@@ -49,8 +52,18 @@ def lint_configuration() -> List[str]:
             errors.append(f"Project '{name}' path does not exist: {project.path}")
 
     errors.extend(lint_catalog())
+    errors.extend(_lint_vault_routes())
 
     return errors
+
+
+def _lint_vault_routes() -> List[str]:
+    """Load-time validation for ``vault_routes.yaml`` when the file exists."""
+    try:
+        load_vault_routes()
+    except (VaultRouteError, ValueError, ValidationError) as exc:
+        return [f"vault_routes.yaml: {exc}"]
+    return []
 
 
 def _lint_task(name: str, task: TaskConfig) -> List[str]:

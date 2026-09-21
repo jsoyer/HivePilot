@@ -4625,18 +4625,14 @@ class Orchestrator:
 
         # Resolve vault path — None means artifact writes are silent no-ops.
         #
-        # Per-project-vault PRD: a target project may override the destination
-        # via `obsidian_vault:` in projects.yaml (HivePilot's own work -> a
-        # personal vault, a product pipeline's work -> the project vault). The
-        # global `settings.obsidian_vault` expression below is passed in as the
-        # FALLBACK, unchanged, so a run whose projects declare no override
-        # resolves byte-identically to before this PRD. Resolved here, up
-        # front, before any stage executes: an unusable or divergent
-        # destination must fail loudly rather than silently write a project's
-        # work into the wrong vault (see
-        # `hivepilot.services.obsidian_vault_resolver`).
+        # Per-project-vault PRD + HP-121: destination is the vault_routes.yaml
+        # mapping (project_id / tenant) when that table is active — fail-closed,
+        # no silent global fallback. Otherwise a target may override via
+        # `obsidian_vault:` in projects.yaml, and the global
+        # `settings.obsidian_vault` expression below is the inactive-table
+        # fallback. Resolved here, up front, before any stage executes.
         vault_path = resolve_vault_for_projects(
-            [p for p in (self.projects.projects.get(n) for n in project_names) if p is not None],
+            {n: p for n in project_names if (p := self.projects.projects.get(n)) is not None},
             settings.obsidian_vault if settings.obsidian_vault.exists() else None,
         )
 
@@ -6317,6 +6313,7 @@ class Orchestrator:
         vault_path = resolve_vault_path(
             project,
             settings.obsidian_vault if settings.obsidian_vault.exists() else None,
+            project_id=project_name,
         )
 
         positions: list[Position] = []

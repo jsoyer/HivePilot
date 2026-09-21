@@ -1,42 +1,38 @@
 ## Summary
 
-HP-120 — Pollen install/update of agent binaries, box only, HITL. The CLI
-(`agents list/versions/install`) and the Pollen Health card already existed.
-This slice puts **update** and **read-remote-version** on the registry as
-nullable fields, records **who / binary / version before+after**, and keeps
-the interactive TTY guard intact: Pollen replaces it with recorded outward
-consent (`{"consent": true}`), never a silent bypass.
+HP-121 — per-project / per-tenant Obsidian vault routing. `obsidian_vault` stays a machine-wide default, but an explicit **mapping table** (`vault_routes.yaml`) is now the CoS routing SSOT when several tenants share one host: HivePilot work → Jsoyer vault, Noxys pipelines → Noxys vault.
 
-Owning issue: [HP-120](https://linear.app/js-workspace/issue/HP-120/r2-pollen-installupdate-agent-binaries-box-only-hitl)
+Owning issue: [HP-121](https://linear.app/js-workspace/issue/HP-121/r4-vault-routing-per-project-jsoyer-vs-noxys)
 
-Replay: `hivepilot agents list` / Pollen → Health → Agent CLI binaries (admin)
+ADR: [`docs/adr/2026-09-20-vault-routing-per-project.md`](docs/adr/2026-09-20-vault-routing-per-project.md)
+
+Replay: `hivepilot lint` (loads `vault_routes.yaml` when present)
 
 ## Acceptance
 
-1. **Registry** — `InstallSpec.update_command` and `InstallSpec.read_remote_version` are nullable argv tuples. Update argv for grok/claude/codex/cursor is the 2026-08-22 --help probe. `read_remote_version` is undeclared until a command is verified (no guessed `npm view`).
-2. **Pollen** — Install/update buttons only when the capability is declared. Check-remote only when `has_remote_version`. Body is `{consent: true}` only; `extra="forbid"` rejects a URL/command from the UI. No run/orchestrator path calls `perform_agent_action`.
-3. **Audit** — who, binary, version before and after. Installed version now reads `AgentCliProbe.version` (the old `installed` getattr was always None).
-4. **Box only** — local subprocess of registry constants. No remote/cloud install path.
+1. **ADR (Accepted, CoS reco)** — alternatives recorded (global only, per-project override + global fallback, opaque plugin). Decision: mapping table, not a plugin.
+2. **Mapping keys** — `by_project` (`project_id`) and `by_tenant` (`tenant`) → named vault id. Canonical ids: `jsoyer` ([github.com/jsoyer/obsidian-vault](https://github.com/jsoyer/obsidian-vault)), `noxys` (no published in-repo filesystem path; set `vaults.noxys.path` or `HIVEPILOT_VAULT_NOXYS`).
+3. **Fail-closed** — while the table is active, unmapped or ambiguous lookups raise `VaultResolutionError`. No silent `HIVEPILOT_OBSIDIAN_VAULT` fallback. Project vs tenant disagreement, and table vs `obsidian_vault:` disagreement, refuse rather than pick a winner.
+4. **Inactive table** — missing file or empty route maps keep the pre-HP-121 resolver (OSS example-api still inherits the global vault).
+5. **Isolation tests** — Jsoyer and Noxys never cross-write; unmapped does not hit the global vault.
 
 ## What changed
 
-1. **`InstallSpec`** — `update_command` / `read_remote_version` + `probe_remote_version`.
-2. **`agent_admin`** — update argv from the spec; audit includes `binary`; GET remote-version is opt-in and refused when undeclared. Listing stays offline.
-3. **API** — `GET /v1/agents/{kind}/remote-version` (admin). `AgentActionRequest` forbids extra fields.
-4. **Pollen Health card** — Check remote only if declared.
-5. **CLI** — `agents versions --check-latest` prefers a declared registry probe, else npm.
+1. **`vault_routes.yaml`** — optional config surface + `examples/vault_routes.yaml`.
+2. **`hivepilot/services/vault_routes.py`** — load + fail-closed lookup.
+3. **`obsidian_vault_resolver`** — consults the table; orchestrator / plugin / prompt vars pass `project_id` (and tenant when present).
+4. **Lint / doctor** — validate the file; shared-vault finding names the table.
 
 ## Out of scope
 
-- HP-126–128 ops
 - Telegram 4-door cutover
-- Triggering install/update from a run pipeline
-- Inventing unverified remote-version argv
+- HP-126–128 ops
+- Inventing a Noxys checkout path
+- Hardcoded Mac home directories
 
 ## Testing
 
-- [x] `pytest tests/test_agent_install.py tests/test_agent_admin.py tests/test_cli_agents.py tests/test_agent_auth.py -q` — 102 passed
-- [x] `pytest tests/test_api_service.py::TestAgentAdminEndpoints tests/test_api_service.py::TestAgentLoginEndpoint -q` — 10 passed
-- [x] `cd web && npm test -- src/components/views/AgentBinariesCard.test.tsx src/components/views/HealthView.test.tsx` — 48 passed
+- [x] `pytest tests/test_vault_routes.py tests/test_obsidian_vault_resolver.py tests/test_per_project_vault.py tests/test_config_doctor.py::TestSharedObsidianVaultLimitation -q` — 69 passed
+- [x] `_lint_vault_routes()` — clean (no in-repo table file; example parses in tests)
 - [x] `ruff check` + `ruff format --check` clean on touched Python
-- [x] `npm run build` — Pollen static bundle rebuilt into `hivepilot/webui/static/`
+- [x] `hivepilot lint` — no vault_routes errors (example project paths missing, pre-existing)

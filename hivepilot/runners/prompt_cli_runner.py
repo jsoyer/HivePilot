@@ -105,7 +105,12 @@ class PromptCliRunner(BaseRunner):
 
         raw = prompt_path.read_text(encoding="utf-8").strip()
         target_repo = str(payload.project.path) if payload.project.path else "."
-        obsidian_vault = resolve_prompt_vault(self.settings, payload.project)
+        obsidian_vault = resolve_prompt_vault(
+            self.settings,
+            payload.project,
+            project_id=payload.project_name,
+            tenant=(payload.metadata or {}).get("tenant"),
+        )
         return render_prompt_vars(
             raw,
             target_repo=target_repo,
