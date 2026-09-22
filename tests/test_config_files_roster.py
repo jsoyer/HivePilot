@@ -76,6 +76,12 @@ class TestEveryDeclaredConfigFileIsAccountedFor:
             "neither is how vault.yaml silently ran on engine defaults."
         )
 
+    def test_vault_routes_yaml_is_synced(self) -> None:
+        """HP-121: the mapping table is operator config, not a secret. Absent
+        from CONFIG_FILES a shipped vault_routes.yaml never leaves the config
+        repo and every project keeps the global vault."""
+        assert "vault_routes.yaml" in CONFIG_FILES
+
     def test_vault_yaml_is_synced(self) -> None:
         """The specific regression. Kept as its own case so the failure message
         names the file rather than a diff of two sets."""
