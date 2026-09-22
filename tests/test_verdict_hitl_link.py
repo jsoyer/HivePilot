@@ -7,6 +7,8 @@ doctor findings: « décisions sans verdict » and « verdicts sans décision »
 
 from __future__ import annotations
 
+from typing import cast
+
 from hivepilot.orchestrator import Orchestrator, RunResult
 from hivepilot.services import state_service, verdict_hitl
 from hivepilot.services.doctor_liveness import check_verdict_hitl_join
@@ -188,8 +190,12 @@ class TestApproveRunWritesTheLink:
                 return RunResult("demo", "ship", approve)
 
         orch = _Deny()
-        _Deny.approve_run = Orchestrator.approve_run  # type: ignore[attr-defined]
-        result = orch.approve_run(run_id=run, approve=False, approver="alice")
+        result = Orchestrator.approve_run(
+            cast(Orchestrator, orch),
+            run_id=run,
+            approve=False,
+            approver="alice",
+        )
 
         assert result.success is False
         traced = verdict_hitl.trace_hitl_decision(run, "deploy", "ap-deploy")

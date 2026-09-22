@@ -1048,8 +1048,7 @@ def init_db() -> None:
             """
         )
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_verdict_hitl_verdict "
-            "ON verdict_hitl_links (verdict_id)"
+            "CREATE INDEX IF NOT EXISTS idx_verdict_hitl_verdict ON verdict_hitl_links (verdict_id)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "

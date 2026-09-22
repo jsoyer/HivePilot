@@ -2,7 +2,8 @@
   "components": {
     "schemas": {
       "AgentActionRequest": {
-        "description": "`consent` is the button's signature on the decision \u2014 the\nnon-interactive replacement for `agent_install.py`'s TTY \"yes\". It must be\nEXPLICITLY true; absent-means-no is the only safe default for a field that\nauthorises running a vendor's install pipeline.",
+        "additionalProperties": false,
+        "description": "`consent` is the button's signature on the decision \u2014 the\nnon-interactive replacement for `agent_install.py`'s TTY \"yes\". It must be\nEXPLICITLY true; absent-means-no is the only safe default for a field that\nauthorises running a vendor's install pipeline.\n\nExtra fields are forbidden: a URL or command in the body must never\nreach the service. Only registry constants execute.",
         "properties": {
           "consent": {
             "default": false,

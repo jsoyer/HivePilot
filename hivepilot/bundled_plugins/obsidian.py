@@ -140,9 +140,7 @@ def _resolve_vault(payload: Any = None, vault_path: Any = None) -> Path | None:
         raw_tenant = metadata.get("tenant")
         tenant = str(raw_tenant) if raw_tenant else None
     try:
-        return resolve_vault_path(
-            project, _global_vault(), project_id=project_id, tenant=tenant
-        )
+        return resolve_vault_path(project, _global_vault(), project_id=project_id, tenant=tenant)
     except VaultResolutionError as exc:
         logger.warning("plugin.obsidian.vault_unresolvable", error=str(exc))
         return None

@@ -1061,7 +1061,7 @@ async def _cmd_mention(update: Any, context: Any) -> None:
     )
     _challenge_composite_key = _challenge_key(chat_id, thread_id, door=inbound_door)
     if _challenge_composite_key in _pending_challenges:
-        pending_key: int | tuple[int, int] | None = _challenge_composite_key
+        pending_key: int | tuple[int, int] | tuple[int, str] | None = _challenge_composite_key
     elif chat_id in _pending_challenges:
         pending_key = chat_id
     else:
@@ -2369,7 +2369,9 @@ def _shared_handler(handler: Any, doors: tuple[str, ...] | None) -> Any:
 
     bound.__name__ = getattr(handler, "__name__", "bound")
     bound.__qualname__ = getattr(handler, "__qualname__", "bound")
-    bound.__wrapped__ = handler
+    # `__wrapped__` is not on a plain function's type; setattr keeps the
+    # functools convention without a false attr-defined error.
+    setattr(bound, "__wrapped__", handler)
     return bound
 
 
