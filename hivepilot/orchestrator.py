@@ -77,6 +77,7 @@ from hivepilot.services import (
     review_context,
     scan_service,
     state_service,
+    verdict_hitl,
 )
 from hivepilot.services import (
     context_budget as context_budget_service,
@@ -5499,14 +5500,26 @@ class Orchestrator:
             )
             raise ValueError(f"Run {run_id} is not pending approval.")
         metadata = json.loads(approval.get("metadata") or "{}")
+        # Snapshot before dispatch. A resumed pipeline may record new
+        # verdicts; those were not what the human consumed.
+        consumed_verdict_id = verdict_hitl.resolve_consumed_verdict_id(run_id)
         if metadata.get("kind") == "partition_ratify":
-            return self._approve_partition_ratify(
+            result = self._approve_partition_ratify(
                 run_id=run_id,
                 metadata=metadata,
                 approve=approve,
                 approver=approver,
                 reason=reason,
             )
+            # HP-122: the decision is already stored. Linking the verdict it
+            # consumed is bookkeeping and must not change this result.
+            verdict_hitl.link_approval_decision(
+                run_id,
+                actor=approver,
+                verdict_id=consumed_verdict_id,
+                resolve=False,
+            )
+            return result
         route = "pipeline_checkpoint" if metadata.get("kind") == "pipeline_checkpoint" else "task"
         logger.info(
             "approval.dispatch",
@@ -5520,10 +5533,11 @@ class Orchestrator:
         )
         try:
             if route == "pipeline_checkpoint":
-                return self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
-            return self.run_approved(
-                run_id=run_id, approve=approve, approver=approver, reason=reason
-            )
+                result = self.resume_pipeline(run_id=run_id, approve=approve, approver=approver)
+            else:
+                result = self.run_approved(
+                    run_id=run_id, approve=approve, approver=approver, reason=reason
+                )
         except Exception as exc:  # noqa: BLE001 — logged with full routing context, then re-raised
             logger.error(
                 "approval.dispatch_failed",
@@ -5533,6 +5547,13 @@ class Orchestrator:
                 error=str(exc),
             )
             raise
+        verdict_hitl.link_approval_decision(
+            run_id,
+            actor=approver,
+            verdict_id=consumed_verdict_id,
+            resolve=False,
+        )
+        return result
 
     def _approve_partition_ratify(
         self,
