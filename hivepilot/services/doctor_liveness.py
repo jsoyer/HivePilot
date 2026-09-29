@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hivepilot.config import settings
+from hivepilot.services import verdict_hitl
 from hivepilot.services.telegram_doors import telegram_multi_token_mode
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -833,4 +834,89 @@ def check_lessons_learn() -> list[DoctorFinding]:
             )
         )
 
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# HP-122 — a human decision and the verdict it consumed
+# ---------------------------------------------------------------------------
+
+_CHECK_DECISIONS_SANS_VERDICT = "décisions sans verdict"
+_CHECK_VERDICTS_SANS_DECISION = "verdicts sans décision"
+
+
+def _sample(parts: list[str], limit: int = 5) -> str:
+    shown = parts[:limit]
+    extra = len(parts) - len(shown)
+    text = "; ".join(shown)
+    if extra > 0:
+        text = f"{text}; +{extra} more"
+    return text
+
+
+def check_verdict_hitl_join() -> list[DoctorFinding]:
+    """Report human decisions with no verdict, and verdicts with no decision.
+
+    The inferred ``pipeline_run_id`` join stays empty when a review and a
+    human gate never share a run. These two findings are that gap, counted
+    from the explicit ``verdict_hitl_links`` table. Silent when both sides
+    are empty or fully joined — a fresh install is not a broken join.
+    """
+    try:
+        decisions = verdict_hitl.decisions_without_verdict()
+        verdicts = verdict_hitl.verdicts_without_decision()
+    except Exception as exc:  # noqa: BLE001 - a doctor check must never raise
+        return [
+            _mk(
+                "warning",
+                "verdict_hitl_join",
+                f"verdict/decision join could not be read ({type(exc).__name__})",
+                "The measurement is the join. A check that raises discards it "
+                "and every later check in the same doctor run.",
+                "Open the state DB and confirm `verdicts` and `verdict_hitl_links` exist.",
+            )
+        ]
+
+    findings: list[DoctorFinding] = []
+    if decisions:
+        sample = _sample(
+            [
+                f"run {row['run_id']} step {row['step']} approval {row['approval_id']}"
+                for row in decisions
+            ]
+        )
+        findings.append(
+            _mk(
+                "warning",
+                _CHECK_DECISIONS_SANS_VERDICT,
+                f"décisions sans verdict: {len(decisions)} ({sample})",
+                "A human approve/reject/edit that consumed no verdict cannot be "
+                "joined back to the pipeline gate. Counting that as agreement, "
+                "or as an empty table, invites an autonomy decision on a gap.",
+                "Inspect `verdict_hitl_links` for a NULL verdict_id, and "
+                "`approvals` for a terminal row with no link. The run recorded "
+                "no verdict before the human acted.",
+            )
+        )
+    if verdicts:
+        sample = _sample(
+            [
+                f"verdict {row['id']} run {row['pipeline_run_id'] or row['run_id']} "
+                f"{row['kind']}={row['decision']}"
+                for row in verdicts
+            ]
+        )
+        findings.append(
+            _mk(
+                "warning",
+                _CHECK_VERDICTS_SANS_DECISION,
+                f"verdicts sans décision: {len(verdicts)} ({sample})",
+                "A verdict no human approve/reject/edit consumed is invisible to "
+                "the agreement measurement. Reviews and gates that never share "
+                "a run show up here instead of as a fake 0% rate.",
+                "The next human decision on that run records the link in "
+                "`verdict_hitl_links`. Historical verdicts stay unlinked until "
+                "a decision consumes them.",
+            )
+        )
     return findings

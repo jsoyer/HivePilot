@@ -146,6 +146,9 @@ export interface components {
          *     non-interactive replacement for `agent_install.py`'s TTY "yes". It must be
          *     EXPLICITLY true; absent-means-no is the only safe default for a field that
          *     authorises running a vendor's install pipeline.
+         *
+         *     Extra fields are forbidden: a URL or command in the body must never
+         *     reach the service. Only registry constants execute.
          */
         AgentActionRequest: {
             /**

@@ -1027,6 +1027,29 @@ def init_db() -> None:
         # Additive JSON text; existing debate/review rows stay NULL.
         _add_column_if_missing(conn, "verdicts", "findings_json TEXT")
         _add_column_if_missing(conn, "verdicts", "block_if_json TEXT")
+        # HP-122 — explicit observability join from a human HITL decision
+        # (approve / reject / edit) to the verdict that decision consumed.
+        # `agreement_rows` still joins on `pipeline_run_id`, which is empty
+        # whenever the review and the approval never shared a run. This table
+        # does not store PASS proposals (HP-97/101).
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS verdict_hitl_links (
+                id {pk},
+                run_id INTEGER NOT NULL,
+                step TEXT NOT NULL,
+                approval_id TEXT NOT NULL,
+                verdict_id INTEGER,
+                decision TEXT NOT NULL,
+                actor TEXT,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (run_id, step, approval_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_verdict_hitl_verdict ON verdict_hitl_links (verdict_id)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_agent_telemetry_lookup "
             "ON agent_telemetry (metric, session_id, recorded_at)"

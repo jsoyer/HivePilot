@@ -8,6 +8,7 @@ Jsoyer work and Noxys work must not land in each other's vault.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -90,11 +91,11 @@ class TestVaultRoutesFile:
 
     def test_relative_named_path_is_rejected_at_load(self) -> None:
         with pytest.raises(ValidationError, match="absolute"):
-            NamedVault(path="obsidian-vault")
+            NamedVault(path=cast(Any, "obsidian-vault"))
 
     def test_empty_named_path_is_rejected_at_load(self) -> None:
         with pytest.raises(ValidationError, match="empty"):
-            NamedVault(path="   ")
+            NamedVault(path=cast(Any, "   "))
 
     def test_missing_file_loads_as_inactive(self, tmp_path: Path) -> None:
         assert load_vault_routes(tmp_path / "absent.yaml").is_active() is False

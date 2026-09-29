@@ -44,6 +44,11 @@ CONFIG_FILES = {
     # when the operator ships classifications, sync must copy them or
     # every token stays unknown.
     "tool_catalog.yaml",
+    # HP-121: project/tenant → named vault. Missing keeps the pre-HP-121
+    # resolver (inactive table). When the operator ships the mapping, sync
+    # must copy it or a deployment silently stays on the global vault —
+    # the cross-tenant write this file exists to prevent.
+    "vault_routes.yaml",
 }
 CONFIG_DIRS = {"prompts", "roster-presets"}
 
